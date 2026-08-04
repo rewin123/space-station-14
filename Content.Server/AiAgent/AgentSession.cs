@@ -56,6 +56,14 @@ public sealed class AgentSession : IDisposable
     private readonly ISawmill _sawmill;
     private readonly AgentLoopOptions _options;
     private readonly Func<bool, CancellationToken, Task<string?>> _buildObservation;
+    private readonly Func<string, Task> _announce;
+    private readonly Func<(string SystemPrompt, string ToolsJson)> _rebuildPrefix;
+
+    /// <summary>Context compaction, wired in phase 3.</summary>
+    public Compactor Compactor { get; }
+
+    /// <summary>Prefix-cache watchdog. A broken cache is silent; this is what makes it loud.</summary>
+    public CacheMetrics Cache { get; }
 
     public EntityUid Brain { get; }
     public ConversationState Conv { get; } = new();
@@ -72,7 +80,18 @@ public sealed class AgentSession : IDisposable
     /// <summary>Bumped by the owning system on every lifecycle change; marshalled calls check it.</summary>
     public int Generation;
 
-    public AgentMode Mode { get; set; } = AgentMode.Core;
+    private AgentMode _mode = AgentMode.Core;
+
+    public AgentMode Mode
+    {
+        get => _mode;
+        set
+        {
+            if (value != AgentMode.Review)
+                _modeBeforeReview = value;
+            _mode = value;
+        }
+    }
 
     // Diagnostics surfaced by `aiagent status`.
     public int Turns { get; private set; }
@@ -87,6 +106,9 @@ public sealed class AgentSession : IDisposable
         ObservationQueue queue,
         AgentLoopOptions options,
         Func<bool, CancellationToken, Task<string?>> buildObservation,
+        Func<string, Task> announce,
+        Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
+        CompactionOptions compaction,
         ISawmill sawmill)
     {
         Brain = brain;
@@ -95,7 +117,12 @@ public sealed class AgentSession : IDisposable
         Queue = queue;
         _options = options;
         _buildObservation = buildObservation;
+        _announce = announce;
+        _rebuildPrefix = rebuildPrefix;
         _sawmill = sawmill;
+
+        Cache = new CacheMetrics(sawmill);
+        Compactor = new Compactor(llm, compaction, sawmill);
     }
 
     public void Start()
@@ -191,14 +218,16 @@ public sealed class AgentSession : IDisposable
                 .ConfigureAwait(false);
 
             Conv.LastPromptTokens = response.PromptTokens;
+            Conv.Calibrate(response.PromptTokens);
             LastCacheRatio = response.CacheRatio;
+
+            Cache.Record(response.PromptTokens, response.CachedTokens, Conv.PrefixHash, Conv.SystemPrompt);
             Conv.AppendAssistant(response);
 
-            _sawmill.Info(
-                $"turn {Turns} step {step}  prompt {response.PromptTokens}t " +
-                $"(cache {response.CachedTokens}, {response.CacheRatio * 100:F1}%)  " +
-                $"out {response.CompletionTokens}t  {response.DurationSeconds:F1}s  " +
-                $"tools={response.ToolCalls.Count}  mode={Mode}");
+            _sawmill.Info($"turn {Turns} step {step}  " +
+                          Cache.Format(response.PromptTokens, response.CachedTokens,
+                              response.CompletionTokens, response.DurationSeconds,
+                              response.ToolCalls.Count, Mode.ToString()));
 
             if (!string.IsNullOrWhiteSpace(response.Content))
                 _sawmill.Debug($"thought: {response.Content!.Trim()}");
@@ -222,7 +251,29 @@ public sealed class AgentSession : IDisposable
         // Any call left dangling by the step budget gets a synthetic result, or the next request
         // is rejected wholesale for having an assistant tool_calls with no matching tool message.
         Conv.CloseTurn();
+
+        // Compaction sits here, at a turn boundary, precisely because that is the only place the
+        // body may be cut without orphaning a tool result from its parent call.
+        if (Compactor.ShouldCompact(Conv))
+        {
+            Mode = AgentMode.Review;
+            try
+            {
+                if (await Compactor.CompactAsync(Conv, _announce, _rebuildPrefix, ct).ConfigureAwait(false))
+                {
+                    Cache.SetExpectedPrefix(Conv.PrefixHash);
+                    Cache.ExpectMiss = true;
+                }
+            }
+            finally
+            {
+                Mode = _modeBeforeReview;
+            }
+        }
     }
+
+    /// <summary>Mode to return to after a review; carding during a review must not be forgotten.</summary>
+    private AgentMode _modeBeforeReview = AgentMode.Core;
 
     private async Task<ToolResult> InvokeAsync(ToolCallDto call, CancellationToken ct)
     {

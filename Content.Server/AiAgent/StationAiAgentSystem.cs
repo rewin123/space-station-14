@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Components;
+using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Perception;
 using Content.Server.AiAgent.Threading;
@@ -214,12 +215,33 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 MaxConsecutiveFailures = () => _cfg.GetCVar(AiCVars.MaxConsecutiveFailures),
             },
             (force, ct) => BuildObservationAsync(brain, force, ct),
+            text => AnnounceInGameAsync(brain, text),
+            () => (BuildSystemPrompt(), registry.WireJson()),
+            new CompactionOptions
+            {
+                High = () => _cfg.GetCVar(AiCVars.CompactHigh),
+                Low = () => _cfg.GetCVar(AiCVars.CompactLow),
+                KeepTail = () => _cfg.GetCVar(AiCVars.CompactKeepTail),
+            },
             _sawmill);
 
         RegisterTools(session, registry);
         session.Conv.SetPrefix(BuildSystemPrompt(), registry.WireJson());
+        session.Cache.SetExpectedPrefix(session.Conv.PrefixHash);
 
         _sessions[brain] = session;
+
+        // Restore a conversation from before a restart, if the prefix still matches.
+        var snapshot = SessionStoreFor().Load(SessionIdFor(brain), session.Conv.PrefixHash);
+        if (snapshot != null)
+        {
+            session.Conv.RestoreBody(snapshot.Body, snapshot.VolatileTail, snapshot.CharsPerToken);
+
+            // A snapshot taken mid-turn can hold an assistant tool_calls with no matching results.
+            // Replaying that verbatim gets the whole request rejected, so close them first.
+            session.Conv.Repair();
+        }
+
         session.Start();
 
         _sawmill.Info($"session prefix hash {session.Conv.PrefixHash}");
@@ -233,6 +255,18 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return;
 
         _sawmill.Info($"releasing agent on {brain}: {why}");
+
+        // Snapshot before cancelling: a server restart mid-round should not amnesia the agent, and
+        // this is the last moment the conversation is still coherent.
+        try
+        {
+            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.Compactor.Compactions);
+        }
+        catch (Exception e)
+        {
+            _sawmill.Warning($"снапшот при остановке не сохранён: {e.Message}");
+        }
+
         session.Cts.Cancel();
 
         // Cancel then bounded wait then abandon. The main thread must never block on the agent:
@@ -384,6 +418,55 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Only the device tools refuse, via the mode gate.
         session.Mode = AgentMode.Carded;
         session.Queue.Push(Observation.Event("извлечён из ядра — доступа к устройствам нет", RoundTime()));
+    }
+
+    // -------------------------------------------------------------- persistence
+
+    private SessionStore? _sessionStore;
+
+    /// <summary>Where the agent's own files live. Benchmarks point this at a temp directory.</summary>
+    public string DataDir()
+    {
+        var configured = _cfg.GetCVar(AiCVars.DataDir);
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured;
+
+        // The server runs from bin/Content.Server, so the repo root is two levels up.
+        return System.IO.Path.GetFullPath(
+            System.IO.Path.Combine(AppContext.BaseDirectory, "..", "..", "ai_data"));
+    }
+
+    private SessionStore SessionStoreFor() => _sessionStore ??= new SessionStore(DataDir(), _sawmill);
+
+    private static string SessionIdFor(EntityUid brain) => "current";
+
+    /// <summary>Say something in-game from the agent, used by the compaction ritual.</summary>
+    private Task AnnounceInGameAsync(EntityUid brain, string text)
+    {
+        if (!_sessions.TryGetValue(brain, out var session))
+            return Task.CompletedTask;
+
+        return _dispatcher.RunAsync(() =>
+        {
+            _dispatcher.AssertMainThread("compaction announce");
+
+            if (!IsPlayable(brain))
+                return false;
+
+            _chat.TrySendInGameICMessage(brain, text, InGameICChatType.Speak, ChatTransmitRange.Normal,
+                hideLog: false, shell: null, player: null, nameOverride: null,
+                checkRadioPrefix: false, ignoreActionBlocker: true);
+
+            _sawmill.Info($"[LLM] компакция: {text}");
+            return true;
+        }, session.Generation, () => GenerationOf(brain), CancellationToken.None);
+    }
+
+    /// <summary>Persist the conversation so a restart does not amnesia the agent mid-round.</summary>
+    public void SaveSessions()
+    {
+        foreach (var (brain, session) in _sessions)
+            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.Compactor.Compactions);
     }
 
     // ------------------------------------------------------------------- test aid
