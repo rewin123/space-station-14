@@ -68,7 +68,6 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             TopK = _sampling.TopK,
             MinP = _sampling.MinP,
             MaxTokens = _sampling.MaxTokens,
-            ReasoningBudget = _sampling.ThinkBudget,
             CachePrompt = true,
             IdSlot = _sampling.IdSlot,
         };
@@ -218,8 +217,7 @@ public sealed record LlmSampling(
     int TopK,
     float MinP,
     int MaxTokens,
-    int? IdSlot,
-    int? ThinkBudget = null);
+    int? IdSlot);
 
 public sealed class LlmException : Exception
 {

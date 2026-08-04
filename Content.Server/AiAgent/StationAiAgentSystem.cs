@@ -236,7 +236,6 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _sawmill);
 
         RegisterTools(session, registry);
-        session.Conv.ThinkBudgetTokens = _cfg.GetCVar(AiCVars.ThinkBudget);
         session.Conv.SetPrefix(BuildSystemPrompt(), registry.WireJson());
         session.Cache.SetExpectedPrefix(session.Conv.PrefixHash);
 
@@ -323,8 +322,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _cfg.GetCVar(AiCVars.TopK),
             _cfg.GetCVar(AiCVars.MinP),
             _cfg.GetCVar(AiCVars.MaxTokens),
-            IdSlot: 0,
-            ThinkBudget: _cfg.GetCVar(AiCVars.ThinkBudget));
+            IdSlot: 0);
 
         _llm = new LlamaClient(
             _cfg.GetCVar(AiCVars.Endpoint),
