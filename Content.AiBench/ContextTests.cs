@@ -151,6 +151,7 @@ public sealed class ContextTests
         var announced = (string)null;
         var ok = await compactor.CompactAsync(
             conv,
+            System.Array.Empty<ToolDto>(),
             text => { announced = text; return Task.CompletedTask; },
             () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
             CancellationToken.None);
@@ -182,11 +183,41 @@ public sealed class ContextTests
         // than pretending the history is intact.
         var compactor = MakeCompactor(new ThrowingLlmClient(), high: 1000, low: 500, keepTail: 200);
 
-        var ok = await compactor.CompactAsync(conv, _ => Task.CompletedTask,
+        var ok = await compactor.CompactAsync(conv, System.Array.Empty<ToolDto>(), _ => Task.CompletedTask,
             () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None);
 
         Assert.That(ok, Is.True, "падение суммаризатора не должно ронять компакцию");
         Assert.That(conv.Body.First().Content, Does.Contain("не удалось составить сводку"));
+    }
+
+    [Test]
+    public async Task Compact_SummariserSendsTheSameToolArray()
+    {
+        // Regression guard for a real, expensive bug found on the first live run.
+        //
+        // Sending null tools for the summariser looked harmless — it has nothing to do in the
+        // world. But tool definitions are rendered into the system block by the chat template, so
+        // dropping them makes the prompt diverge at token ZERO. It cost two full prefills (one for
+        // the summariser, one for the next real turn) and the watchdog logged 0% cache twice in a
+        // row. The tool array must be byte-identical on every single call.
+        var conv = Fresh();
+        for (var i = 0; i < 20; i++)
+            AddTurn(conv, $"наблюдение {i} с достаточным количеством текста для набора символов", "look");
+
+        conv.LastPromptTokens = 5000;
+
+        var llm = new RecordingLlmClient();
+        var compactor = MakeCompactor(llm, high: 1000, low: 500, keepTail: 200);
+
+        var tools = new[] { new ToolDto { Function = new ToolFunctionDto { Name = "look" } } };
+
+        await compactor.CompactAsync(conv, tools, _ => Task.CompletedTask,
+            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None);
+
+        Assert.That(llm.LastTools, Is.Not.Null,
+            "суммаризатор ушёл без инструментов — это рвёт префикс с нулевого токена");
+        Assert.That(llm.LastTools!.Count, Is.EqualTo(1));
+        Assert.That(llm.LastTools[0].Function.Name, Is.EqualTo("look"));
     }
 
     // ----------------------------------------------------------- prefix watchdog
@@ -215,6 +246,23 @@ public sealed class ContextTests
             "один провал бывает законно — большое наблюдение");
         Assert.That(metrics.Record(1000, 100, "AAAA"), Is.False,
             "два подряд — это уже дрейф префикса");
+    }
+
+    [Test]
+    public void CacheMetrics_DoesNotCryWolfOnAShortConversation()
+    {
+        // The regression this metric change fixes: on a small conversation each turn appends a
+        // large fraction of the whole prompt, so a perfectly healthy cache reads as ~68% of the
+        // prompt while still reusing 100% of what was reusable.
+        var sawmill = new Robust.Shared.Log.LogManager().GetSawmill("test");
+        var metrics = new CacheMetrics(sawmill);
+        metrics.SetExpectedPrefix("AAAA");
+
+        metrics.Record(3000, 0, "AAAA");                       // turn 1: cold, exempt
+        Assert.That(metrics.Record(4300, 3000, "AAAA"), Is.True,
+            "переиспользован весь предыдущий промпт — тревоге тут не место");
+        Assert.That(metrics.Record(5600, 4300, "AAAA"), Is.True);
+        Assert.That(metrics.Alarms, Is.Zero);
     }
 
     [Test]
@@ -256,6 +304,21 @@ public sealed class ContextTests
 
         Assert.That(conv.CharsPerToken, Is.EqualTo(before), "дикий отсчёт не должен ломать оценку");
     }
+}
+
+/// <summary>Records what it was asked, so tests can assert on the prompt the agent actually built.</summary>
+internal sealed class RecordingLlmClient : ILlmClient
+{
+    public System.Collections.Generic.IReadOnlyList<ToolDto> LastTools { get; private set; }
+
+    public Task<LlmResponse> ChatAsync(System.Collections.Generic.IReadOnlyList<ChatMessageDto> messages,
+        System.Collections.Generic.IReadOnlyList<ToolDto> tools, CancellationToken ct)
+    {
+        LastTools = tools;
+        return Task.FromResult(new LlmResponse("сводка", System.Array.Empty<ToolCallDto>(), 100, 90, 10, 0.1));
+    }
+
+    public Task<int?> GetContextSizeAsync(CancellationToken ct) => Task.FromResult<int?>(131072);
 }
 
 /// <summary>A client that always fails, for proving the compactor degrades rather than crashes.</summary>

@@ -54,6 +54,10 @@ public sealed class MainThreadDispatcher
     public double MaxObservedMs { get; private set; }
     public long BudgetOverruns { get; private set; }
 
+    /// <summary>The single worst offender so far, for `aiagent status`.</summary>
+    public string Slowest { get; private set; } = "—";
+    public double SlowestMs { get; private set; }
+
     /// <summary>Must be constructed on the main thread — that is how it learns which thread that is.</summary>
     public MainThreadDispatcher(ITaskManager tasks, ISawmill sawmill, double budgetMs)
     {
@@ -87,7 +91,8 @@ public sealed class MainThreadDispatcher
         int generation,
         Func<int> generationSource,
         CancellationToken ct,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        string what = "?")
     {
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -118,7 +123,16 @@ public sealed class MainThreadDispatcher
                 if (ms > BudgetMs)
                 {
                     BudgetOverruns++;
-                    _sawmill.Warning($"main-thread call took {ms:F1}ms (budget {BudgetMs:F1}ms)");
+
+                    // Name the operation. An unnamed "call took 315ms" is unactionable — you
+                    // cannot tell a vision sweep from a chat message from a records scan.
+                    _sawmill.Warning($"main-thread call '{what}' took {ms:F1}ms (budget {BudgetMs:F1}ms)");
+
+                    if (ms > SlowestMs)
+                    {
+                        SlowestMs = ms;
+                        Slowest = what;
+                    }
                 }
             }
         });
@@ -127,8 +141,9 @@ public sealed class MainThreadDispatcher
     }
 
     /// <summary>Void-returning convenience overload.</summary>
-    public Task RunAsync(Action act, int generation, Func<int> generationSource, CancellationToken ct, TimeSpan? timeout = null)
+    public Task RunAsync(Action act, int generation, Func<int> generationSource, CancellationToken ct,
+        TimeSpan? timeout = null, string what = "?")
     {
-        return RunAsync(() => { act(); return true; }, generation, generationSource, ct, timeout);
+        return RunAsync(() => { act(); return true; }, generation, generationSource, ct, timeout, what);
     }
 }

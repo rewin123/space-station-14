@@ -241,7 +241,7 @@ public sealed partial class StationAiAgentSystem
 
             var (items, dropped) = session.Queue.Drain();
             return ObservationFormatter.Format(items, dropped, RoundTime(), SelfLine(session), force);
-        }, generation, () => GenerationOf(brain), ct).ConfigureAwait(false);
+        }, generation, () => GenerationOf(brain), ct, what: "observation").ConfigureAwait(false);
     }
 
     /// <summary>
@@ -290,7 +290,7 @@ public sealed partial class StationAiAgentSystem
             return !IsPlayable(brain)
                 ? ToolResult.Fail(ToolError.Dead, "ИИ больше не в игре")
                 : body();
-        }, generation, () => GenerationOf(brain), ct, timeout);
+        }, generation, () => GenerationOf(brain), ct, timeout, what);
     }
 
     /// <summary>

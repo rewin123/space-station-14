@@ -459,7 +459,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
             _sawmill.Info($"[LLM] компакция: {text}");
             return true;
-        }, session.Generation, () => GenerationOf(brain), CancellationToken.None);
+        }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "compaction announce");
     }
 
     /// <summary>Persist the conversation so a restart does not amnesia the agent mid-round.</summary>

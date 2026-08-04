@@ -88,12 +88,28 @@ public sealed class Compactor
     /// <param name="rebuildPrefix">Returns the (possibly refreshed) system prompt for zone 0.</param>
     public async Task<bool> CompactAsync(
         ConversationState conv,
+        IReadOnlyList<ToolDto>? tools,
         Func<string, Task> announce,
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CancellationToken ct)
     {
         var beforeTokens = conv.LastPromptTokens;
         var beforeMessages = conv.Body.Count;
+
+        // Check that a cut is actually possible BEFORE promising the crew anything.
+        //
+        // The first live run announced "буферы переполнены, провожу очистку памяти" and then
+        // cancelled, because a single long turn has no second boundary to cut at. Telling the crew
+        // you are doing something and then not doing it is worse than staying quiet.
+        var keepChars = (int)(_options.KeepTail() * conv.CharsPerToken);
+        var cut = conv.SafeCutIndex(keepChars);
+
+        if (cut <= 0)
+        {
+            _sawmill.Info("компакция пропущена: пока нет безопасной границы хода для разреза");
+            _armed = false;
+            return false;
+        }
 
         // --- step 2: tell the crew ------------------------------------------------------------
         try
@@ -108,19 +124,9 @@ public sealed class Compactor
         }
 
         // --- step 3: summarise ----------------------------------------------------------------
-        var summary = await SummariseAsync(conv, ct).ConfigureAwait(false);
+        var summary = await SummariseAsync(conv, tools, ct).ConfigureAwait(false);
 
         // --- step 4: fold ---------------------------------------------------------------------
-        var keepChars = (int)(_options.KeepTail() * conv.CharsPerToken);
-        var cut = conv.SafeCutIndex(keepChars);
-
-        if (cut <= 0)
-        {
-            _sawmill.Warning("компакция отменена: нет безопасной границы хода для разреза");
-            _armed = false;
-            return false;
-        }
-
         var tail = conv.BodyFrom(cut).ToList();
         conv.ReplaceBody(summary, tail);
 
@@ -152,7 +158,8 @@ public sealed class Compactor
     /// the summarisation call itself runs at ~95% cache hit. The copy is what keeps the question
     /// out of the real history.
     /// </summary>
-    private async Task<string> SummariseAsync(ConversationState conv, CancellationToken ct)
+    private async Task<string> SummariseAsync(ConversationState conv, IReadOnlyList<ToolDto>? tools,
+        CancellationToken ct)
     {
         var messages = conv.Build();
         messages.Add(ChatMessageDto.User(
@@ -163,9 +170,15 @@ public sealed class Compactor
 
         try
         {
-            // No tools on this call: the summariser has nothing to do in the world, and offering
-            // it the tool array would invite it to act instead of answering.
-            var response = await _llm.ChatAsync(messages, null, ct).ConfigureAwait(false);
+            // The SAME tools array as every other call — this is not optional.
+            //
+            // Sending null here looked harmless ("the summariser has nothing to do in the world"),
+            // but tool definitions are rendered into the system block by the chat template, so
+            // dropping them makes the prompt diverge at token zero. The first live run paid two
+            // full prefills for it — one for the summariser, one for the next real turn — and the
+            // prefix-cache watchdog reported 0% twice in a row. The summariser is told not to act
+            // in the prompt text instead.
+            var response = await _llm.ChatAsync(messages, tools, ct).ConfigureAwait(false);
             var text = response.Content?.Trim();
 
             if (!string.IsNullOrWhiteSpace(text))

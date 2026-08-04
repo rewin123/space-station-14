@@ -259,7 +259,7 @@ public sealed class AgentSession : IDisposable
             Mode = AgentMode.Review;
             try
             {
-                if (await Compactor.CompactAsync(Conv, _announce, _rebuildPrefix, ct).ConfigureAwait(false))
+                if (await Compactor.CompactAsync(Conv, _registry.WireSchemas(), _announce, _rebuildPrefix, ct).ConfigureAwait(false))
                 {
                     Cache.SetExpectedPrefix(Conv.PrefixHash);
                     Cache.ExpectMiss = true;

@@ -31,6 +31,9 @@ public sealed class CacheMetrics
     private double _ratioSum;
     private int _consecutiveLow;
 
+    /// <summary>Size of the previous prompt — the ceiling on what could possibly be reused.</summary>
+    private int _previousPromptTokens;
+
     public CacheMetrics(ISawmill sawmill)
     {
         _sawmill = sawmill;
@@ -40,6 +43,7 @@ public sealed class CacheMetrics
     {
         ExpectedPrefixHash = hash;
         _consecutiveLow = 0;
+        _previousPromptTokens = 0;
     }
 
     /// <summary>Record one completion. Returns false when the alarm fired.</summary>
@@ -67,10 +71,21 @@ public sealed class CacheMetrics
         {
             ExpectMiss = false;
             _consecutiveLow = 0;
+            _previousPromptTokens = promptTokens;
             return true;
         }
 
-        if (ratio >= 0.90)
+        // Compare against what was REUSABLE, not against the whole prompt.
+        //
+        // The share of the current prompt is the wrong denominator: on a short conversation each
+        // turn appends a large fraction of the total, so a perfectly healthy cache reads as 68%
+        // and the alarm cries wolf. What actually matters is whether the server reused everything
+        // it could have — and the ceiling on that is the size of the previous prompt.
+        var reusable = Math.Min(_previousPromptTokens, promptTokens);
+        var reuse = reusable <= 0 ? 1.0 : (double)cachedTokens / reusable;
+        _previousPromptTokens = promptTokens;
+
+        if (reuse >= 0.90)
         {
             _consecutiveLow = 0;
             return true;
@@ -85,7 +100,8 @@ public sealed class CacheMetrics
 
         Alarms++;
         _sawmill.Error(string.Create(CultureInfo.InvariantCulture,
-            $"ПРЕФИКС-КЭШ СЛОМАН: {ratio * 100:F1}% два хода подряд (промпт {promptTokens}т, из кэша {cachedTokens}т), " +
+            $"ПРЕФИКС-КЭШ СЛОМАН: переиспользовано {reuse * 100:F1}% от переиспользуемого два хода подряд " +
+            $"(промпт {promptTokens}т, из кэша {cachedTokens}т, было можно {reusable}т), " +
             $"хэш зоны 0 {currentPrefixHash} не менялся — ищи волатильные данные в теле диалога"));
 
         _consecutiveLow = 0;
