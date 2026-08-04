@@ -67,6 +67,20 @@ public sealed partial class StationAiAgentSystem
 
         r.Register(new AiTool
         {
+            Name = "map",
+            Description = "Карта станции: названия мест и их координаты — то же, что подписано на " +
+                          "навигационной карте твоей консоли мониторинга. Так узнают, где находится " +
+                          "отдел, о котором говорит экипаж. Координаты отсюда идут прямо в move_camera.",
+            SchemaJson = """
+                {"type":"object","additionalProperties":false,"properties":{
+                "query":{"type":"string","description":"Подстрока названия места, например 'engine' или 'мост'. Без неё — вся карта."},
+                "via_skill":{"type":"string"}}}
+                """,
+            Handler = (a, ct) => MapAsync(s, a, ct),
+        });
+
+        r.Register(new AiTool
+        {
             Name = "crew_status",
             Description = "Монитор экипажа: имя, должность, отдел, жив ли, урон и координаты — " +
                           "по тем, у кого включён датчик костюма.",
@@ -282,6 +296,11 @@ public sealed partial class StationAiAgentSystem
             var eye = core.Comp.RemoteEntity ?? core.Owner;
             var pos = _xform.GetMapCoordinates(eye);
             sb.Append(string.Create(CultureInfo.InvariantCulture, $" eye=({pos.X:F0},{pos.Y:F0})"));
+
+            // Bare coordinates mean nothing to a model with no map in its head. The nearest station
+            // beacon is the same label the crew uses on the radio, so this is what turns "eye=(24,4)"
+            // into something it can talk about — and it costs one query per turn.
+            sb.Append(" место=").Append(PlaceAt(eye));
             sb.Append(" core=").Append(core.Comp.Remote ? "remote" : "projected");
             sb.Append(" power=").Append(_power.IsPowered(core.Owner) ? "ok" : "lost");
         }

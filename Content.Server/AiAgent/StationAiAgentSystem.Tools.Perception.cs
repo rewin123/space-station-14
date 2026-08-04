@@ -6,7 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Tools;
 using Content.Shared.Access.Components;
+using Content.Shared.Pinpointer;
 using Content.Server.Atmos.Monitor.Components;
+using Robust.Shared.Map;
 using Content.Server.Power.Components;
 using Content.Shared.Doors.Components;
 using Content.Shared.Electrocution;
@@ -175,6 +177,79 @@ public sealed partial class StationAiAgentSystem
             alternatives: named.Select(n => n.Name).OrderBy(n => n, StringComparer.Ordinal).Take(5).ToList());
 
         return false;
+    }
+
+    // ------------------------------------------------------------------------ map
+
+    /// <summary>
+    /// The station's named places and where they are.
+    ///
+    /// The agent's problem was never seeing — <c>look</c> works — it was orientation. It knew there
+    /// was a door two tiles north and had no idea whether it was staring at the bridge or at a
+    /// maintenance closet, so "открой дверь в инженерный" had nowhere to start and every answer
+    /// ended in "назовите, где вы находитесь".
+    ///
+    /// This is the same data the crew monitoring console draws as labels on its navigation map, and
+    /// the AI carries that console intrinsically as part of the AiHeld bundle. Reading the labels is
+    /// not new power; it is the map the role already ships with.
+    ///
+    /// Coordinates come out in map space so they feed straight into <c>move_camera {x,y}</c>. That
+    /// closes the loop that was open all day: name a place, point the eye at it, look around.
+    /// </summary>
+    private Task<ToolResult> MapAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        TryGetString(args, "query", out var query);
+
+        return OnMainAsync(s, "map", () =>
+        {
+            if (!_stationAi.TryGetCore(s.Brain, out var core) || core.Comp?.RemoteEntity == null)
+                return ToolResult.Fail(ToolError.Carded, "нет доступа к карте — нет ядра");
+
+            var eye = core.Comp.RemoteEntity.Value;
+            var gridUid = Transform(eye).GridUid;
+
+            if (gridUid == null || !TryComp<NavMapComponent>(gridUid, out var navMap))
+                return ToolResult.Fail(ToolError.NotVisible, "карта этой станции недоступна");
+
+            var origin = _xform.GetMapCoordinates(eye).Position;
+            var rows = new List<(float Dist, string Text)>();
+
+            foreach (var beacon in navMap.Beacons.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(query) && !Match(beacon.Text, query!))
+                    continue;
+
+                var pos = _xform.ToMapCoordinates(new EntityCoordinates(gridUid.Value, beacon.Position)).Position;
+                var dist = (pos - origin).Length();
+
+                rows.Add((dist, string.Create(CultureInfo.InvariantCulture,
+                    $"{beacon.Text} | ({pos.X:F0},{pos.Y:F0}) | {BearingFrom(origin, pos)}")));
+            }
+
+            rows.Sort((a, b) => a.Dist != b.Dist
+                ? a.Dist.CompareTo(b.Dist)
+                : string.CompareOrdinal(a.Text, b.Text));
+
+            var d = new Dictionary<string, object?>
+            {
+                ["count"] = rows.Count,
+                ["places"] = rows.Select(r => r.Text).Take(80).ToList(),
+                ["note"] = "координаты можно передать в move_camera {x,y}; направления и расстояния — от твоего глаза",
+            };
+
+            if (rows.Count == 0 && !string.IsNullOrWhiteSpace(query))
+                d["note"] = $"по запросу '{query}' ничего нет — вызови map без query, чтобы увидеть все места";
+
+            return ToolResult.Success(d);
+        }, ct);
+    }
+
+    /// <summary>Nearest named place to a point, for the SELF line and for announcements.</summary>
+    private string PlaceAt(EntityUid uid)
+    {
+        return _navMap.TryGetNearestBeacon(uid, out var beacon, out _) && beacon != null
+            ? beacon.Value.Comp.Text ?? Name(beacon.Value.Owner)
+            : "неизвестно";
     }
 
     /// <summary>One-line state for the look listing; the full picture is what inspect is for.</summary>
