@@ -319,3 +319,6 @@ error.glsl
 
 # C# Dev Kit cache file
 *.lscache
+
+# LLM Station AI agent data (memory, skills, transcripts)
+ai_data/
