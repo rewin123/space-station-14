@@ -1,0 +1,497 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Content.Server.AiAgent.Tools;
+using Content.Server.Atmos.Monitor.Components;
+using Content.Server.Power.Components;
+using Content.Shared.Atmos.Monitor;
+using Content.Shared.Chat;
+using Content.Server.Communications;
+using Content.Shared.Atmos.Monitor.Components;
+using Content.Shared.Communications;
+using Content.Shared.Doors.Components;
+using Content.Shared.Electrocution;
+using Content.Shared.Radio;
+using Content.Shared.Silicons.StationAi;
+using Robust.Shared.Prototypes;
+
+namespace Content.Server.AiAgent;
+
+/// <summary>Acting tools: say, radio, announce, move_camera, jump_to_core, device_action, device_ui.</summary>
+public sealed partial class StationAiAgentSystem
+{
+    // ------------------------------------------------------------------------ say
+
+    private Task<ToolResult> SayAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        if (!TryGetString(args, "text", out var text) || string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "say: нужен непустой 'text'"));
+
+        return OnMainAsync(s, "say", () =>
+        {
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected("self", new Dictionary<string, object?> { ["dry_run"] = true, ["said"] = text });
+
+            // checkRadioPrefix: false on purpose — a stray ":c" typed by the model must not
+            // silently become a station-wide Command broadcast. Radio goes through the radio tool,
+            // where the channel is an explicit enum it has to choose.
+            _chat.TrySendInGameICMessage(s.Brain, text!, InGameICChatType.Speak, ChatTransmitRange.Normal,
+                hideLog: false, shell: null, player: null, nameOverride: null,
+                checkRadioPrefix: false, ignoreActionBlocker: true);
+
+            _sawmill.Info($"[LLM] say: {text}");
+            return ToolResult.Effected("self", new Dictionary<string, object?> { ["said"] = text });
+        }, ct);
+    }
+
+    // ---------------------------------------------------------------------- radio
+
+    private Task<ToolResult> RadioAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        if (!TryGetString(args, "text", out var text) || string.IsNullOrWhiteSpace(text))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "radio: нужен непустой 'text'"));
+
+        if (!TryGetString(args, "channel", out var channel) || string.IsNullOrWhiteSpace(channel))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "radio: нужен 'channel'",
+                alternatives: AiRadioChannels));
+
+        var match = AiRadioChannels.FirstOrDefault(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase));
+        if (match == null)
+        {
+            var near = AiRadioChannels
+                .OrderBy(c => AiToolRegistry.Distance(c.ToLowerInvariant(), channel!.ToLowerInvariant()))
+                .Take(3).ToList();
+
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, $"radio: нет канала '{channel}'",
+                retry: "other_target", alternatives: near));
+        }
+
+        return OnMainAsync(s, "radio", () =>
+        {
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected("self",
+                    new Dictionary<string, object?> { ["dry_run"] = true, ["channel"] = match, ["said"] = text });
+
+            _radio.SendRadioMessage(s.Brain, text!, new ProtoId<RadioChannelPrototype>(match), s.Brain);
+
+            _sawmill.Info($"[LLM] radio {match}: {text}");
+            return ToolResult.Effected("self", new Dictionary<string, object?> { ["channel"] = match, ["said"] = text });
+        }, ct);
+    }
+
+    // ------------------------------------------------------------------- announce
+
+    /// <summary>
+    /// Station-wide announcement and alert level, driven through the AI's own intrinsic
+    /// communications console by raising its BUI messages directly with <c>Actor = brain</c> —
+    /// byte for byte what <c>SharedUserInterfaceSystem.OnMessageReceived</c> does for a real click.
+    ///
+    /// Calling the shuttle is correctly impossible: the intrinsic console is declared with
+    /// <c>canShuttle: false</c>, so <c>CanCallOrRecall</c> refuses — exactly as it does for a human
+    /// Station AI.
+    /// </summary>
+    private Task<ToolResult> AnnounceAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        TryGetString(args, "text", out var text);
+        TryGetString(args, "alert_level", out var level);
+
+        if (string.IsNullOrWhiteSpace(text) && string.IsNullOrWhiteSpace(level))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs,
+                "announce: нужен 'text', или 'alert_level', или оба"));
+
+        return OnMainAsync(s, "announce", () =>
+        {
+            if (s.Mode == AgentMode.Carded)
+                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
+
+            if (!HasComp<CommunicationsConsoleComponent>(s.Brain))
+                return ToolResult.Fail(ToolError.Carded, "консоль связи недоступна");
+
+            var effect = new Dictionary<string, object?>();
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+            {
+                effect["dry_run"] = true;
+                effect["text"] = text;
+                effect["alert_level"] = level;
+                return ToolResult.Effected("self", effect);
+            }
+
+            if (!string.IsNullOrWhiteSpace(level))
+            {
+                var msg = new CommunicationsConsoleSelectAlertLevelMessage(new ProtoId<Content.Shared.AlertLevel.AlertLevelPrototype>(level!))
+                {
+                    Actor = s.Brain,
+                    UiKey = CommunicationsConsoleUiKey.Key,
+                };
+                RaiseLocalEvent(s.Brain, (object)msg, true);
+                effect["alert_level_requested"] = level;
+            }
+
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                var msg = new CommunicationsConsoleAnnounceMessage(text!)
+                {
+                    Actor = s.Brain,
+                    UiKey = CommunicationsConsoleUiKey.Key,
+                };
+                RaiseLocalEvent(s.Brain, (object)msg, true);
+                effect["announced"] = text;
+            }
+
+            // Read the level back rather than trusting the request: the console has a cooldown and
+            // an access check, and a refused announcement looks identical to a successful one from
+            // the caller's side.
+            var station = _station.GetOwningStation(s.Brain);
+            if (station != null && TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
+                effect["alert_level_now"] = alert.CurrentAlertLevel;
+
+            _sawmill.Info($"[LLM] announce text='{text}' level='{level}'");
+            return ToolResult.Effected("self", effect);
+        }, ct);
+    }
+
+    // ------------------------------------------------------------------ move_camera
+
+    /// <summary>
+    /// Move the eye to a target it can already see.
+    ///
+    /// A teleport within existing camera coverage rather than a simulated drag: the eye has no
+    /// collision and vision — not physics — is the real constraint, so this is behaviourally what
+    /// a human does by dragging, without needing a pathfinder or a multi-tick state machine. The
+    /// clamp is what keeps it honest: the destination must be somewhere the AI can already see.
+    /// </summary>
+    private Task<ToolResult> MoveCameraAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        return OnMainAsync(s, "move_camera", () =>
+        {
+            if (!TryResolve(s, args, out var uid, out var failure))
+                return failure!;
+
+            if (s.Mode == AgentMode.Carded)
+                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
+
+            if (!_stationAi.TryGetCore(s.Brain, out var core) || core.Comp?.RemoteEntity == null)
+                return ToolResult.Fail(ToolError.Carded, "нет глаза");
+
+            if (!IsVisibleToAi(s.Brain, uid))
+                return ToolResult.Fail(ToolError.NotVisible,
+                    "туда не добивают камеры — сначала переместись ближе к тому, что видно",
+                    retry: "other_target");
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected("self", new Dictionary<string, object?> { ["dry_run"] = true });
+
+            var eye = core.Comp.RemoteEntity.Value;
+            _xform.SetCoordinates(eye, Transform(uid).Coordinates);
+
+            var pos = _xform.GetMapCoordinates(eye);
+            return ToolResult.Effected("self", new Dictionary<string, object?>
+            {
+                ["eye_x"] = (int)pos.X,
+                ["eye_y"] = (int)pos.Y,
+                ["at"] = Name(uid),
+            });
+        }, ct);
+    }
+
+    private Task<ToolResult> JumpToCoreAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        return OnMainAsync(s, "jump_to_core", () =>
+        {
+            if (s.Mode == AgentMode.Carded)
+                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected("self", new Dictionary<string, object?> { ["dry_run"] = true });
+
+            RaiseLocalEvent(s.Brain, new JumpToCoreEvent());
+
+            if (_stationAi.TryGetCore(s.Brain, out var core) && core.Comp?.RemoteEntity != null)
+            {
+                var pos = _xform.GetMapCoordinates(core.Comp.RemoteEntity.Value);
+                return ToolResult.Effected("self", new Dictionary<string, object?>
+                {
+                    ["eye_x"] = (int)pos.X,
+                    ["eye_y"] = (int)pos.Y,
+                    ["at"] = "ядро",
+                });
+            }
+
+            return ToolResult.Success();
+        }, ct);
+    }
+
+    // -------------------------------------------------------------- device_action
+
+    /// <summary>
+    /// One dispatch table instead of fifteen tools.
+    ///
+    /// Every entry runs the full gate chain first and reports which link refused, then performs the
+    /// mutation, then reads the resulting state back off the server. That read-back is the whole
+    /// point of the <c>effect</c> field: the transcript ends up holding what actually happened
+    /// rather than the model's account of what it intended, which is what later makes skill
+    /// learning trustworthy.
+    /// </summary>
+    private Task<ToolResult> DeviceActionAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        if (!TryGetString(args, "action", out var action) || string.IsNullOrWhiteSpace(action))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "device_action: нужен 'action'",
+                alternatives: KnownActions.Take(6).ToList()));
+
+        if (!KnownActions.Contains(action!))
+        {
+            var near = KnownActions
+                .OrderBy(a => AiToolRegistry.Distance(a, action!))
+                .Take(3).ToList();
+
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs,
+                $"device_action: нет действия '{action}'", retry: "other_target", alternatives: near));
+        }
+
+        TryGetString(args, "value", out var value);
+
+        return OnMainAsync(s, "device_action", () =>
+        {
+            if (!TryResolve(s, args, out var uid, out var failure))
+                return failure!;
+
+            var gate = CheckGate(s.Brain, uid, s.Mode);
+            if (gate != DeviceGate.Ok)
+                return ToolResult.Fail(gate.ToError(), gate.ToDetail(), gate.Retry());
+
+            var handle = s.Handles.TryGetHandle(uid, out var h) ? h : "device";
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected(handle,
+                    new Dictionary<string, object?> { ["dry_run"] = true, ["action"] = action });
+
+            var applied = ApplyDeviceAction(s.Brain, uid, action!, value, out var why);
+            if (!applied)
+                return ToolResult.Fail(ToolError.BadArgs, why ?? "устройство не поддерживает это действие",
+                    retry: "other_target", alternatives: AvailableActions(uid));
+
+            _sawmill.Info($"[LLM] device_action {action} on {ToPrettyString(uid)}");
+            return ToolResult.Effected(handle, ReadBack(uid));
+        }, ct);
+    }
+
+    private static readonly HashSet<string> KnownActions = new()
+    {
+        "open", "close", "bolt", "unbolt", "electrify", "unelectrify",
+        "emergency_access_on", "emergency_access_off", "light_on", "light_off",
+        "apc_breaker_on", "apc_breaker_off", "air_alarm_mode",
+    };
+
+    private bool ApplyDeviceAction(EntityUid brain, EntityUid uid, string action, string? value, out string? why)
+    {
+        why = null;
+
+        switch (action)
+        {
+            case "open":
+                if (!TryComp<DoorComponent>(uid, out var od))
+                    return Fail(out why, "это не дверь");
+                _doors.TryOpen(uid, od, brain);
+                return true;
+
+            case "close":
+                if (!TryComp<DoorComponent>(uid, out var cd))
+                    return Fail(out why, "это не дверь");
+                _doors.TryClose(uid, cd, brain);
+                return true;
+
+            // Bolts, electrification and emergency access go through the radial-action events
+            // rather than the underlying systems. Those handlers carry upstream's own access
+            // checks, admin logging and "device not responding" popups — reimplementing the
+            // effect directly would quietly bypass all three.
+            case "bolt":
+            case "unbolt":
+                if (!HasComp<DoorBoltComponent>(uid))
+                    return Fail(out why, "у этой двери нет болтов");
+                RaiseLocalEvent(uid, (object)new StationAiBoltEvent { Bolted = action == "bolt", User = brain });
+                return true;
+
+            case "electrify":
+            case "unelectrify":
+                if (!HasComp<ElectrifiedComponent>(uid))
+                    return Fail(out why, "это устройство нельзя электризовать");
+                RaiseLocalEvent(uid, (object)new StationAiElectrifiedEvent { Electrified = action == "electrify", User = brain });
+                return true;
+
+            case "emergency_access_on":
+            case "emergency_access_off":
+                if (!HasComp<AirlockComponent>(uid))
+                    return Fail(out why, "это не шлюз");
+                RaiseLocalEvent(uid, (object)new StationAiEmergencyAccessEvent
+                {
+                    EmergencyAccess = action == "emergency_access_on",
+                    User = brain,
+                });
+                return true;
+
+            case "light_on":
+            case "light_off":
+                RaiseLocalEvent(uid, (object)new StationAiLightEvent { Enabled = action == "light_on", User = brain });
+                return true;
+
+            case "apc_breaker_on":
+            case "apc_breaker_off":
+            {
+                if (!TryComp<ApcComponent>(uid, out var apc))
+                    return Fail(out why, "это не APC");
+
+                var want = action == "apc_breaker_on";
+                if (apc.MainBreakerEnabled != want)
+                    _apc.ApcToggleBreaker(uid, apc, user: brain);
+
+                return true;
+            }
+
+            case "air_alarm_mode":
+            {
+                if (!HasComp<AirAlarmComponent>(uid))
+                    return Fail(out why, "это не воздушная тревога");
+
+                if (!Enum.TryParse<AirAlarmMode>(value, ignoreCase: true, out var mode))
+                    return Fail(out why, "нужен 'value': filtering, panic, replace или none");
+
+                _airAlarm.SetMode(uid, Name(brain), mode, uiOnly: false);
+                return true;
+            }
+
+            default:
+                return Fail(out why, $"действие '{action}' не реализовано");
+        }
+
+        static bool Fail(out string? w, string msg)
+        {
+            w = msg;
+            return false;
+        }
+    }
+
+    /// <summary>Post-mutation world state, read on the main thread. Never the model's word for it.</summary>
+    private Dictionary<string, object?> ReadBack(EntityUid uid)
+    {
+        var d = new Dictionary<string, object?>();
+
+        if (TryComp<DoorComponent>(uid, out var door))
+        {
+            var doorState = door.State;
+            d["state"] = doorState.ToString();
+        }
+
+        if (TryComp<DoorBoltComponent>(uid, out var bolt))
+            d["bolted"] = bolt.BoltsDown;
+
+        if (TryComp<ElectrifiedComponent>(uid, out var el))
+            d["electrified"] = el.Enabled;
+
+        if (TryComp<AirlockComponent>(uid, out var airlock))
+            d["emergency_access"] = airlock.EmergencyAccess;
+
+        if (TryComp<ApcComponent>(uid, out var apc))
+            d["main_breaker"] = apc.MainBreakerEnabled;
+
+        if (TryComp<AirAlarmComponent>(uid, out var alarm))
+        {
+            var alarmMode = alarm.CurrentMode;
+            d["air_alarm_mode"] = alarmMode.ToString();
+        }
+
+        if (d.Count == 0)
+            d["powered"] = _power.IsPowered(uid);
+
+        return d;
+    }
+
+    // ------------------------------------------------------------------ device_ui
+
+    /// <summary>
+    /// The escape hatch for whitelisted consoles that have no dedicated action.
+    ///
+    /// A curated command table rather than an open door: each entry builds a concrete
+    /// <c>BoundUserInterfaceMessage</c>, stamps <c>Actor</c> and <c>UiKey</c>, and raises it the
+    /// same way the UI layer would. Adding a console is one dictionary entry — the tool schema, and
+    /// therefore the frozen prefix, never grows.
+    /// </summary>
+    private Task<ToolResult> DeviceUiAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        if (!TryGetString(args, "command", out var command) || string.IsNullOrWhiteSpace(command))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "device_ui: нужен 'command'",
+                alternatives: DeviceUiCommands.ToList()));
+
+        if (!DeviceUiCommands.Contains(command!))
+        {
+            var near = DeviceUiCommands
+                .OrderBy(c => AiToolRegistry.Distance(c, command!))
+                .Take(3).ToList();
+
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs,
+                $"device_ui: нет команды '{command}'", retry: "other_target", alternatives: near));
+        }
+
+        TryGetString(args, "text", out var text);
+
+        return OnMainAsync(s, "device_ui", () =>
+        {
+            if (!TryResolve(s, args, out var uid, out var failure))
+                return failure!;
+
+            var gate = CheckGate(s.Brain, uid, s.Mode);
+            if (gate != DeviceGate.Ok)
+                return ToolResult.Fail(gate.ToError(), gate.ToDetail(), gate.Retry());
+
+            var handle = s.Handles.TryGetHandle(uid, out var h) ? h : "device";
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected(handle,
+                    new Dictionary<string, object?> { ["dry_run"] = true, ["command"] = command });
+
+            switch (command)
+            {
+                case "comms_broadcast":
+                {
+                    if (string.IsNullOrWhiteSpace(text))
+                        return ToolResult.Fail(ToolError.BadArgs, "comms_broadcast: нужен 'text'");
+
+                    var msg = new CommunicationsConsoleBroadcastMessage(text!)
+                    {
+                        Actor = s.Brain,
+                        UiKey = CommunicationsConsoleUiKey.Key,
+                    };
+                    RaiseLocalEvent(uid, (object)msg, true);
+                    break;
+                }
+
+                case "comms_announce":
+                {
+                    if (string.IsNullOrWhiteSpace(text))
+                        return ToolResult.Fail(ToolError.BadArgs, "comms_announce: нужен 'text'");
+
+                    var msg = new CommunicationsConsoleAnnounceMessage(text!)
+                    {
+                        Actor = s.Brain,
+                        UiKey = CommunicationsConsoleUiKey.Key,
+                    };
+                    RaiseLocalEvent(uid, (object)msg, true);
+                    break;
+                }
+
+                default:
+                    return ToolResult.Fail(ToolError.BadArgs, $"команда '{command}' не реализована");
+            }
+
+            _sawmill.Info($"[LLM] device_ui {command} on {ToPrettyString(uid)}");
+            return ToolResult.Effected(handle, ReadBack(uid));
+        }, ct);
+    }
+
+    private static readonly HashSet<string> DeviceUiCommands = new()
+    {
+        "comms_broadcast", "comms_announce",
+    };
+}

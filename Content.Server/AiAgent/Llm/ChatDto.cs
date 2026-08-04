@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -25,8 +26,24 @@ public static class LlmJson
     public static readonly JsonSerializerOptions Options = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        // No indentation, no escaping surprises: the bytes we build are the bytes we send.
+        // No indentation: the bytes we build are the bytes we send.
         WriteIndented = false,
+
+        // Cyrillic must survive as UTF-8, not as \uXXXX escapes.
+        //
+        // The default encoder escapes every non-ASCII character, which for a Russian-speaking
+        // agent means each word arrives as a run of six-character escape sequences: roughly six
+        // times the bytes, tokenized as punctuation soup rather than as words. Caught by the
+        // Inspect_ReportsCutAiWire benchmark, where a perfectly correct answer came back as
+        // "\u043F\u0440\u043E\u0432\u043E\u0434 \u043F\u0435\u0440\u0435\u0440\u0435\u0437\u0430\u043D".
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>Writer options matching <see cref="Options"/>, for hand-written JSON.</summary>
+    public static readonly JsonWriterOptions WriterOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Indented = false,
     };
 }
 

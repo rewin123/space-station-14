@@ -52,13 +52,20 @@ public sealed class AgentSession : IDisposable
 {
     private readonly ILlmClient _llm;
     private readonly AiToolRegistry _registry;
+
     private readonly ISawmill _sawmill;
     private readonly AgentLoopOptions _options;
     private readonly Func<bool, CancellationToken, Task<string?>> _buildObservation;
 
     public EntityUid Brain { get; }
     public ConversationState Conv { get; } = new();
+    /// <summary>The live tool registry — benchmarks invoke through it, never around it.</summary>
+    public AiToolRegistry Registry => _registry;
+
     public ObservationQueue Queue { get; }
+
+    /// <summary>Handle registry — per session, so names never leak between rounds.</summary>
+    public Handles.EntityHandleRegistry Handles { get; } = new();
     public CancellationTokenSource Cts { get; } = new();
     public Task Loop { get; private set; } = Task.CompletedTask;
 

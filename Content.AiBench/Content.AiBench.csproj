@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Integration benchmarks for the LLM Station AI.
+
+    Kept as its own project rather than as files inside Content.IntegrationTests so that nothing of
+    ours lives in an upstream directory, and so `dotnet test Content.AiBench` runs only our suite
+    instead of the whole upstream integration battery.
+
+    Deliberately NOT added to SpaceStation14.slnx: it builds and runs by path, which keeps the
+    upstream rebase surface at exactly one line of .gitignore.
+  -->
+  <PropertyGroup>
+    <OutputPath>..\bin\Content.AiBench\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <Import Project="../MSBuild/Content.props" />
+  <ItemGroup>
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Content.IntegrationTests\Content.IntegrationTests.csproj" />
+    <ProjectReference Include="..\Content.Server\Content.Server.csproj" />
+    <ProjectReference Include="..\Content.Shared\Content.Shared.csproj" />
+  </ItemGroup>
+  <Import Project="..\RobustToolbox\MSBuild\Robust.Properties.targets" />
+  <Import Project="..\RobustToolbox\MSBuild\Robust.CompNetworkGenerator.targets" />
+
+  <Import Project="..\RobustToolbox\Imports\Client.props" />
+  <Import Project="..\RobustToolbox\Imports\Server.props" />
+  <Import Project="..\RobustToolbox\Imports\Shared.props" />
+  <Import Project="..\RobustToolbox\Imports\Testing.props" />
+</Project>

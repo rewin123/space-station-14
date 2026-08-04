@@ -70,7 +70,7 @@ public sealed class ToolResult
     public string ToJson()
     {
         var buffer = new System.IO.MemoryStream();
-        using (var w = new Utf8JsonWriter(buffer))
+        using (var w = new Utf8JsonWriter(buffer, Llm.LlmJson.WriterOptions))
         {
             w.WriteStartObject();
             w.WriteBoolean("ok", Ok);

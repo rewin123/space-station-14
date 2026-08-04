@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Integration benchmarks for the LLM Station AI.
+#
+#   Tools/aibench                       # all of them
+#   Tools/aibench Look                  # by name substring
+#   Tools/aibench --no-build            # skip the build step
+#
+# NO_PROXY is forced because this box exports a global HTTP_PROXY that swallows localhost.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+export PATH="$DOTNET_ROOT:$PATH"
+export NO_PROXY='*' no_proxy='*'
+
+FILTER=""
+BUILD_ARGS=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-build) BUILD_ARGS+=("--no-build") ;;
+        -*)         BUILD_ARGS+=("$arg") ;;
+        *)          FILTER="$arg" ;;
+    esac
+done
+
+ARGS=(test Content.AiBench/Content.AiBench.csproj -c Release "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}")
+
+if [[ -n "$FILTER" ]]; then
+    ARGS+=(--filter "FullyQualifiedName~$FILTER")
+fi
+
+# One worker: the pool hands out real server instances, and running them in parallel makes
+# failures interleave into an unreadable mess for no wall-clock gain worth having.
+exec dotnet "${ARGS[@]}" -- NUnit.NumberOfTestWorkers=1
