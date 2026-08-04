@@ -66,6 +66,9 @@ public sealed partial class StationAiAgentSystem
             session.Queue.Push(obs);
     }
 
+    /// <summary>Worst main-thread call observed, for the "never stalls the tick" benchmark.</summary>
+    public (string What, double Ms) SlowestMainThreadCall() => (_dispatcher.Slowest, _dispatcher.SlowestMs);
+
     /// <summary>Build the observation message synchronously on the main thread.</summary>
     public string? BuildObservationForTest(EntityUid brain, bool force = true)
     {

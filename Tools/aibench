@@ -15,11 +15,17 @@ export PATH="$DOTNET_ROOT:$PATH"
 export NO_PROXY='*' no_proxy='*'
 
 FILTER=""
+CATEGORY=""
 BUILD_ARGS=()
 
 for arg in "$@"; do
     case "$arg" in
         --no-build) BUILD_ARGS+=("--no-build") ;;
+        # Behavioural benchmarks against the real model. Separate from the deterministic suite
+        # because they need a GPU, take minutes, and are inherently a bit flaky.
+        --live)     CATEGORY="Live" ;;
+        # Everything that runs without a model. The CI default.
+        --fast)     CATEGORY="!Live" ;;
         -*)         BUILD_ARGS+=("$arg") ;;
         *)          FILTER="$arg" ;;
     esac
@@ -29,6 +35,10 @@ ARGS=(test Content.AiBench/Content.AiBench.csproj -c Release "${BUILD_ARGS[@]+"$
 
 if [[ -n "$FILTER" ]]; then
     ARGS+=(--filter "FullyQualifiedName~$FILTER")
+elif [[ "$CATEGORY" == "Live" ]]; then
+    ARGS+=(--filter "TestCategory=Live")
+elif [[ "$CATEGORY" == "!Live" ]]; then
+    ARGS+=(--filter "TestCategory!=Live")
 fi
 
 # One worker: the pool hands out real server instances, and running them in parallel makes

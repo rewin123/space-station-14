@@ -31,15 +31,36 @@ public sealed class AiWorld : IAsyncDisposable
     public EntityUid Core { get; private set; }
     public EntityUid Brain { get; private set; }
 
+    /// <summary>
+    /// Scratch directory for this world's skills and memory.
+    ///
+    /// Fully qualified because <see cref="System"/> — the agent system property on this class —
+    /// shadows the System namespace inside it.
+    /// </summary>
+    public string DataDir { get; } = global::System.IO.Path.Combine(
+        global::System.IO.Path.GetTempPath(), "ss14ai-bench", global::System.IO.Path.GetRandomFileName());
+
     public IEntityManager Ent => Pair.Server.ResolveDependency<IEntityManager>();
 
-    public static async Task<AiWorld> Create(ScriptedLlmClient llm = null)
+    public static Task<AiWorld> Create(ScriptedLlmClient llm = null) => Build(llm ?? new ScriptedLlmClient());
+
+    /// <summary>
+    /// A world driven by the REAL model, for behavioural benchmarks.
+    ///
+    /// Leaves <c>AiTestHooks.LlmFactory</c> null so the system builds its own
+    /// <c>LlamaClient</c> from the CVars — the same code path a live server takes, endpoint and
+    /// sampling included. Turns tick fast because a benchmark waiting eight seconds per turn is a
+    /// benchmark nobody runs.
+    /// </summary>
+    public static Task<AiWorld> CreateLive() => Build(null);
+
+    private static async Task<AiWorld> Build(ScriptedLlmClient llm)
     {
-        var world = new AiWorld { Llm = llm ?? new ScriptedLlmClient() };
+        var world = new AiWorld { Llm = llm };
 
         // The factory is a settable static rather than an IoC registration: registering would mean
         // patching an upstream file, and the whole layout of this fork depends on not doing that.
-        AiTestHooks.LlmFactory = () => world.Llm;
+        AiTestHooks.LlmFactory = llm == null ? null : () => world.Llm;
 
         world.Pair = await PoolManager.GetServerClient(new PoolSettings
         {
@@ -56,6 +77,16 @@ public sealed class AiWorld : IAsyncDisposable
             cfg.SetCVar(AiCVars.Enabled, true);
             cfg.SetCVar(AiCVars.AutoClaim, false);   // tests claim explicitly, at a known moment
             cfg.SetCVar(AiCVars.DryRun, false);
+
+            // Fast turns. Eight seconds of idle per turn would make the behavioural suite take
+            // twenty minutes and teach everyone to skip it.
+            cfg.SetCVar(AiCVars.TickSeconds, 1f);
+            cfg.SetCVar(AiCVars.TickSecondsIdle, 2f);
+
+            // Agent files go to a scratch directory so a benchmark never writes into the live
+            // agent's memory or skill library.
+            cfg.SetCVar(AiCVars.DataDir, world.DataDir);
+            cfg.SetCVar(AiCVars.CuratorEnabled, false);
         });
 
         world.Map = await world.Pair.CreateTestMap();
@@ -170,9 +201,52 @@ public sealed class AiWorld : IAsyncDisposable
 
     public async Task Post(Action act) => await Pair.Server.WaitPost(act);
 
+    /// <summary>
+    /// Send a radio transmission from a throwaway crewman and wait for the world to change.
+    ///
+    /// Goes through the real <c>RadioSystem</c>, so it exercises the same path a player's voice
+    /// takes. Binary on purpose: it is longRange and needs no telecom server, whereas Common would
+    /// silently go nowhere on a bare test grid and the failure would look like an agent bug.
+    /// </summary>
+    public async Task<bool> SayToAiAndWait(string text, Func<bool> untilWorldSays, int seconds = 90)
+    {
+        await Pair.Server.WaitPost(() => System.InjectRadio("Binary", text, out _));
+
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            var done = false;
+            await Pair.Server.WaitPost(() => done = untilWorldSays());
+            if (done)
+                return true;
+
+            await Pair.Server.WaitRunTicks(15);
+        }
+
+        return false;
+    }
+
+    /// <summary>Everything the agent said out loud or over radio, for asserting that it replied at all.</summary>
+    public async Task<int> SpeechCount()
+    {
+        var count = 0;
+        await Pair.Server.WaitPost(() => count = System.GetSession(Brain)?.Turns ?? 0);
+        return count;
+    }
+
     public async ValueTask DisposeAsync()
     {
         AiTestHooks.LlmFactory = null;
+
+        try
+        {
+            if (global::System.IO.Directory.Exists(DataDir))
+                global::System.IO.Directory.Delete(DataDir, true);
+        }
+        catch
+        {
+            // A leftover temp directory is not worth failing a benchmark over.
+        }
 
         if (Pair != null)
         {
