@@ -137,7 +137,26 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _sawmill.Info($"no AI core claimed at round start: {reason}");
     }
 
-    private void OnRoundCleanup(RoundRestartCleanupEvent ev) => ReleaseAll("round restart");
+    private void OnRoundCleanup(RoundRestartCleanupEvent ev)
+    {
+        ReleaseAll("round restart");
+        ResetLlmClient();
+    }
+
+    /// <summary>
+    /// Drop the cached model client so the next claim builds a fresh one.
+    ///
+    /// Two reasons. In ops: a change to ai.endpoint or ai.model then takes effect at the next
+    /// round instead of requiring a server restart. In tests: the benchmark pool hands the same
+    /// server instance to the next test, and without this a live scenario inherits the scripted
+    /// client an earlier scenario installed — which presents as the agent taking turns and never
+    /// acting, with nothing in the log to explain it.
+    /// </summary>
+    public void ResetLlmClient()
+    {
+        (_llm as IDisposable)?.Dispose();
+        _llm = null;
+    }
 
     /// <summary>Find an empty AI core and put an LLM-driven brain in it.</summary>
     public bool TryClaimAnyCore(out string reason)

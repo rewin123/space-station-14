@@ -92,6 +92,15 @@ public sealed class AiWorld : IAsyncDisposable
         world.Map = await world.Pair.CreateTestMap();
         world.System = server.System<StationAiAgentSystem>();
 
+        // The pool hands back a server a previous scenario already used, and the agent system
+        // caches its model client. Without this reset a live scenario inherits the scripted client
+        // the previous scenario installed and silently never acts.
+        await server.WaitPost(() =>
+        {
+            world.System.ResetLlmClient();
+            world.System.ReloadAgentFiles();
+        });
+
         var ent = server.ResolveDependency<IEntityManager>();
 
         // CreateTestMap lays exactly ONE tile, at (0,0). Anything spawned beside it hangs over
