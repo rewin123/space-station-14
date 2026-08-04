@@ -1,0 +1,174 @@
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
+namespace Content.Server.AiAgent.Llm;
+
+/// <summary>
+/// Wire DTOs for the OpenAI-compatible chat-completions API.
+///
+/// Every property here is declared in the exact order it must appear on the wire, because
+/// System.Text.Json serialises in declaration order and llama.cpp reuses its KV cache only up to
+/// the first divergent <em>token</em>. A reordered field is not a cosmetic difference — it moves
+/// the divergence point to the top of the request and costs a full prefill on every single turn.
+/// For the same reason nothing here is a <c>Dictionary&lt;string, object&gt;</c>: dictionary
+/// iteration order is an implementation detail.
+/// </summary>
+public static class LlmJson
+{
+    /// <summary>
+    /// The single serializer used on every path that can produce a request body. Sharing one
+    /// instance is what guarantees a conversation serialises identically whether it came from
+    /// memory or from a reloaded session snapshot.
+    /// </summary>
+    public static readonly JsonSerializerOptions Options = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // No indentation, no escaping surprises: the bytes we build are the bytes we send.
+        WriteIndented = false,
+    };
+}
+
+public sealed class ChatMessageDto
+{
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = "user";
+
+    [JsonPropertyName("content")]
+    public string? Content { get; set; }
+
+    [JsonPropertyName("tool_calls")]
+    public List<ToolCallDto>? ToolCalls { get; set; }
+
+    [JsonPropertyName("tool_call_id")]
+    public string? ToolCallId { get; set; }
+
+    public static ChatMessageDto System(string text) => new() { Role = "system", Content = text };
+    public static ChatMessageDto User(string text) => new() { Role = "user", Content = text };
+
+    public static ChatMessageDto Tool(string toolCallId, string json) =>
+        new() { Role = "tool", ToolCallId = toolCallId, Content = json };
+}
+
+public sealed class ToolCallDto
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("function")]
+    public FunctionCallDto Function { get; set; } = new();
+}
+
+public sealed class FunctionCallDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Raw JSON, echoed back verbatim — re-serialising it would risk changing bytes.</summary>
+    [JsonPropertyName("arguments")]
+    public string Arguments { get; set; } = "{}";
+}
+
+public sealed class ToolDto
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("function")]
+    public ToolFunctionDto Function { get; set; } = new();
+}
+
+public sealed class ToolFunctionDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Parsed once from a hand-written canonical JSON schema string. A <see cref="JsonNode"/>
+    /// round-trips in document order, so the schema serialises byte-identically every time.
+    /// </summary>
+    [JsonPropertyName("parameters")]
+    public JsonNode? Parameters { get; set; }
+}
+
+/// <summary>Request body. Property order is the wire order — see the note on <see cref="LlmJson"/>.</summary>
+public sealed class ChatRequestDto
+{
+    [JsonPropertyName("model")]
+    public string Model { get; set; } = string.Empty;
+
+    [JsonPropertyName("messages")]
+    public List<ChatMessageDto> Messages { get; set; } = new();
+
+    [JsonPropertyName("tools")]
+    public List<ToolDto>? Tools { get; set; }
+
+    [JsonPropertyName("tool_choice")]
+    public string? ToolChoice { get; set; }
+
+    /// <summary>
+    /// Kept false on purpose. Several Qwen templates advertise parallel calls but emit malformed
+    /// multi-call blocks, and one call per turn keeps the conversation append-only and predictable.
+    /// </summary>
+    [JsonPropertyName("parallel_tool_calls")]
+    public bool ParallelToolCalls { get; set; }
+
+    /// <summary>
+    /// Also false on purpose: llama.cpp emits tool calls only at the end of the stream in some
+    /// template/parser combinations, so a streaming client sees raw XML it cannot parse.
+    /// </summary>
+    [JsonPropertyName("stream")]
+    public bool Stream { get; set; }
+
+    [JsonPropertyName("temperature")]
+    public float Temperature { get; set; }
+
+    [JsonPropertyName("top_p")]
+    public float TopP { get; set; }
+
+    [JsonPropertyName("top_k")]
+    public int TopK { get; set; }
+
+    [JsonPropertyName("min_p")]
+    public float MinP { get; set; }
+
+    [JsonPropertyName("max_tokens")]
+    public int MaxTokens { get; set; }
+
+    /// <summary>llama.cpp extension: reuse the slot's prefix KV cache.</summary>
+    [JsonPropertyName("cache_prompt")]
+    public bool CachePrompt { get; set; } = true;
+
+    /// <summary>
+    /// Pin the agent to one slot. <c>--slot-prompt-similarity</c> routing is documented as
+    /// behaving unpredictably, and a slot switch throws away the whole prefix cache.
+    /// </summary>
+    [JsonPropertyName("id_slot")]
+    public int? IdSlot { get; set; }
+}
+
+/// <summary>What the agent loop actually consumes from a completion.</summary>
+public sealed record LlmResponse(
+    string? Content,
+    IReadOnlyList<ToolCallDto> ToolCalls,
+    int PromptTokens,
+    int CachedTokens,
+    int CompletionTokens,
+    double DurationSeconds)
+{
+    /// <summary>
+    /// Share of the prompt served from cache. Below ~0.9 on a turn that did not just compact
+    /// means the prefix drifted — the canary for an accidental timestamp in the system prompt.
+    /// </summary>
+    public double CacheRatio => PromptTokens <= 0 ? 0.0 : (double)CachedTokens / PromptTokens;
+
+    public static LlmResponse Empty { get; } =
+        new(null, Array.Empty<ToolCallDto>(), 0, 0, 0, 0.0);
+}
