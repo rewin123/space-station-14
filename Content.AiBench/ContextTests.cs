@@ -221,6 +221,84 @@ public sealed class ContextTests
         Assert.That(llm.LastTools[0].Function.Name, Is.EqualTo("look"));
     }
 
+    [Test]
+    public async Task Compact_AnnouncesBeforeTheSlowWork()
+    {
+        // Ordering guard. The curator is several model calls back to back — about a minute in
+        // practice — and the summariser adds another. If the announcement came after them, the
+        // crew would talk to a silent AI for that whole stretch and only then be told why. An
+        // explanation that arrives after the silence is not an explanation.
+        var conv = Fresh();
+        for (var i = 0; i < 20; i++)
+            AddTurn(conv, $"наблюдение {i} с достаточным количеством текста", "look");
+
+        conv.LastPromptTokens = 5000;
+
+        var order = new System.Collections.Generic.List<string>();
+        var llm = new ScriptedLlmClient().Then("сводка");
+        var compactor = MakeCompactor(llm, high: 1000, low: 500, keepTail: 200);
+
+        await compactor.CompactAsync(
+            conv,
+            System.Array.Empty<ToolDto>(),
+            curate: () => { order.Add("curator"); return Task.CompletedTask; },
+            _ => { order.Add("announce"); return Task.CompletedTask; },
+            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
+            CancellationToken.None);
+
+        Assert.That(order, Is.EqualTo(new[] { "announce", "curator" }),
+            "объявление обязано идти ДО куратора — оно объясняет паузу, которую куратор и создаёт");
+    }
+
+    [Test]
+    public async Task Compact_StaysQuietWhenThereIsNothingToCut()
+    {
+        // The other half of the ordering rule: feasibility is checked before the announcement, so
+        // the AI never tells the crew it is cleaning memory and then cancels.
+        var conv = Fresh();
+        AddTurn(conv, "единственный короткий ход", "look");
+        conv.LastPromptTokens = 5000;
+
+        var announced = false;
+        var curated = false;
+        var compactor = MakeCompactor(new ScriptedLlmClient(), high: 1000, low: 500, keepTail: 100_000);
+
+        var ok = await compactor.CompactAsync(
+            conv,
+            System.Array.Empty<ToolDto>(),
+            curate: () => { curated = true; return Task.CompletedTask; },
+            _ => { announced = true; return Task.CompletedTask; },
+            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
+            CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ok, Is.False);
+            Assert.That(announced, Is.False, "нельзя обещать чистку памяти и потом её отменить");
+            Assert.That(curated, Is.False, "и нечего гонять куратора минуту впустую");
+        });
+    }
+
+    [Test]
+    public void Compact_SkippingForNoCutPointDoesNotDisarm()
+    {
+        // Found on a live run: skipping for "no boundary yet" used to disarm the compactor
+        // permanently, so after the first skip the context grew unbounded for the rest of the
+        // round — silently, with nothing in the log to suggest anything was wrong. Having no cut
+        // point is transient; the very next turn creates a boundary.
+        var conv = Fresh();
+        AddTurn(conv, "один ход", "look");
+        conv.LastPromptTokens = 5000;
+
+        var compactor = MakeCompactor(new ScriptedLlmClient(), high: 1000, low: 500, keepTail: 100_000);
+
+        compactor.CompactAsync(conv, System.Array.Empty<ToolDto>(), null, _ => Task.CompletedTask,
+            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert.That(compactor.ShouldCompact(conv), Is.True,
+            "после пропуска из-за отсутствия границы компактор обязан остаться взведённым");
+    }
+
     // ----------------------------------------------------------- prefix watchdog
 
     [Test]

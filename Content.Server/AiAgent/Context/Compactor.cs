@@ -29,14 +29,18 @@ public sealed class CompactionOptions
 ///
 /// All five steps:
 ///
-///   1. curator                — reviews the stretch and writes skills and memory to disk
-///   2. tell the crew          — the AI says out loud that it is defragmenting
+///   0. feasibility            — is there a cut point at all? if not, stay quiet and skip
+///   1. tell the crew          — BEFORE the slow work, because it explains the pause
+///   2. curator                — reviews the stretch and writes skills and memory to disk
 ///   3. summarise              — one extra turn on a COPY, so it rides the warm prefix
 ///   4. fold the body          — summary + tail, cut only at a turn boundary
 ///   5. rebuild zone 0         — pick up exactly what the curator just wrote, recompute the hash
 ///
-/// The curator runs FIRST and the prefix rebuild LAST, so that what was learned in this stretch is
-/// already in zone 0 when the agent resumes — and all of it costs the single prefill we were going
+/// Order matters twice over. The feasibility check comes before the announcement so the AI never
+/// promises a cleanup it then cancels. The announcement comes before the curator because the
+/// curator is several model calls — about a minute — and an explanation that arrives after the
+/// silence is not an explanation. And the prefix rebuild comes last so that what was learned this
+/// stretch is already in zone 0 when the agent resumes, all for the single prefill we were going
 /// to pay anyway.
 ///
 /// Measured cost on the equivalent mcbot deployment: exactly one following call misses the cache,
@@ -120,7 +124,24 @@ public sealed class Compactor
             return false;
         }
 
-        // --- step 1: curator ------------------------------------------------------------------
+        // --- step 1: tell the crew FIRST ------------------------------------------------------
+        //
+        // Before the slow work, not after it. The curator is several model calls back to back —
+        // measured at about a minute — and the summariser adds another. Announcing afterwards
+        // would leave the crew talking to a silent AI for that whole stretch and only then hearing
+        // why. The announcement is the explanation for the pause, so it has to precede the pause.
+        try
+        {
+            await announce("Внимание: буферы переполнены, провожу очистку памяти. Реакция может замедлиться.")
+                .ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            // A failed announcement must never block the compaction it announces.
+            _sawmill.Warning($"не удалось объявить о компакции: {e.Message}");
+        }
+
+        // --- step 2: curator ------------------------------------------------------------------
         if (curate != null)
         {
             try
@@ -133,18 +154,6 @@ public sealed class Compactor
                 // has to shrink, learned lesson or not.
                 _sawmill.Warning($"куратор не отработал: {e.GetType().Name}: {e.Message}");
             }
-        }
-
-        // --- step 2: tell the crew ------------------------------------------------------------
-        try
-        {
-            await announce("Внимание: буферы переполнены, провожу очистку памяти. Реакция может замедлиться.")
-                .ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            // A failed announcement must never block the compaction it announces.
-            _sawmill.Warning($"не удалось объявить о компакции: {e.Message}");
         }
 
         // --- step 3: summarise ----------------------------------------------------------------
