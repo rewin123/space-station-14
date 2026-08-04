@@ -54,10 +54,12 @@ public sealed partial class StationAiAgentSystem
             Name = "inspect",
             Description = "Подробное состояние одного объекта по хендлу: дверь (открыта, болты, " +
                           "электризация), APC (рубильник, заряд), воздушная тревога, турель, " +
-                          "перерезан ли твой провод к устройству.",
+                          "перерезан ли твой провод к устройству, какой доступ требует замок. " +
+                          "С параметром by отвечает, пустит ли эта дверь конкретного человека.",
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"Хендл из look, например door-3."},
+                "by":{"type":"string","description":"Имя или хендл человека. Ответит, открывает ли его карта этот замок. Человек должен быть виден камерами."},
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => InspectAsync(s, a, ct),

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Tools;
+using Content.Shared.Access.Components;
 using Content.Server.Atmos.Monitor.Components;
 using Content.Server.Power.Components;
 using Content.Shared.Doors.Components;
@@ -249,11 +250,123 @@ public sealed partial class StationAiAgentSystem
                 d["mob_state"] = mobState.ToString();
             }
 
+            AddAccessInfo(s, args, uid, d);
+
             // Tell the model what it may actually do here, so it does not have to probe.
             d["actions"] = AvailableActions(uid);
 
             return ToolResult.Success(d);
         }, ct);
+    }
+
+    /// <summary>
+    /// What the door demands, and — when asked about a specific person — whether it would let them
+    /// through.
+    ///
+    /// "Ии, пусти меня в инженерный" is one of the most common things said to a Station AI, and the
+    /// honest answer often is "your card already opens it, just walk up to it". Without this the
+    /// agent either guesses from the job title or opens the door needlessly, and both are wrong:
+    /// access does not follow job reliably once anyone has visited the ID console.
+    ///
+    /// The verdict comes from <c>AccessReaderSystem.IsAllowed</c> — the very call the game makes
+    /// when that person touches that door. It is a simulation of their own attempt, not a private
+    /// oracle: the same answer arrives a second later if they simply try the handle.
+    ///
+    /// The person must be visible on camera, exactly as <c>identify</c> requires. Answering about
+    /// someone the AI cannot see would mean reading ID cards over the radio, which no player can do.
+    /// </summary>
+    private void AddAccessInfo(AgentSession s, JsonElement args, EntityUid uid, Dictionary<string, object?> d)
+    {
+        // Not TryComp: an airlock's own AccessReader is a shell with ContainerAccessProvider set,
+        // and the requirements that actually decide anything live on the door electronics board
+        // inside it. Reading the shell reports a list the game never consults — it looked right and
+        // was pure fiction, which is worse than reporting nothing.
+        if (!_access.GetMainAccessReader(uid, out var readerEnt))
+            return;
+
+        var reader = readerEnt.Value.Comp;
+
+        if (!reader.Enabled)
+        {
+            d["access_required"] = "замок отключён — пускает всех";
+            return;
+        }
+
+        // Each inner set is one sufficient combination; any single one of them opens the door.
+        d["access_required"] = reader.AccessLists.Count == 0
+            ? new List<string> { "свободный проход" }
+            : reader.AccessLists
+                .Select(set => string.Join('+', set.Select(t => t.Id).OrderBy(t => t, StringComparer.Ordinal)))
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToList();
+
+        if (!TryGetString(args, "by", out var by) || string.IsNullOrWhiteSpace(by))
+            return;
+
+        if (!TryResolvePerson(s, by!, out var person, out var why))
+        {
+            d["access_by"] = why;
+            return;
+        }
+
+        var allowed = _access.IsAllowed(person, uid);
+
+        d["access_by"] = Identity.Name(person, EntityManager);
+        d["access_allowed"] = allowed;
+
+        if (!allowed)
+        {
+            var held = _access.FindAccessTags(person).Select(t => t.Id).OrderBy(t => t, StringComparer.Ordinal).ToList();
+            d["access_held"] = held.Count > 0 ? held : new List<string> { "нет карты или доступов" };
+        }
+    }
+
+    /// <summary>
+    /// Resolve a person by handle or by name, among people the AI has already seen, and only while
+    /// it can still see them.
+    ///
+    /// Searching the handle registry rather than sweeping vision again is deliberate: a fresh
+    /// <c>GetView</c> is the single most expensive call in the tool surface, and everything the AI
+    /// legitimately knows about is in the registry already because that is where looking puts it.
+    /// </summary>
+    private bool TryResolvePerson(AgentSession s, string query, out EntityUid uid, out string? failure)
+    {
+        failure = null;
+
+        if (s.Handles.TryResolve(query, out uid) && Exists(uid) && !TerminatingOrDeleted(uid))
+            return VisibleOrExplain(s, uid, ref failure);
+
+        var known = s.Handles.HandlesOfKind("crew")
+            .Select(h => s.Handles.TryResolve(h, out var u) ? u : EntityUid.Invalid)
+            .Where(u => u.IsValid() && Exists(u) && !TerminatingOrDeleted(u))
+            .Select(u => (Uid: u, Name: Identity.Name(u, EntityManager)))
+            .ToList();
+
+        var exact = known.Where(n => string.Equals(n.Name, query, StringComparison.OrdinalIgnoreCase)).ToList();
+        var hits = exact.Count > 0
+            ? exact
+            : known.Where(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (hits.Count == 1)
+        {
+            uid = hits[0].Uid;
+            return VisibleOrExplain(s, uid, ref failure);
+        }
+
+        failure = hits.Count > 1
+            ? $"'{query}' подходит нескольким: {string.Join(", ", hits.Select(h => h.Name).OrderBy(n => n, StringComparer.Ordinal).Take(5))}"
+            : $"'{query}' не найден — сначала посмотри на него: look near";
+
+        return false;
+    }
+
+    private bool VisibleOrExplain(AgentSession s, EntityUid uid, ref string? failure)
+    {
+        if (IsVisibleToAi(s.Brain, uid))
+            return true;
+
+        failure = $"{Identity.Name(uid, EntityManager)} сейчас не на камерах — карту в его руках ты не видишь";
+        return false;
     }
 
     private List<string> AvailableActions(EntityUid uid)
