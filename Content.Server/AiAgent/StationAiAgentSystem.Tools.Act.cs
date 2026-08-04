@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -15,6 +16,7 @@ using Content.Shared.Doors.Components;
 using Content.Shared.Electrocution;
 using Content.Shared.Radio;
 using Content.Shared.Silicons.StationAi;
+using Robust.Shared.Map;
 using Robust.Shared.Prototypes;
 
 namespace Content.Server.AiAgent;
@@ -22,12 +24,29 @@ namespace Content.Server.AiAgent;
 /// <summary>Acting tools: say, radio, announce, move_camera, jump_to_core, device_action, device_ui.</summary>
 public sealed partial class StationAiAgentSystem
 {
+    /// <summary>
+    /// Refuse to broadcast a line the agent has just broadcast.
+    ///
+    /// This model fills silence: on a live station it put "Экипаж, Аврора на связи" on the common
+    /// channel every eight seconds for minutes. A player would never; the crew reads it as a stuck
+    /// machine. Refusing at the tool is the only place the habit reliably breaks, and the message
+    /// says what to do instead rather than just saying no.
+    /// </summary>
+    private static ToolResult RepeatRefusal() =>
+        ToolResult.Fail(ToolError.BadArgs,
+            "ты только что это говорил. Не повторяйся: скажи что-то новое или промолчи — " +
+            "молчание нормально, если добавить нечего.",
+            retry: "none");
+
     // ------------------------------------------------------------------------ say
 
     private Task<ToolResult> SayAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
         if (!TryGetString(args, "text", out var text) || string.IsNullOrWhiteSpace(text))
             return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "say: нужен непустой 'text'"));
+
+        if (s.AlreadySaid(text!))
+            return Task.FromResult(RepeatRefusal());
 
         return OnMainAsync(s, "say", () =>
         {
@@ -52,6 +71,9 @@ public sealed partial class StationAiAgentSystem
     {
         if (!TryGetString(args, "text", out var text) || string.IsNullOrWhiteSpace(text))
             return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "radio: нужен непустой 'text'"));
+
+        if (s.AlreadySaid(text!))
+            return Task.FromResult(RepeatRefusal());
 
         if (!TryGetString(args, "channel", out var channel) || string.IsNullOrWhiteSpace(channel))
             return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "radio: нужен 'channel'",
@@ -165,34 +187,65 @@ public sealed partial class StationAiAgentSystem
     /// </summary>
     private Task<ToolResult> MoveCameraAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
+        var hasHandle = TryGetString(args, "handle", out var handleArg) && !string.IsNullOrWhiteSpace(handleArg);
+        // Evaluated separately rather than with &&: short-circuiting would leave y definitely
+        // unassigned and the compiler is right to say so.
+        var hasX = TryGetFloat(args, "x", out var px);
+        var hasY = TryGetFloat(args, "y", out var py);
+        var hasPoint = hasX && hasY;
+
+        if (!hasHandle && !hasPoint)
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs,
+                "move_camera: нужен 'handle' из look, либо пара 'x' и 'y' — например координаты из crew_status"));
+
         return OnMainAsync(s, "move_camera", () =>
         {
-            if (!TryResolve(s, args, out var uid, out var failure))
-                return failure!;
-
             if (s.Mode == AgentMode.Carded)
                 return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
 
             if (!_stationAi.TryGetCore(s.Brain, out var core) || core.Comp?.RemoteEntity == null)
                 return ToolResult.Fail(ToolError.Carded, "нет глаза");
 
-            if (!IsVisibleToAi(s.Brain, uid))
-                return ToolResult.Fail(ToolError.NotVisible,
-                    "туда не добивают камеры — сначала переместись ближе к тому, что видно",
-                    retry: "other_target");
+            var eye = core.Comp.RemoteEntity.Value;
+
+            EntityCoordinates destination;
+            string at;
+
+            if (hasHandle)
+            {
+                if (!TryResolve(s, args, out var uid, out var failure))
+                    return failure!;
+
+                if (!IsVisibleToAi(s.Brain, uid))
+                    return ToolResult.Fail(ToolError.NotVisible,
+                        "туда не добивают камеры — сначала переместись ближе к тому, что видно",
+                        retry: "other_target");
+
+                destination = Transform(uid).Coordinates;
+                at = Name(uid);
+            }
+            else
+            {
+                // Jumping to a bare point is what makes a crew_status position actionable. It is
+                // still gated by camera coverage on the destination tile, so this buys reach the AI
+                // did not have, never sight it should not have: a point with no camera refuses.
+                if (!TryPointOnGrid(eye, px, py, out destination, out var why))
+                    return why!;
+
+                at = string.Create(CultureInfo.InvariantCulture, $"точка ({px:F0},{py:F0})");
+            }
 
             if (_cfg.GetCVar(AiCVars.DryRun))
-                return ToolResult.Effected("self", new Dictionary<string, object?> { ["dry_run"] = true });
+                return ToolResult.Effected("self", new Dictionary<string, object?> { ["dry_run"] = true, ["at"] = at });
 
-            var eye = core.Comp.RemoteEntity.Value;
-            _xform.SetCoordinates(eye, Transform(uid).Coordinates);
+            _xform.SetCoordinates(eye, destination);
 
             var pos = _xform.GetMapCoordinates(eye);
             return ToolResult.Effected("self", new Dictionary<string, object?>
             {
                 ["eye_x"] = (int)pos.X,
                 ["eye_y"] = (int)pos.Y,
-                ["at"] = Name(uid),
+                ["at"] = at,
             });
         }, ct);
     }

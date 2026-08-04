@@ -57,6 +57,7 @@ public sealed class AgentSession : IDisposable
     private readonly AgentLoopOptions _options;
     private readonly Func<bool, CancellationToken, Task<string?>> _buildObservation;
     private readonly Func<string, Task> _announce;
+    private readonly Func<string, string?, Task<bool>> _speak;
     private readonly Func<Task>? _curate;
     private readonly Func<(string SystemPrompt, string ToolsJson)> _rebuildPrefix;
 
@@ -75,6 +76,19 @@ public sealed class AgentSession : IDisposable
 
     /// <summary>Handle registry — per session, so names never leak between rounds.</summary>
     public Handles.EntityHandleRegistry Handles { get; } = new();
+
+    /// <summary>
+    /// Channel of the last radio line in the observation that opened this turn, or null if the
+    /// turn heard no radio. Set by the observation builder while it drains the queue, because that
+    /// is the only place the raw <see cref="Perception.Observation"/> list still exists.
+    /// </summary>
+    public string? HeardOnChannel { get; set; }
+
+    /// <summary>Whether the observation that opened this turn contained speech near the core.</summary>
+    public bool HeardSpeech { get; set; }
+
+    /// <summary>Turns that ended in prose and had to be delivered mechanically. Should stay near zero.</summary>
+    public int UntooledReplies { get; private set; }
     public CancellationTokenSource Cts { get; } = new();
     public Task Loop { get; private set; } = Task.CompletedTask;
 
@@ -108,6 +122,7 @@ public sealed class AgentSession : IDisposable
         AgentLoopOptions options,
         Func<bool, CancellationToken, Task<string?>> buildObservation,
         Func<string, Task> announce,
+        Func<string, string?, Task<bool>> speak,
         Func<Task>? curate,
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CompactionOptions compaction,
@@ -120,6 +135,7 @@ public sealed class AgentSession : IDisposable
         _options = options;
         _buildObservation = buildObservation;
         _announce = announce;
+        _speak = speak;
         _curate = curate;
         _rebuildPrefix = rebuildPrefix;
         _sawmill = sawmill;
@@ -210,7 +226,25 @@ public sealed class AgentSession : IDisposable
         Conv.AppendUser(observation);
         Turns++;
 
+        // The turn's input, verbatim. It carries the SELF line — where the eye is, whether the core
+        // has power — which is the first thing anyone asks when the agent behaves oddly, and until
+        // now the only copy of it lived inside the request nobody could see.
+        _sawmill.Debug($"turn {Turns} <- {Trim(observation, 400)}");
+
         var maxSteps = _options.MaxToolCallsPerTurn();
+
+        // A turn that heard nobody is the agent musing to itself; a turn that was addressed owes
+        // an answer. The distinction is what keeps the recovery below from broadcasting idle
+        // thoughts over the radio every eight seconds.
+        var addressed = HeardOnChannel != null || HeardSpeech;
+        var nudged = false;
+        string? undelivered = null;
+
+        // Set the moment a say/radio/announce actually lands. Everything below hangs off it: once
+        // the crew has heard something, trailing prose is the model tidying up its own turn
+        // ("Всё.", "Я уже ответила"), not an unspoken reply. Treating that as unspoken is how the
+        // first cut of this recovery broadcast every answer twice.
+        var spoke = false;
 
         for (var step = 0; step < maxSteps; step++)
         {
@@ -236,7 +270,31 @@ public sealed class AgentSession : IDisposable
                 _sawmill.Debug($"thought: {response.Content!.Trim()}");
 
             if (response.ToolCalls.Count == 0)
+            {
+                var prose = response.Content?.Trim();
+
+                // The failure this guards against: the model composes a perfectly good reply as
+                // plain text and stops, believing it has answered. Nothing reaches the station and
+                // the crew sees a dead AI. Prompting alone does not fix it reliably, so the loop
+                // says so out loud and gives it one more step to say it properly.
+                if (!nudged && addressed && !spoke && !string.IsNullOrEmpty(prose))
+                {
+                    nudged = true;
+                    undelivered = prose;
+                    Conv.AppendUser(
+                        "NOTIFY Этого никто не услышал: обычный текст не доходит до экипажа. " +
+                        "Если хочешь ответить — вызови инструмент say или radio.");
+                    continue;
+                }
+
+                // Still prose after being told. Rather than let the crew face a silent AI, deliver
+                // it on the channel the request arrived on. Loud in the log on purpose: this is a
+                // model failure being papered over, and it must be countable.
+                undelivered = addressed && !spoke && !string.IsNullOrEmpty(prose) ? prose : null;
                 break;
+            }
+
+            undelivered = null;
 
             foreach (var call in response.ToolCalls)
             {
@@ -248,7 +306,45 @@ public sealed class AgentSession : IDisposable
                 // broken, and "wait, not that one" has to be actionable.
                 result.Unread = Queue.PeekUnread(6);
                 Conv.AppendToolResult(call.Id, result.ToJson());
+
+                // Without this the log shows "tools=1" and nothing else: which tool ran, with what
+                // arguments, and which gate refused are all invisible. That turns any behavioural
+                // question — why did it not move the eye, why did it give up — into guesswork.
+                _sawmill.Debug(
+                    $"  {call.Function.Name}({Trim(call.Function.Arguments)}) -> " +
+                    (result.Ok ? "ok " + Trim(result.EffectJson(), 1200) : $"{result.Error}: {result.Detail}"));
+
+                if (result.Ok && SpeechTools.Contains(call.Function.Name))
+                {
+                    spoke = true;
+                    RememberSpeech(SpokenText(call.Function.Arguments));
+                }
             }
+        }
+
+        // Repeating itself on the radio is worse than saying nothing: the crew reads it as a stuck
+        // machine, and it is the failure this model reaches for whenever it has nothing to add.
+        if (undelivered != null && AlreadySaid(undelivered))
+        {
+            _sawmill.Debug($"проза повторяет уже сказанное, не доставляю: {undelivered}");
+            undelivered = null;
+        }
+
+        if (undelivered != null)
+        {
+            UntooledReplies++;
+            RememberSpeech(undelivered);
+
+            // Log after the attempt, not before: the delivery can decline (ai.speak_untooled_text
+            // off, dry run, AI no longer in play), and a line claiming a broadcast that never
+            // happened is worse than no line at all.
+            var delivered = await _speak(undelivered, HeardOnChannel).ConfigureAwait(false);
+
+            _sawmill.Warning(delivered
+                ? $"модель ответила текстом без say/radio даже после напоминания — доставлено " +
+                  $"вручную ({(HeardOnChannel is { } ch ? "radio " + ch : "say")}): {undelivered}"
+                : $"модель ответила текстом без say/radio даже после напоминания; доставка выключена, " +
+                  $"экипаж этого не услышал: {undelivered}");
         }
 
         // Any call left dangling by the step budget gets a synthetic result, or the next request
@@ -277,6 +373,74 @@ public sealed class AgentSession : IDisposable
 
     /// <summary>Mode to return to after a review; carding during a review must not be forgotten.</summary>
     private AgentMode _modeBeforeReview = AgentMode.Core;
+
+    /// <summary>Tools that put words in front of the crew. A turn that used one has spoken.</summary>
+    private static readonly HashSet<string> SpeechTools = new(StringComparer.Ordinal)
+    {
+        "say", "radio", "announce",
+    };
+
+    /// <summary>
+    /// The last few things the agent said, normalised, so it does not broadcast them again.
+    ///
+    /// This model fills silence: left alone it emits "Жду указаний" every turn, and the recovery
+    /// path below would dutifully put each copy on the radio. Suppressing an exact repeat is a
+    /// mechanical fix for a mechanical habit — no prompt wording survives contact with it.
+    /// </summary>
+    private readonly Queue<string> _recentSpeech = new();
+
+    /// <summary>Keep a log line to one line — device_ui payloads are long and the point is the shape.</summary>
+    private static string Trim(string? text, int max = 160)
+    {
+        if (string.IsNullOrEmpty(text))
+            return "";
+
+        var flat = text.Replace('\n', ' ').Replace('\r', ' ');
+        return flat.Length <= max ? flat : flat[..max] + "…";
+    }
+
+    private static string Normalise(string text)
+    {
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (char.IsLetterOrDigit(c))
+                sb.Append(char.ToLowerInvariant(c));
+        }
+
+        return sb.ToString();
+    }
+
+    private void RememberSpeech(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        _recentSpeech.Enqueue(Normalise(text));
+        while (_recentSpeech.Count > 4)
+            _recentSpeech.Dequeue();
+    }
+
+    /// <summary>Has this exact line gone out in the last few turns? Public so the speech tools can refuse it.</summary>
+    public bool AlreadySaid(string text) => _recentSpeech.Contains(Normalise(text));
+
+    /// <summary>Pull the spoken text out of a say/radio/announce call so repeats can be spotted.</summary>
+    private static string? SpokenText(string argsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("text", out var el)
+                   && el.ValueKind == JsonValueKind.String
+                ? el.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private async Task<ToolResult> InvokeAsync(ToolCallDto call, CancellationToken ct)
     {

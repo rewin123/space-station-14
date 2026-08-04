@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using Content.Server.AiAgent.Tools;
 using Content.Shared.Access.Components;
 using Content.Shared.Doors.Components;
@@ -9,6 +11,7 @@ using Content.Shared.Silicons.StationAi;
 using Content.Server.Atmos.Monitor.Components;
 using Content.Server.Power.Components;
 using Content.Shared.SurveillanceCamera.Components;
+using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Physics;
 
@@ -81,6 +84,99 @@ public sealed partial class StationAiAgentSystem
         return result;
     }
 
+    /// <summary>
+    /// Turn a map position into grid coordinates the eye may legally occupy.
+    ///
+    /// Same camera-coverage test the entity path uses, so reaching a point by number is no more
+    /// permissive than reaching it by handle — a tile no camera watches refuses either way.
+    /// </summary>
+    private bool TryPointOnGrid(EntityUid eye, float x, float y, out EntityCoordinates coords, out ToolResult? failure)
+    {
+        coords = default;
+        failure = null;
+
+        var eyeXform = Transform(eye);
+        var gridUid = eyeXform.GridUid;
+
+        if (gridUid == null
+            || !TryComp<MapGridComponent>(gridUid, out var mapGrid)
+            || !TryComp<BroadphaseComponent>(gridUid, out var broadphase))
+        {
+            failure = ToolResult.Fail(ToolError.NotVisible, "глаз не на станции");
+            return false;
+        }
+
+        var point = new MapCoordinates(new Vector2(x, y), eyeXform.MapID);
+        var candidate = _xform.ToCoordinates(gridUid.Value, point);
+        var tile = _mapSystem.LocalToTile(gridUid.Value, mapGrid, candidate);
+
+        // A point over open space is not a camera problem, it is a different structure entirely —
+        // the arrivals shuttle, a salvage wreck, someone drifting outside. Saying "no cameras there"
+        // sends the model hunting for a camera that could never exist, and the crew gets told to
+        // walk somewhere that will not help.
+        if (!_mapSystem.TryGetTileRef(gridUid.Value, mapGrid, tile, out var tileRef) || tileRef.Tile.IsEmpty)
+        {
+            failure = ToolResult.Fail(ToolError.NotVisible,
+                string.Create(CultureInfo.InvariantCulture,
+                    $"точка ({x:F0},{y:F0}) не на твоей станции — это другой корабль, обломок или открытый космос; " +
+                    $"туда ты не видишь в принципе"),
+                retry: "other_target");
+            return false;
+        }
+
+        if (!_vision.IsAccessible((gridUid.Value, broadphase, mapGrid), tile, fastPath: false))
+        {
+            failure = ToolResult.Fail(ToolError.NotVisible,
+                string.Create(CultureInfo.InvariantCulture,
+                    $"в точку ({x:F0},{y:F0}) не добивают камеры"),
+                retry: "other_target");
+            return false;
+        }
+
+        coords = candidate;
+        return true;
+    }
+
+    /// <summary>
+    /// Cardinal directions in Russian, keyed the way the crew actually talks.
+    ///
+    /// North is up the screen. That equivalence is what makes "открой дверь надо мной" answerable
+    /// at all: the client renders the station world-aligned with no eye rotation, so world north
+    /// and screen up are the same thing for both the player and the AI.
+    /// </summary>
+    private static string DirectionRu(Direction dir) => dir switch
+    {
+        Direction.North => "север",
+        Direction.NorthEast => "северо-восток",
+        Direction.East => "восток",
+        Direction.SouthEast => "юго-восток",
+        Direction.South => "юг",
+        Direction.SouthWest => "юго-запад",
+        Direction.West => "запад",
+        Direction.NorthWest => "северо-запад",
+        _ => "рядом",
+    };
+
+    /// <summary>
+    /// Where <paramref name="target"/> lies as seen from <paramref name="from"/>: "север 3".
+    ///
+    /// Within half a tile there is no meaningful bearing — the two are on the same square, which is
+    /// what "прямо рядом" means to a person describing their surroundings.
+    /// </summary>
+    private static string BearingFrom(Vector2 from, Vector2 target)
+    {
+        var delta = target - from;
+        var dist = delta.Length();
+
+        if (dist < 0.5f)
+            return "вплотную";
+
+        return string.Create(CultureInfo.InvariantCulture, $"{DirectionRu(delta.GetDir())} {dist:F0}");
+    }
+
+    /// <summary>Which way a mob is facing, for "открой дверь, на которую я смотрю".</summary>
+    private string FacingRu(EntityUid uid) => DirectionRu(_xform.GetWorldRotation(uid).GetDir());
+
     /// <summary>Classify an entity into a handle kind. Order matters: most specific first.</summary>
     private string KindOf(EntityUid uid)
     {
@@ -141,8 +237,20 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Same-grid plus camera coverage, matching <c>OnAiBuiCheck</c>'s check exactly — including
-    /// its <c>fastPath: true</c>, which skips occlusion and tests range only.
+    /// Same-grid plus camera coverage — the gate a human player's click passes through.
+    ///
+    /// <b>Deliberately not <c>fastPath: true</c>.</b> That branch of <c>ViewJob</c> is broken for
+    /// any grid that is not sitting at the world origin: it builds the seed's coverage circle from
+    /// <c>GetWorldPosition</c> and hands it to <c>GetLocalTilesIntersecting</c>, which expects grid
+    /// coordinates. On a station loaded at, say, (-570, 86) the circle lands hundreds of tiles away
+    /// in empty space, no tile is ever visible, and every gated tool refuses — a door one tile from
+    /// the eye reports "no cameras". It costs nothing on a test grid at the origin, which is exactly
+    /// why the benchmarks were green while the live station could not open a single door.
+    ///
+    /// The slow path derives the seed tile with <c>GetTileRef(..., seedXform.Coordinates)</c> —
+    /// grid-local, correct — and is what upstream's own interaction check (<c>OnAiInRange</c>) uses.
+    /// It also runs the occluder sweep, so the answer respects walls, which is the honest reading of
+    /// "can the AI see this" anyway.
     /// </summary>
     private bool IsVisibleToAi(EntityUid brain, EntityUid target)
     {
@@ -161,6 +269,6 @@ public sealed partial class StationAiAgentSystem
             return false;
 
         var tile = _mapSystem.LocalToTile(gridUid, mapGrid, targetXform.Coordinates);
-        return _vision.IsAccessible((gridUid, broadphase, mapGrid), tile, fastPath: true);
+        return _vision.IsAccessible((gridUid, broadphase, mapGrid), tile, fastPath: false);
     }
 }

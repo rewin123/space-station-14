@@ -67,6 +67,28 @@ public sealed class ToolResult
     public static ToolResult FromException(string tool, Exception e) =>
         Fail(ToolError.Internal, $"{tool}: {e.GetType().Name}: {e.Message}", retry: "later");
 
+    /// <summary>Just the effect, for a one-line log entry that does not repeat the whole envelope.</summary>
+    public string EffectJson()
+    {
+        if (Effect == null || Effect.Count == 0)
+            return "";
+
+        var buffer = new System.IO.MemoryStream();
+        using (var w = new Utf8JsonWriter(buffer, Llm.LlmJson.WriterOptions))
+        {
+            w.WriteStartObject();
+            foreach (var (k, v) in Effect)
+            {
+                w.WritePropertyName(k);
+                JsonSerializer.Serialize(w, v, Llm.LlmJson.Options);
+            }
+
+            w.WriteEndObject();
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
     public string ToJson()
     {
         var buffer = new System.IO.MemoryStream();

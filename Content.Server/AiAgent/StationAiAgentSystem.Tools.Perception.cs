@@ -27,6 +27,7 @@ public sealed partial class StationAiAgentSystem
     private Task<ToolResult> LookAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
         var expand = Math.Clamp(GetInt(args, "expand", 0), 0, 3);
+        TryGetString(args, "near", out var near);
 
         // A longer timeout than the default: GetView is the one genuinely expensive call in the
         // whole tool surface, and upstream says as much in a comment.
@@ -36,37 +37,143 @@ public sealed partial class StationAiAgentSystem
             if (failure != null)
                 return ToolResult.Fail(ToolError.Carded, failure);
 
-            var origin = _xform.GetMapCoordinates(
-                _stationAi.TryGetCore(s.Brain, out var core) && core.Comp?.RemoteEntity != null
-                    ? core.Comp.RemoteEntity.Value
-                    : s.Brain);
-
-            var rows = new List<string>();
-
+            // Mint handles first and for everything worth naming, so the anchor can be looked up by
+            // name against the same set the listing is built from.
+            var interesting = new List<EntityUid>();
             foreach (var uid in seen)
             {
-                var kind = KindOf(uid);
-                if (kind == "thing")
+                if (KindOf(uid) == "thing")
                     continue;
 
-                var handle = s.Handles.GetOrCreate(uid, kind);
-                var pos = _xform.GetMapCoordinates(uid);
-                var dist = (pos.Position - origin.Position).Length();
-
-                rows.Add(string.Create(CultureInfo.InvariantCulture,
-                    $"{handle} | {Identity.Name(uid, EntityManager)} | {ShortState(uid)} | {dist:F0} тайлов"));
+                s.Handles.GetOrCreate(uid, KindOf(uid));
+                interesting.Add(uid);
             }
 
-            // Sorted so an identical world state always produces identical bytes — otherwise the
-            // enumeration order of the broadphase leaks into the prompt and perturbs the cache.
-            rows.Sort(StringComparer.Ordinal);
+            // "Рядом со мной", "надо мной", "на которую я смотрю" are all relative to a person, not
+            // to the eye. Radio hands the AI a voice name and nothing else — deliberately, that is
+            // all a player gets — so the anchor accepts a name as well as a handle, resolved only
+            // among entities the cameras can currently see. That is exactly what a human player
+            // does: finds the speaker on screen, then clicks the thing beside them.
+            EntityUid? anchor = null;
+            if (!string.IsNullOrWhiteSpace(near))
+            {
+                if (!TryResolveVisibleName(s, near!, interesting, out var found, out var why))
+                    return why!;
 
-            return ToolResult.Success(new Dictionary<string, object?>
+                anchor = found;
+            }
+
+            var eye = _stationAi.TryGetCore(s.Brain, out var core) && core.Comp?.RemoteEntity != null
+                ? core.Comp.RemoteEntity.Value
+                : s.Brain;
+
+            var originUid = anchor ?? eye;
+            var origin = _xform.GetMapCoordinates(originUid).Position;
+
+            var rows = new List<(float Dist, string Text)>();
+
+            foreach (var uid in interesting)
+            {
+                if (uid == anchor)
+                    continue;
+
+                var handle = s.Handles.GetOrCreate(uid, KindOf(uid));
+                var pos = _xform.GetMapCoordinates(uid).Position;
+                var dist = (pos - origin).Length();
+
+                var state = ShortState(uid);
+                if (HasComp<MobStateComponent>(uid))
+                    state += $", смотрит на {FacingRu(uid)}";
+
+                var where = anchor != null
+                    ? BearingFrom(origin, pos)
+                    : string.Create(CultureInfo.InvariantCulture, $"{dist:F0} тайлов");
+
+                rows.Add((dist, $"{handle} | {Identity.Name(uid, EntityManager)} | {state} | {where}"));
+            }
+
+            // Nearest first when anchored — "the door next to me" is the first door in the list, and
+            // that ordering is what makes the answer obvious instead of a search. Ties break on the
+            // row text so identical world states still produce identical bytes: the broadphase
+            // enumeration order must never leak into the prompt and perturb the cache.
+            rows.Sort((a, b) => a.Dist != b.Dist
+                ? a.Dist.CompareTo(b.Dist)
+                : string.CompareOrdinal(a.Text, b.Text));
+
+            var result = new Dictionary<string, object?>
             {
                 ["count"] = rows.Count,
-                ["seen"] = rows.Take(60).ToList(),
-            });
+                ["seen"] = rows.Select(r => r.Text).Take(60).ToList(),
+            };
+
+            if (anchor != null)
+            {
+                result["near"] = Identity.Name(anchor.Value, EntityManager);
+                result["near_facing"] = FacingRu(anchor.Value);
+                result["note"] = "расстояния и стороны света отсчитаны от него; север — вверх экрана";
+            }
+
+            return ToolResult.Success(result);
         }, ct, TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>
+    /// Resolve a <c>near</c> argument to something the cameras can see right now.
+    ///
+    /// Accepts a handle or a name because those are the two things the AI legitimately has: handles
+    /// come from its own previous look, names come off the radio. Restricting the name search to
+    /// currently visible entities is what keeps this at parity — it is a search of the screen, not
+    /// of the entity manager.
+    /// </summary>
+    private bool TryResolveVisibleName(
+        AgentSession s,
+        string query,
+        List<EntityUid> visible,
+        out EntityUid found,
+        out ToolResult? failure)
+    {
+        found = default;
+        failure = null;
+
+        if (s.Handles.TryResolve(query, out var byHandle) && visible.Contains(byHandle))
+        {
+            found = byHandle;
+            return true;
+        }
+
+        var named = visible
+            .Select(uid => (Uid: uid, Name: Identity.Name(uid, EntityManager)))
+            .ToList();
+
+        var exact = named.Where(n => string.Equals(n.Name, query, StringComparison.OrdinalIgnoreCase)).ToList();
+        var partial = exact.Count > 0
+            ? exact
+            : named.Where(n => n.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (partial.Count == 1)
+        {
+            found = partial[0].Uid;
+            return true;
+        }
+
+        if (partial.Count > 1)
+        {
+            failure = ToolResult.Fail(ToolError.BadArgs,
+                $"'{query}' подходит нескольким — уточни",
+                retry: "other_target",
+                alternatives: partial.Select(n => n.Name).OrderBy(n => n, StringComparer.Ordinal).Take(5).ToList());
+            return false;
+        }
+
+        // Not a bug and not a refusal — the person is simply somewhere the cameras do not reach.
+        // The way out is the crew monitor, so say so instead of leaving the model to guess.
+        failure = ToolResult.Fail(ToolError.NotVisible,
+            $"'{query}' не видно ни одной камерой — узнай координаты через crew_status и " +
+            $"перемести глаз через move_camera, потом повтори",
+            retry: "later",
+            alternatives: named.Select(n => n.Name).OrderBy(n => n, StringComparer.Ordinal).Take(5).ToList());
+
+        return false;
     }
 
     /// <summary>One-line state for the look listing; the full picture is what inspect is for.</summary>
@@ -218,7 +325,18 @@ public sealed partial class StationAiAgentSystem
                     ? $", урон {sensor.TotalDamage.Value}"
                     : "";
 
-                rows.Add($"{sensor.Name} | {sensor.Job} | {dept} | {alive}{dmg}");
+                // The vanilla console paints these as blips on its nav map, so the position is
+                // information a human Station AI already has — and it is the only way to point the
+                // eye at someone who is nowhere near a camera the AI is currently watching.
+                // Sensors below SensorCords mode simply carry no coordinates, exactly as upstream.
+                var where = "";
+                if (sensor.Coordinates != null)
+                {
+                    var map = _xform.ToMapCoordinates(GetCoordinates(sensor.Coordinates.Value));
+                    where = string.Create(CultureInfo.InvariantCulture, $" | ({map.X:F0},{map.Y:F0})");
+                }
+
+                rows.Add($"{sensor.Name} | {sensor.Job} | {dept} | {alive}{dmg}{where}");
             }
 
             rows.Sort(StringComparer.Ordinal);
@@ -227,7 +345,8 @@ public sealed partial class StationAiAgentSystem
             {
                 ["count"] = rows.Count,
                 ["crew"] = rows.Take(60).ToList(),
-                ["note"] = "видны только те, у кого включён датчик костюма",
+                ["note"] = "видны только те, у кого включён датчик костюма; координаты — только у тех, " +
+                           "у кого он выставлен на передачу координат. По координатам можно навести глаз: move_camera x,y",
             });
         }, ct);
     }

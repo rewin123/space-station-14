@@ -16,7 +16,8 @@ public sealed class AiAgentCommand : IConsoleCommand
 {
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
-    public string Help => "aiagent status | claim [uid] | release | inject <канал> <текст> | curate | skills | dryrun on|off";
+    public string Help => "aiagent status | claim [uid] | release | inject <канал> <текст> | " +
+                          "tool <имя> [json] | curate | skills | dryrun on|off";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
@@ -72,6 +73,20 @@ public sealed class AiAgentCommand : IConsoleCommand
                 var channel = args[1];
                 var text = string.Join(' ', args.Skip(2));
                 shell.WriteLine(system.InjectRadio(channel, text, out var injectWhy) ? injectWhy : $"не вышло: {injectWhy}");
+                break;
+            }
+
+            case "tool":
+            {
+                if (args.Length < 2)
+                {
+                    shell.WriteError("aiagent tool <имя> [json]");
+                    return;
+                }
+
+                var name = args[1];
+                var json = args.Length > 2 ? string.Join(' ', args.Skip(2)) : "{}";
+                shell.WriteLine(system.InvokeToolFromConsole(name, json, out var toolWhy) ? toolWhy : $"не вышло: {toolWhy}");
                 break;
             }
 

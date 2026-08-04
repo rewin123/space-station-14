@@ -50,6 +50,45 @@ public sealed partial class StationAiAgentSystem
         return await entry.Handler(doc.RootElement.Clone(), ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Run a tool from the server console, exactly as the model would, and log the result.
+    ///
+    /// Fire-and-forget on purpose: tool bodies marshal onto the main thread, and the console command
+    /// runs <em>on</em> the main thread — awaiting here would deadlock against the very queue the
+    /// call is waiting for. The answer arrives in the log a tick later.
+    ///
+    /// This exists because a live station disagreed with the benchmarks about what the AI could
+    /// reach, and there was no way to ask the running server a direct question.
+    /// </summary>
+    public bool InvokeToolFromConsole(string tool, string argsJson, out string reason)
+    {
+        var brain = _sessions.Keys.FirstOrDefault();
+        if (brain == default)
+        {
+            reason = "нет активного агента";
+            return false;
+        }
+
+        _ = ReportAsync(brain, tool, argsJson);
+
+        reason = $"{tool} запущен, результат будет в логе";
+        return true;
+    }
+
+    private async Task ReportAsync(EntityUid brain, string tool, string argsJson)
+    {
+        try
+        {
+            var r = await InvokeToolForTest(brain, tool, argsJson).ConfigureAwait(false);
+            _sawmill.Info($"[console] {tool}({argsJson}) -> " +
+                          (r.Ok ? "ok " + r.EffectJson() : $"{r.Error}: {r.Detail}"));
+        }
+        catch (Exception e)
+        {
+            _sawmill.Error($"[console] {tool} упал: {e.GetType().Name}: {e.Message}");
+        }
+    }
+
     /// <summary>Mint a handle for an entity so a test can address it without calling look first.</summary>
     public string HandleFor(EntityUid brain, EntityUid target)
     {

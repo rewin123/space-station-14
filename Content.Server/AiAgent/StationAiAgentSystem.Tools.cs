@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -36,10 +37,13 @@ public sealed partial class StationAiAgentSystem
         {
             Name = "look",
             Description = "Осмотреть станцию через камеры вокруг своего глаза. Возвращает список " +
-                          "объектов с хендлами — этими хендлами потом адресуются остальные инструменты.",
+                          "объектов с хендлами — этими хендлами потом адресуются остальные инструменты. " +
+                          "С параметром near список считается ОТ человека: ближайшие первыми, у каждого " +
+                          "сторона света и расстояние. Так отвечают на «открой дверь рядом со мной».",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "expand":{"type":"integer","minimum":0,"maximum":3,"default":0,"description":"Расширить обзор сверх стандартного."},
+                "near":{"type":"string","description":"Имя человека или хендл. Список пересчитается от него: направления и расстояния будут относительно него, ближайшее первым."},
                 "via_skill":{"type":"string","description":"Имя скилла, если действуешь по нему."}}}
                 """,
             Handler = (a, ct) => LookAsync(s, a, ct),
@@ -168,11 +172,15 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "move_camera",
-            Description = "Переместить свой глаз к объекту по хендлу, чтобы видеть и управлять тем, что рядом с ним.",
+            Description = "Переместить свой глаз — к объекту по хендлу либо в точку по координатам " +
+                          "(например к координатам человека из crew_status), чтобы увидеть, что там, " +
+                          "и управлять этим. В точку без покрытия камерами глаз не пойдёт.",
             GameAction = true,
             SchemaJson = """
-                {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
+                {"type":"object","additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"К чему переместиться."},
+                "x":{"type":"number","description":"Координата X. Задаётся вместе с y вместо handle."},
+                "y":{"type":"number","description":"Координата Y. Задаётся вместе с x вместо handle."},
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => MoveCameraAsync(s, a, ct),
@@ -243,6 +251,12 @@ public sealed partial class StationAiAgentSystem
             _dispatcher.AssertMainThread("observation");
 
             var (items, dropped) = session.Queue.Drain();
+
+            // Remember how the AI was addressed while the raw observations still exist — the
+            // formatted string is for the model, not for us to parse back out.
+            session.HeardOnChannel = items.LastOrDefault(i => i.Kind == ObsKind.Radio)?.Channel;
+            session.HeardSpeech = items.Any(i => i.Kind == ObsKind.Speech);
+
             return ObservationFormatter.Format(items, dropped, RoundTime(), SelfLine(session), force);
         }, generation, () => GenerationOf(brain), ct, what: "observation").ConfigureAwait(false);
     }
@@ -339,6 +353,20 @@ public sealed partial class StationAiAgentSystem
 
         value = el.GetString();
         return value != null;
+    }
+
+    private static bool TryGetFloat(JsonElement args, string name, out float value)
+    {
+        value = 0f;
+        if (args.ValueKind != JsonValueKind.Object)
+            return false;
+        if (!args.TryGetProperty(name, out var el) || el.ValueKind != JsonValueKind.Number)
+            return false;
+
+        if (!el.TryGetSingle(out value))
+            return false;
+
+        return float.IsFinite(value);
     }
 
     private static int GetInt(JsonElement args, string name, int fallback)

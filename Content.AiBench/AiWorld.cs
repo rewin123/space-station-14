@@ -42,7 +42,22 @@ public sealed class AiWorld : IAsyncDisposable
 
     public IEntityManager Ent => Pair.Server.ResolveDependency<IEntityManager>();
 
-    public static Task<AiWorld> Create(ScriptedLlmClient llm = null) => Build(llm ?? new ScriptedLlmClient());
+    /// <param name="radius">
+    /// Half-width of the plating square. The default is enough for devices beside the core; tests
+    /// about reach need floor further out, because an unfloored tile is not a "no camera" refusal
+    /// but a "not on the station" one and would hide the thing under test.
+    /// </param>
+    /// <param name="gridOffset">
+    /// Move the whole station away from the world origin before anything is spawned.
+    ///
+    /// Not a curiosity: a real station is loaded wherever the map places it, and code that confuses
+    /// world coordinates with grid coordinates is perfectly correct at (0,0) and completely wrong
+    /// anywhere else. A suite that only ever tests at the origin cannot see that class of bug, and
+    /// did not — the agent could not open a door one tile from its own eye on a live station while
+    /// every benchmark passed.
+    /// </param>
+    public static Task<AiWorld> Create(ScriptedLlmClient llm = null, int radius = 6, float gridOffset = 0f) =>
+        Build(llm ?? new ScriptedLlmClient(), radius, gridOffset);
 
     /// <summary>
     /// A world driven by the REAL model, for behavioural benchmarks.
@@ -52,9 +67,9 @@ public sealed class AiWorld : IAsyncDisposable
     /// sampling included. Turns tick fast because a benchmark waiting eight seconds per turn is a
     /// benchmark nobody runs.
     /// </summary>
-    public static Task<AiWorld> CreateLive() => Build(null);
+    public static Task<AiWorld> CreateLive() => Build(null, 6, 0f);
 
-    private static async Task<AiWorld> Build(ScriptedLlmClient llm)
+    private static async Task<AiWorld> Build(ScriptedLlmClient llm, int radius, float gridOffset)
     {
         var world = new AiWorld { Llm = llm };
 
@@ -92,6 +107,17 @@ public sealed class AiWorld : IAsyncDisposable
         world.Map = await world.Pair.CreateTestMap();
         world.System = server.System<StationAiAgentSystem>();
 
+        // Before anything is laid or spawned: everything below is placed in grid-local coordinates,
+        // so shifting the grid now shifts the whole scenario with it and only the world/local
+        // distinction changes.
+        if (gridOffset != 0f)
+        {
+            var xforms = server.System<Robust.Shared.GameObjects.SharedTransformSystem>();
+            await server.WaitPost(() =>
+                xforms.SetWorldPosition(world.Map.Grid.Owner, new System.Numerics.Vector2(gridOffset, gridOffset)));
+            await server.WaitRunTicks(3);
+        }
+
         // The pool hands back a server a previous scenario already used, and the agent system
         // caches its model client. Without this reset a live scenario inherits the scripted client
         // the previous scenario installed and silently never acts.
@@ -106,7 +132,7 @@ public sealed class AiWorld : IAsyncDisposable
         // CreateTestMap lays exactly ONE tile, at (0,0). Anything spawned beside it hangs over
         // open space — which reads as "unpowered" and "not visible" and looks exactly like an
         // agent bug until you go and check. Lay a proper floor patch first.
-        await world.LayFloor(server, 6);
+        await world.LayFloor(server, radius);
 
         await server.WaitPost(() =>
         {

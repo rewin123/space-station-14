@@ -235,6 +235,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             },
             (force, ct) => BuildObservationAsync(brain, force, ct),
             text => AnnounceInGameAsync(brain, text),
+            (text, channel) => SpeakUntooledAsync(brain, text, channel),
             () => RunCuratorAsync(brain, registry),
             () =>
             {
@@ -489,6 +490,53 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _sawmill.Info($"[LLM] компакция: {text}");
             return true;
         }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "compaction announce");
+    }
+
+    /// <summary>
+    /// Deliver a reply the model wrote as plain text instead of calling <c>say</c>/<c>radio</c>.
+    ///
+    /// This is a backstop, not a feature: the loop only reaches it after the model has been told
+    /// once that prose is inaudible and answered in prose anyway, and only on a turn where somebody
+    /// actually addressed the AI. It routes to the channel the request came in on, because a reply
+    /// whispered next to the core is no better than silence to whoever asked over the radio.
+    /// </summary>
+    private Task<bool> SpeakUntooledAsync(EntityUid brain, string text, string? channel)
+    {
+        if (!_cfg.GetCVar(AiCVars.SpeakUntooledText) || !_sessions.TryGetValue(brain, out var session))
+            return Task.FromResult(false);
+
+        return _dispatcher.RunAsync(() =>
+        {
+            _dispatcher.AssertMainThread("untooled reply");
+
+            if (!IsPlayable(brain))
+                return false;
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+            {
+                _sawmill.Info($"[LLM] dry_run, не доставлено: {text}");
+                return false;
+            }
+
+            var known = channel == null
+                ? null
+                : AiRadioChannels.FirstOrDefault(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase));
+
+            if (known != null)
+            {
+                _radio.SendRadioMessage(brain, text, new ProtoId<RadioChannelPrototype>(known), brain);
+                _sawmill.Info($"[LLM] radio {known} (без инструмента): {text}");
+            }
+            else
+            {
+                _chat.TrySendInGameICMessage(brain, text, InGameICChatType.Speak, ChatTransmitRange.Normal,
+                    hideLog: false, shell: null, player: null, nameOverride: null,
+                    checkRadioPrefix: false, ignoreActionBlocker: true);
+                _sawmill.Info($"[LLM] say (без инструмента): {text}");
+            }
+
+            return true;
+        }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "untooled reply");
     }
 
     /// <summary>Persist the conversation so a restart does not amnesia the agent mid-round.</summary>

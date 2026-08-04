@@ -119,6 +119,13 @@ public sealed class AiCVars
     public static readonly CVarDef<bool> CuratorEnabled =
         CVarDef.Create("ai.curator_enabled", true, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Deliver a reply the model wrote as prose instead of calling say/radio, after one reminder.
+    /// Off means a model that forgets its tools is simply mute — honest, but useless to the crew.
+    /// </summary>
+    public static readonly CVarDef<bool> SpeakUntooledText =
+        CVarDef.Create("ai.speak_untooled_text", true, CVar.SERVERONLY);
+
     public static readonly CVarDef<bool> LogTranscript =
         CVarDef.Create("ai.log_transcript", true, CVar.SERVERONLY);
 
