@@ -216,7 +216,17 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             },
             (force, ct) => BuildObservationAsync(brain, force, ct),
             text => AnnounceInGameAsync(brain, text),
-            () => (BuildSystemPrompt(), registry.WireJson()),
+            () => RunCuratorAsync(brain, registry),
+            () =>
+            {
+                // Step 5 of the ritual. Picking the snapshots up HERE, and only here, is the whole
+                // point of the frozen-snapshot design: writes during play went to disk immediately
+                // but left the prefix untouched, and this is the one moment we are paying for a
+                // prefill anyway.
+                Memory.RefreshSnapshot();
+                Skills.LoadFromDisk();
+                return (BuildSystemPrompt(), registry.WireJson());
+            },
             new CompactionOptions
             {
                 High = () => _cfg.GetCVar(AiCVars.CompactHigh),
@@ -467,6 +477,76 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     {
         foreach (var (brain, session) in _sessions)
             SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.Compactor.Compactions);
+    }
+
+    // ------------------------------------------------------------------- curator
+
+    private Skills.Curator? _curator;
+
+    /// <summary>
+    /// Run the review as step 1 of the compaction ritual.
+    ///
+    /// The session is put into <see cref="AgentMode.Review"/> by the caller, so the acting tools
+    /// refuse with <c>review_mode</c> while the skill and memory tools keep working — which is why
+    /// the tool array can stay byte-identical to play and the warm prefix survives.
+    /// </summary>
+    private async Task RunCuratorAsync(EntityUid brain, Tools.AiToolRegistry registry)
+    {
+        if (!_cfg.GetCVar(AiCVars.CuratorEnabled))
+            return;
+
+        if (!_sessions.TryGetValue(brain, out var session))
+            return;
+
+        _curator ??= new Skills.Curator(EnsureClient()!, _sawmill);
+        Memory.ResetTurnCounters();
+
+        await _curator.ReviewAsync(
+            session.Conv,
+            registry.WireSchemas(),
+            registry,
+            Skills.RenderIndex(),
+            maxSteps: _cfg.GetCVar(AiCVars.MaxToolCallsPerTurn),
+            session.Cts.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>Kick off a review right now, without waiting for the context to fill up.</summary>
+    public bool RunCuratorNow(out string reason)
+    {
+        if (_sessions.Count == 0)
+        {
+            reason = "нет активного агента";
+            return false;
+        }
+
+        var (brain, session) = _sessions.First();
+
+        _ = Task.Run(async () =>
+        {
+            session.Mode = AgentMode.Review;
+            try
+            {
+                await RunCuratorAsync(brain, session.Registry).ConfigureAwait(false);
+                await _dispatcher.RunAsync(() =>
+                {
+                    Memory.RefreshSnapshot();
+                    Skills.LoadFromDisk();
+                    return true;
+                }, session.Generation, () => GenerationOf(brain), CancellationToken.None,
+                    what: "curator snapshot refresh").ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                _sawmill.Error($"куратор по команде упал: {e}");
+            }
+            finally
+            {
+                session.Mode = AgentMode.Core;
+            }
+        });
+
+        reason = "ревью запущено, результат появится в логе";
+        return true;
     }
 
     // ------------------------------------------------------------------- test aid

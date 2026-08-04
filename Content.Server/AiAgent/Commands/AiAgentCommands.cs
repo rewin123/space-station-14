@@ -16,7 +16,7 @@ public sealed class AiAgentCommand : IConsoleCommand
 {
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
-    public string Help => "aiagent status | claim [core-uid] | release | say <текст> | dryrun on|off";
+    public string Help => "aiagent status | claim [uid] | release | inject <канал> <текст> | curate | skills | dryrun on|off";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
@@ -72,6 +72,21 @@ public sealed class AiAgentCommand : IConsoleCommand
                 var channel = args[1];
                 var text = string.Join(' ', args.Skip(2));
                 shell.WriteLine(system.InjectRadio(channel, text, out var injectWhy) ? injectWhy : $"не вышло: {injectWhy}");
+                break;
+            }
+
+            case "curate":
+            {
+                // On-demand review. Useful for ops, and the only practical way to exercise the
+                // curator without waiting for the context to fill up.
+                shell.WriteLine(system.RunCuratorNow(out var curateWhy) ? curateWhy : $"не вышло: {curateWhy}");
+                break;
+            }
+
+            case "skills":
+            {
+                var index = system.Skills.RenderIndex();
+                shell.WriteLine(index.Length > 0 ? index : "библиотека скиллов пуста");
                 break;
             }
 

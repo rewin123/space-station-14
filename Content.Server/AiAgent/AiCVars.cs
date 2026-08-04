@@ -115,6 +115,10 @@ public sealed class AiCVars
     public static readonly CVarDef<float> MainThreadBudgetMs =
         CVarDef.Create("ai.mainthread_budget_ms", 5f, CVar.SERVERONLY);
 
+    /// <summary>Self-evolution: the review that writes skills and memory. Step 1 of compaction.</summary>
+    public static readonly CVarDef<bool> CuratorEnabled =
+        CVarDef.Create("ai.curator_enabled", true, CVar.SERVERONLY);
+
     public static readonly CVarDef<bool> LogTranscript =
         CVarDef.Create("ai.log_transcript", true, CVar.SERVERONLY);
 

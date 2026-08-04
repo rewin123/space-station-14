@@ -27,14 +27,17 @@ public sealed class CompactionOptions
 /// everything that breaks the cache <b>at the same moment</b>, pay the prefill once, and then leave
 /// the prefix alone until the next time.
 ///
-/// Phase 3 runs three of the five steps; the curator (step 1) and the zone-0 content refresh it
-/// feeds (step 5) arrive with the skill and memory system:
+/// All five steps:
 ///
-///   1. curator                — phase 4
+///   1. curator                — reviews the stretch and writes skills and memory to disk
 ///   2. tell the crew          — the AI says out loud that it is defragmenting
 ///   3. summarise              — one extra turn on a COPY, so it rides the warm prefix
 ///   4. fold the body          — summary + tail, cut only at a turn boundary
-///   5. rebuild zone 0         — recompute the hash; content refresh is phase 4
+///   5. rebuild zone 0         — pick up exactly what the curator just wrote, recompute the hash
+///
+/// The curator runs FIRST and the prefix rebuild LAST, so that what was learned in this stretch is
+/// already in zone 0 when the agent resumes — and all of it costs the single prefill we were going
+/// to pay anyway.
 ///
 /// Measured cost on the equivalent mcbot deployment: exactly one following call misses the cache,
 /// then it returns to 99%.
@@ -89,6 +92,7 @@ public sealed class Compactor
     public async Task<bool> CompactAsync(
         ConversationState conv,
         IReadOnlyList<ToolDto>? tools,
+        Func<Task>? curate,
         Func<string, Task> announce,
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CancellationToken ct)
@@ -106,9 +110,29 @@ public sealed class Compactor
 
         if (cut <= 0)
         {
-            _sawmill.Info("компакция пропущена: пока нет безопасной границы хода для разреза");
-            _armed = false;
+            // Do NOT disarm here.
+            //
+            // Disarming is for "we just compacted, wait for usage to fall back". Having no cut
+            // point yet is a transient condition — the very next turn creates a new boundary. The
+            // first live run disarmed on it and then never compacted again for the rest of the
+            // round, growing the context unboundedly while reporting nothing wrong.
+            _sawmill.Info("компакция отложена: пока нет безопасной границы хода для разреза");
             return false;
+        }
+
+        // --- step 1: curator ------------------------------------------------------------------
+        if (curate != null)
+        {
+            try
+            {
+                await curate().ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                // A failed review must never block the compaction it precedes: the context still
+                // has to shrink, learned lesson or not.
+                _sawmill.Warning($"куратор не отработал: {e.GetType().Name}: {e.Message}");
+            }
         }
 
         // --- step 2: tell the crew ------------------------------------------------------------

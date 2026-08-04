@@ -223,6 +223,9 @@ public sealed partial class StationAiAgentSystem
                 """,
             Handler = (a, ct) => DeviceUiAsync(s, a, ct),
         });
+
+        // ------------------------------------------------- skills and memory
+        RegisterMemoryTools(s, r);
     }
 
     // ---------------------------------------------------------------- observation

@@ -57,6 +57,7 @@ public sealed class AgentSession : IDisposable
     private readonly AgentLoopOptions _options;
     private readonly Func<bool, CancellationToken, Task<string?>> _buildObservation;
     private readonly Func<string, Task> _announce;
+    private readonly Func<Task>? _curate;
     private readonly Func<(string SystemPrompt, string ToolsJson)> _rebuildPrefix;
 
     /// <summary>Context compaction, wired in phase 3.</summary>
@@ -107,6 +108,7 @@ public sealed class AgentSession : IDisposable
         AgentLoopOptions options,
         Func<bool, CancellationToken, Task<string?>> buildObservation,
         Func<string, Task> announce,
+        Func<Task>? curate,
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CompactionOptions compaction,
         ISawmill sawmill)
@@ -118,6 +120,7 @@ public sealed class AgentSession : IDisposable
         _options = options;
         _buildObservation = buildObservation;
         _announce = announce;
+        _curate = curate;
         _rebuildPrefix = rebuildPrefix;
         _sawmill = sawmill;
 
@@ -259,7 +262,7 @@ public sealed class AgentSession : IDisposable
             Mode = AgentMode.Review;
             try
             {
-                if (await Compactor.CompactAsync(Conv, _registry.WireSchemas(), _announce, _rebuildPrefix, ct).ConfigureAwait(false))
+                if (await Compactor.CompactAsync(Conv, _registry.WireSchemas(), _curate, _announce, _rebuildPrefix, ct).ConfigureAwait(false))
                 {
                     Cache.SetExpectedPrefix(Conv.PrefixHash);
                     Cache.ExpectMiss = true;

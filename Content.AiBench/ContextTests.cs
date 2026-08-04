@@ -152,6 +152,7 @@ public sealed class ContextTests
         var ok = await compactor.CompactAsync(
             conv,
             System.Array.Empty<ToolDto>(),
+            curate: null,
             text => { announced = text; return Task.CompletedTask; },
             () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
             CancellationToken.None);
@@ -183,7 +184,7 @@ public sealed class ContextTests
         // than pretending the history is intact.
         var compactor = MakeCompactor(new ThrowingLlmClient(), high: 1000, low: 500, keepTail: 200);
 
-        var ok = await compactor.CompactAsync(conv, System.Array.Empty<ToolDto>(), _ => Task.CompletedTask,
+        var ok = await compactor.CompactAsync(conv, System.Array.Empty<ToolDto>(), null, _ => Task.CompletedTask,
             () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None);
 
         Assert.That(ok, Is.True, "падение суммаризатора не должно ронять компакцию");
@@ -211,7 +212,7 @@ public sealed class ContextTests
 
         var tools = new[] { new ToolDto { Function = new ToolFunctionDto { Name = "look" } } };
 
-        await compactor.CompactAsync(conv, tools, _ => Task.CompletedTask,
+        await compactor.CompactAsync(conv, tools, null, _ => Task.CompletedTask,
             () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None);
 
         Assert.That(llm.LastTools, Is.Not.Null,

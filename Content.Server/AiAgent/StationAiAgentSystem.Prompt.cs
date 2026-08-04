@@ -1,4 +1,5 @@
 using System.Text;
+using Skills2 = Content.Server.AiAgent.Skills;
 
 namespace Content.Server.AiAgent;
 
@@ -87,6 +88,46 @@ public sealed partial class StationAiAgentSystem
               Уровни тревоги: green — зелёный, blue — синий, red — красный.
             """);
 
+        // --- the agent's own accumulated state ---------------------------------------------
+        //
+        // Both blocks come from FROZEN snapshots, never from live state. A write during play lands
+        // on disk immediately and the tool response shows it, but zone 0 keeps the old text until
+        // the next prefix rebuild — that is precisely what keeps the KV cache alive for the whole
+        // compaction cycle.
+        var soul = ReadSoul();
+        if (soul.Length > 0)
+            sb.Append("\n\n").Append(soul);
+
+        var memory = Memory.Snapshot(Skills2.MemoryTarget.Memory);
+        if (memory.Length > 0)
+            sb.Append("\n\n").Append(memory);
+
+        var crew = Memory.Snapshot(Skills2.MemoryTarget.Crew);
+        if (crew.Length > 0)
+            sb.Append("\n\n").Append(crew);
+
+        var index = Skills.RenderIndex();
+        if (index.Length > 0)
+            sb.Append("\n\n").Append(index);
+
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// SOUL.md — personality and long-horizon goals, hand-authored rather than agent-written.
+    /// Optional: a missing file simply means the agent runs on the base prompt alone.
+    /// </summary>
+    private string ReadSoul()
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(DataDir(), "SOUL.md");
+            return System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path).Trim() : string.Empty;
+        }
+        catch (Exception e)
+        {
+            _sawmill.Warning($"SOUL.md не читается: {e.Message}");
+            return string.Empty;
+        }
     }
 }
