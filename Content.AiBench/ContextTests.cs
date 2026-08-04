@@ -358,6 +358,67 @@ public sealed class ContextTests
             "после компакции промах ожидаем и тревогу поднимать нельзя");
     }
 
+    // ------------------------------------------------------------ think budget
+
+    [Test]
+    public void ThinkBudget_CutsTheModelsPreamble()
+    {
+        // The preamble is the model thinking out loud beside its tool call. On live runs it ran to
+        // 240-390 tokens per turn, and every one of those is then carried in the context for the
+        // rest of the round, on every subsequent request.
+        var conv = Fresh();
+        conv.ThinkBudgetTokens = 128;
+
+        var longThought = string.Join(" ", Enumerable.Repeat("рассуждение", 400));
+        conv.AppendAssistant(new LlmResponse(longThought, System.Array.Empty<ToolCallDto>(), 10, 9, 1, 0.1));
+
+        var stored = conv.Body.Last().Content!;
+
+        Assert.That(stored.Length, Is.LessThan(longThought.Length), "длинная преамбула должна обрезаться");
+        Assert.That(stored, Does.EndWith("[…]"), "обрез должен быть виден, а не выглядеть как обрыв");
+        Assert.That(stored.Length, Is.LessThanOrEqualTo((int)(128 * conv.CharsPerToken) + 8));
+    }
+
+    [Test]
+    public void ThinkBudget_LeavesShortAnswersAlone()
+    {
+        var conv = Fresh();
+        conv.ThinkBudgetTokens = 128;
+
+        conv.AppendAssistant(new LlmResponse("Дверь открыта.", System.Array.Empty<ToolCallDto>(), 10, 9, 1, 0.1));
+
+        Assert.That(conv.Body.Last().Content, Is.EqualTo("Дверь открыта."),
+            "короткий ответ трогать нельзя — обрезается только то, что вышло за бюджет");
+    }
+
+    [Test]
+    public void ThinkBudget_PrefersASentenceBoundary()
+    {
+        // A preamble sliced mid-word reads as corruption, and the model treats its own corrupted
+        // output as something to explain in the next turn.
+        var conv = Fresh();
+        conv.ThinkBudgetTokens = 10;
+
+        var text = "Первое предложение. Второе предложение. " + new string('х', 500);
+        conv.AppendAssistant(new LlmResponse(text, System.Array.Empty<ToolCallDto>(), 10, 9, 1, 0.1));
+
+        var stored = conv.Body.Last().Content!;
+        Assert.That(stored, Does.Contain("Первое предложение."));
+        Assert.That(stored, Does.Not.Contain("хххх"), "обрывок слова попадать в историю не должен");
+    }
+
+    [Test]
+    public void ThinkBudget_ZeroDisablesTheCut()
+    {
+        var conv = Fresh();
+        conv.ThinkBudgetTokens = 0;
+
+        var text = new string('я', 5000);
+        conv.AppendAssistant(new LlmResponse(text, System.Array.Empty<ToolCallDto>(), 10, 9, 1, 0.1));
+
+        Assert.That(conv.Body.Last().Content, Has.Length.EqualTo(5000));
+    }
+
     // ------------------------------------------------------------- calibration
 
     [Test]

@@ -159,6 +159,14 @@ public sealed class ChatRequestDto
     [JsonPropertyName("max_tokens")]
     public int MaxTokens { get; set; }
 
+    /// <summary>
+    /// llama.cpp extension: cap the thinking block. This build ignores it (measured), so the
+    /// binding cut happens client-side — see <c>ConversationState.ThinkBudgetChars</c>. Sent
+    /// anyway because it costs nothing and a future build may honour it.
+    /// </summary>
+    [JsonPropertyName("reasoning_budget")]
+    public int? ReasoningBudget { get; set; }
+
     /// <summary>llama.cpp extension: reuse the slot's prefix KV cache.</summary>
     [JsonPropertyName("cache_prompt")]
     public bool CachePrompt { get; set; } = true;

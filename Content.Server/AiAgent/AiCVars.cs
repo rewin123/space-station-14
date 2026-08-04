@@ -61,6 +61,18 @@ public sealed class AiCVars
     public static readonly CVarDef<float> MinP =
         CVarDef.Create("ai.min_p", 0.05f, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Ceiling on the model's free-text "thinking out loud" that rides along with a tool call,
+    /// in tokens. Everything past it is cut before the message is appended to the conversation.
+    ///
+    /// Enforced on our side rather than by the server: this llama-server build silently ignores
+    /// <c>reasoning_budget</c> — measured, a budget of 128 produced a LONGER reasoning block than
+    /// no budget at all, and a budget of 0 produced the longest one and no answer. We still send
+    /// the parameter so a future build can honour it, but the cut is what actually holds.
+    /// </summary>
+    public static readonly CVarDef<int> ThinkBudget =
+        CVarDef.Create("ai.think_budget", 128, CVar.SERVERONLY);
+
     public static readonly CVarDef<int> MaxTokens =
         CVarDef.Create("ai.max_tokens", 640, CVar.SERVERONLY);
 
