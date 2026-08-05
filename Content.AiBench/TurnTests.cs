@@ -249,6 +249,32 @@ public sealed class TurnTests
     }
 
     [Test]
+    public async Task VolatileTail_IsSentOnceAndThenGone()
+    {
+        // Zone 2 exists to carry exactly one message, exactly once. The compaction note was set and
+        // never cleared, so it rode every request for the rest of the round — and because it always
+        // sits last, every new observation shifted it, diverging the prompt at its position and
+        // re-computing everything from there on every single turn.
+        var h = new Harness();
+        h.State.Conv.VolatileTail = "История сжата в T+1:00:00.";
+
+        var llm = new ScriptedLlmClient().Then("принято");
+        var runner = h.Build(llm);
+
+        // The runner does not clear it — the session does, at the turn boundary, after the steps
+        // have sent it. So assert the two halves separately: it went out, and one line clears it.
+        await runner.RunAsync(Musing(), maxSteps: 2, CancellationToken.None);
+
+        Assert.That(llm.SeenPrompts.Single().Last().Content, Does.Contain("История сжата"),
+            "хвост обязан уехать в модель ровно один раз");
+
+        h.State.Conv.VolatileTail = null;
+
+        Assert.That(h.State.Conv.Build().Any(m => m.Content?.Contains("История сжата") == true), Is.False,
+            "и после этого исчезнуть из промпта");
+    }
+
+    [Test]
     public void EveryTerminalForm_HasAName()
     {
         // The enumeration guarantee the state machine buys. Before it, the turn had at least six

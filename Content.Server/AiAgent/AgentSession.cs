@@ -312,6 +312,16 @@ public sealed class AgentSession : IDisposable
             Conv.CloseTurn();
         }
 
+        // Zone 2 is consumed by the turn that sent it.
+        //
+        // The compaction note was set and never cleared, so it rode every subsequent request for the
+        // rest of the round. Because it always sits LAST, after the body, each new observation
+        // pushes it along — which means the prompt diverges from the previous one at the note's
+        // position and the server re-computes it, plus everything after, every single turn. A
+        // permanent cache tax of the note's own length, silently paid by the one field designed to
+        // be temporary.
+        Conv.VolatileTail = null;
+
         // Compaction sits here, at a turn boundary, precisely because that is the only place the
         // body may be cut without orphaning a tool result from its parent call.
         var compacted = false;
