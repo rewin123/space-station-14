@@ -8,6 +8,11 @@
 #   Tools/aibench --no-build            # skip the build step
 #
 # NO_PROXY is forced because this box exports a global HTTP_PROXY that swallows localhost.
+#
+# The behavioural suite needs a model. It reads AI_ENDPOINT / AI_MODEL / AI_API_KEY from the
+# environment, so the same scenarios can be pointed at a hosted provider or at a local llama-swap
+# without editing anything. If a key file is lying around next to the agent's own data, use it —
+# beats retyping a secret into a shell that keeps history.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -15,6 +20,11 @@ cd "$(dirname "$0")/.."
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 export PATH="$DOTNET_ROOT:$PATH"
 export NO_PROXY='*' no_proxy='*'
+
+if [[ -z "${AI_API_KEY:-}" && -r ai_data/deepseek.key ]]; then
+    AI_API_KEY="$(cat ai_data/deepseek.key)"
+    export AI_API_KEY
+fi
 
 FILTER=""
 CATEGORY=""

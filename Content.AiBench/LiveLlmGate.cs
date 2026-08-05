@@ -8,15 +8,22 @@ namespace Content.AiBench;
 /// <summary>
 /// Reachability check for the behavioural suite.
 ///
-/// These benchmarks need a real model, which means a GPU and a running llama-swap. On a machine
-/// without either, the right outcome is <b>ignored</b>, not failed: a red suite that is red for
-/// environmental reasons trains everyone to stop reading it.
+/// These benchmarks need a real model — nowadays a hosted one, which means an endpoint and a key.
+/// On a machine with neither, the right outcome is <b>ignored</b>, not failed: a red suite that is
+/// red for environmental reasons trains everyone to stop reading it.
+///
+/// Both come from the environment so the same suite can be pointed at a local llama-swap or at a
+/// provider without editing anything:
+/// <code>AI_ENDPOINT=… AI_MODEL=… AI_API_KEY=… Tools/aibench --live</code>
 /// </summary>
 public static class LiveLlmGate
 {
     private static bool? _available;
 
-    public const string Endpoint = "http://127.0.0.1:9292/v1";
+    public static string Endpoint =>
+        Environment.GetEnvironmentVariable("AI_ENDPOINT") is { Length: > 0 } fromEnv
+            ? fromEnv
+            : "https://api.deepseek.com/v1";
 
     /// <summary>Skip the current test unless a model endpoint is answering.</summary>
     public static void RequireOrIgnore()
@@ -24,7 +31,10 @@ public static class LiveLlmGate
         _available ??= Probe().GetAwaiter().GetResult();
 
         if (_available != true)
-            Assert.Ignore($"живая модель недоступна на {Endpoint} — поведенческие бенчи пропущены");
+        {
+            Assert.Ignore($"живая модель недоступна на {Endpoint} — поведенческие бенчи пропущены. " +
+                          "Для внешнего провайдера нужен AI_API_KEY");
+        }
     }
 
     private static async Task<bool> Probe()
@@ -37,6 +47,16 @@ public static class LiveLlmGate
             {
                 Timeout = TimeSpan.FromSeconds(10),
             };
+
+            // A hosted endpoint rejects an unauthenticated probe, so the key is part of the check:
+            // "no key configured" and "provider is down" both mean the same thing here — the
+            // behavioural suite cannot run.
+            var key = Environment.GetEnvironmentVariable("AI_API_KEY");
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                http.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
+            }
 
             var response = await http.GetAsync($"{Endpoint}/models");
             return response.IsSuccessStatusCode;

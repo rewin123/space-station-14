@@ -36,18 +36,36 @@ public sealed class AiCVars
 
     // ------------------------------------------------------------------- llm
 
+    /// <summary>
+    /// Any OpenAI-compatible chat-completions endpoint.
+    ///
+    /// Defaults to DeepSeek rather than the local llama-swap it was built against. That is a
+    /// deliberate move rather than a convenience: on the same two behavioural scenarios the local
+    /// 27B quant promised to open a door and then did not, while this model refused, asked what for,
+    /// and — handed an unverifiable claim about an unconscious crewman — put the question on the
+    /// channel instead of guessing. Local is still one CVar away.
+    /// </summary>
     public static readonly CVarDef<string> Endpoint =
-        CVarDef.Create("ai.endpoint", "http://127.0.0.1:9292/v1", CVar.SERVERONLY);
+        CVarDef.Create("ai.endpoint", "https://api.deepseek.com/v1", CVar.SERVERONLY);
 
     public static readonly CVarDef<string> Model =
-        CVarDef.Create("ai.model", "qwen3.6-27b", CVar.SERVERONLY);
+        CVarDef.Create("ai.model", "deepseek-v4-flash", CVar.SERVERONLY);
 
+    /// <summary>
+    /// Empty here on purpose — a remote endpoint needs a key and a key does not belong in source.
+    /// Set it in <c>server_config.toml</c> (gitignored under bin/) or, for benchmarks, in
+    /// <c>AI_API_KEY</c>.
+    /// </summary>
     public static readonly CVarDef<string> ApiKey =
         CVarDef.Create("ai.api_key", "", CVar.SERVERONLY | CVar.CONFIDENTIAL);
 
     /// <summary>
-    /// 0.3 rather than a default 0.7: measured on this exact model and quant, higher
-    /// temperatures corrupt Cyrillic output (see the mcbot deployment on this box).
+    /// 0.3 rather than a default 0.7.
+    ///
+    /// Originally because this box measured higher temperatures corrupting Cyrillic on a Q4 quant —
+    /// a constraint a hosted model does not have. Kept anyway, for a different reason: the agent is
+    /// operating station equipment, and creative variance in "which door did I mean" is not a
+    /// quality anyone wants from it.
     /// </summary>
     public static readonly CVarDef<float> Temperature =
         CVarDef.Create("ai.temperature", 0.3f, CVar.SERVERONLY);
@@ -71,9 +89,9 @@ public sealed class AiCVars
     /// that happens instead of leaving it to look like the model behaving oddly.
     /// </summary>
     public static readonly CVarDef<int> MaxTokens =
-        CVarDef.Create("ai.max_tokens", 640, CVar.SERVERONLY);
+        CVarDef.Create("ai.max_tokens", 3000, CVar.SERVERONLY);
 
-    /// <summary>llama-swap may need to load the model from disk on the first call.</summary>
+    /// <summary>A remote API can be slow; llama-swap may need to load the model from disk.</summary>
     public static readonly CVarDef<float> RequestTimeout =
         CVarDef.Create("ai.request_timeout", 180f, CVar.SERVERONLY);
 
@@ -104,7 +122,13 @@ public sealed class AiCVars
 
     // --------------------------------------------------------------- context
 
-    /// <summary>0 means: read the real n_ctx from the server's /props at startup.</summary>
+    /// <summary>
+    /// 0 means: read the real n_ctx from llama-server's /props at startup.
+    ///
+    /// A hosted API has no such endpoint, so on one of those this stays 0 and the compaction
+    /// thresholds below stand on their own — set it by hand if the provider's window is smaller
+    /// than they assume.
+    /// </summary>
     public static readonly CVarDef<int> CtxLimit =
         CVarDef.Create("ai.ctx_limit", 0, CVar.SERVERONLY);
 
