@@ -96,6 +96,16 @@ public sealed partial class StationAiAgentSystem
                 if (HasComp<MobStateComponent>(uid))
                     state += $", смотрит на {FacingRu(uid)}";
 
+                // Say which of these the AI can actually operate.
+                //
+                // Without it the model has to inspect doors one by one to find one that answers,
+                // and on a real station that is a real cost: a scenario at Atmospherics found
+                // twenty-nine doors in view, and the nearest one was a firelock the AI may never
+                // touch. A player sees this instantly — the radial menu either appears or it does
+                // not — so making the model probe for it was a handicap, not parity.
+                if (TryComp<StationAiWhitelistComponent>(uid, out var aiWire))
+                    state += aiWire.Enabled ? ", управляю" : ", провод перерезан";
+
                 var where = anchor != null
                     ? BearingFrom(origin, pos)
                     : string.Create(CultureInfo.InvariantCulture, $"{dist:F0} тайлов");

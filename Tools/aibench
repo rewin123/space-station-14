@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Integration benchmarks for the LLM Station AI.
 #
-#   Tools/aibench                       # all of them
+#   Tools/aibench                       # the fast deterministic suite
 #   Tools/aibench Look                  # by name substring
+#   Tools/aibench --scenario            # player scenarios on a REAL station (Box), ~15s per case
+#   Tools/aibench --live                # behavioural, needs the model
 #   Tools/aibench --no-build            # skip the build step
 #
 # NO_PROXY is forced because this box exports a global HTTP_PROXY that swallows localhost.
@@ -24,7 +26,10 @@ for arg in "$@"; do
         # Behavioural benchmarks against the real model. Separate from the deterministic suite
         # because they need a GPU, take minutes, and are inherently a bit flaky.
         --live)     CATEGORY="Live" ;;
-        # Everything that runs without a model. The CI default.
+        # Player scenarios on a full station map. Each one loads Box from scratch — about
+        # fifteen seconds apiece — so they are deliberately out of the per-commit run.
+        --scenario) CATEGORY="Scenario" ;;
+        # Everything that runs without a model and without a map load. The CI default.
         --fast)     CATEGORY="!Live" ;;
         -*)         BUILD_ARGS+=("$arg") ;;
         *)          FILTER="$arg" ;;
@@ -37,8 +42,11 @@ if [[ -n "$FILTER" ]]; then
     ARGS+=(--filter "FullyQualifiedName~$FILTER")
 elif [[ "$CATEGORY" == "Live" ]]; then
     ARGS+=(--filter "TestCategory=Live")
-elif [[ "$CATEGORY" == "!Live" ]]; then
-    ARGS+=(--filter "TestCategory!=Live")
+elif [[ "$CATEGORY" == "Scenario" ]]; then
+    ARGS+=(--filter "TestCategory=Scenario")
+else
+    # Default: neither the model nor a map load.
+    ARGS+=(--filter "TestCategory!=Live&TestCategory!=Scenario")
 fi
 
 # One worker: the pool hands out real server instances, and running them in parallel makes
