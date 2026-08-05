@@ -231,6 +231,81 @@ public sealed class AiStation : IAsyncDisposable
         return best;
     }
 
+    /// <summary>
+    /// The first entity on the station carrying a component, and where it is.
+    ///
+    /// Scenarios need "an air alarm, any air alarm" without hardcoding a coordinate that the next
+    /// map edit would silently invalidate into a test that passes by looking at nothing.
+    /// </summary>
+    public async Task<(EntityUid Uid, Vector2 At)> FirstWith<T>() where T : IComponent
+    {
+        var found = (EntityUid.Invalid, Vector2.Zero);
+
+        await Pair.Server.WaitPost(() =>
+        {
+            var ent = Ent;
+            var xform = Pair.Server.System<SharedTransformSystem>();
+
+            var query = ent.EntityQueryEnumerator<T, TransformComponent>();
+            while (query.MoveNext(out var uid, out _, out var x))
+            {
+                if (x.GridUid != Grid)
+                    continue;
+
+                found = (uid, xform.GetWorldPosition(uid));
+                return;
+            }
+        });
+
+        return found;
+    }
+
+    /// <summary>
+    /// A crewman the crew monitor can actually see.
+    ///
+    /// A bare <c>MobHuman</c> wears nothing, and the monitor is fed by suit sensors in jumpsuits —
+    /// so without this a scenario about <c>crew_status</c> would be asserting against an empty list
+    /// and would pass for the wrong reason. <c>SensorCords</c> is the mode that reports position;
+    /// anything below it carries no coordinates, exactly as upstream.
+    /// </summary>
+    public async Task<EntityUid> SpawnCrewWithSensor(string name, Vector2 at, string job = "Engineer")
+    {
+        var uid = await SpawnCrew(name, at);
+
+        await Pair.Server.WaitPost(() =>
+        {
+            var ent = Ent;
+            var inventory = Pair.Server.System<Content.Shared.Inventory.InventorySystem>();
+            var sensors = Pair.Server.System<Content.Server.Medical.SuitSensors.SuitSensorSystem>();
+            var idCards = Pair.Server.System<Content.Shared.Access.Systems.SharedIdCardSystem>();
+
+            var coords = ent.GetComponent<TransformComponent>(uid).Coordinates;
+
+            var uniform = ent.SpawnEntity("ClothingUniformJumpsuitEngineering", coords);
+            if (!inventory.TryEquip(uid, uniform, "jumpsuit", force: true))
+                return;
+
+            if (ent.TryGetComponent<Content.Shared.Medical.SuitSensors.SuitSensorComponent>(uniform, out var sensor))
+                sensors.SetSensor((uniform, sensor), Content.Shared.Medical.SuitSensor.SuitSensorMode.SensorCords, null);
+
+            // An ID card, because the crew monitor reports the name on the CARD, not the entity's.
+            //
+            // Learned from a scenario that spawned a perfectly good crewman and then could not find
+            // him on the monitor: he was there, listed as "Unknown". That is not a bug — a human
+            // player sees exactly the same for anyone without ID — but it means a scenario about
+            // locating a named person has to give them the thing their name comes from.
+            var card = ent.SpawnEntity("PassengerIDCard", coords);
+            idCards.TryChangeFullName(card, name);
+            idCards.TryChangeJobTitle(card, job);
+
+            if (!inventory.TryEquip(uid, card, "id", force: true))
+                TestContext.Out.WriteLine("ID-карта не надета — на мониторе человек будет как Unknown");
+        });
+
+        await Pair.Server.WaitRunTicks(5);
+        return uid;
+    }
+
     /// <summary>Put a crewman on the station at a point, with a job title and a working suit sensor.</summary>
     public async Task<EntityUid> SpawnCrew(string name, Vector2 at, string prototype = "MobHuman")
     {
@@ -316,10 +391,24 @@ public sealed class AiStation : IAsyncDisposable
             // A leftover temp directory is not worth failing a scenario over.
         }
 
-        if (Pair != null)
+        if (Pair == null)
+            return;
+
+        // Tolerate a pair that is already gone.
+        //
+        // When a scenario fails hard enough to take the server down with it, the pool has already
+        // disposed the pair — and an exception thrown from here replaces the real failure with
+        // "Attempted to return a pair in an invalid state", which says nothing about what broke.
+        // Losing the teardown is survivable; losing the diagnosis is not.
+        try
         {
             await Pair.Server.WaitPost(() => System?.ReleaseAll("scenario teardown"));
             await Pair.CleanReturnAsync();
+        }
+        catch (Exception e)
+        {
+            TestContext.Out.WriteLine($"пара не вернулась в пул ({e.GetType().Name}: {e.Message}) — " +
+                                      "смотри настоящую ошибку выше");
         }
     }
 }
