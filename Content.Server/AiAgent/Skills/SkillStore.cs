@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Content.Server.AiAgent.Bus;
 
 namespace Content.Server.AiAgent.Skills;
 
@@ -48,10 +49,35 @@ public sealed class SkillStore
     /// </summary>
     private readonly object _sync = new();
 
+    /// <summary>
+    /// Where changes are reported, or null when the debug bus is off. Attached from
+    /// <c>ReloadAgentFiles</c> because that method rebuilds this store from scratch.
+    /// </summary>
+    private IAgentEventSink? _sink;
+
     public SkillStore(string dataDir, ISawmill sawmill)
     {
         _dir = Path.Combine(dataDir, "skills");
         _sawmill = sawmill;
+    }
+
+    /// <summary>Start reporting writes. Called from <c>ReloadAgentFiles</c>, once per instance.</summary>
+    public void AttachSink(IAgentEventSink sink)
+    {
+        lock (_sync)
+            _sink = sink;
+    }
+
+    /// <summary>
+    /// The one place a skill enters the library — and therefore the one place that reports it.
+    ///
+    /// Write, append-edit and fragment-edit all land here, and only after <c>TrySave</c> has
+    /// succeeded, so a rejected disk write publishes nothing. Caller holds <see cref="_sync"/>.
+    /// </summary>
+    private void Commit(string name, Skill skill)
+    {
+        _skills[name] = skill;
+        _sink?.SkillUpdated(skill);
     }
 
     public IReadOnlyCollection<Skill> All
@@ -167,7 +193,7 @@ public sealed class SkillStore
         {
             _skills.Clear();
             foreach (var (name, skill) in loaded)
-                _skills[name] = skill;
+                Commit(name, skill);
         }
     }
 
@@ -242,7 +268,7 @@ public sealed class SkillStore
                 return new SkillResult(false, $"на диск записать не удалось, скилл не сохранён ({error})");
 
             var existed = _skills.ContainsKey(name);
-            _skills[name] = skill;
+            Commit(name, skill);
 
             return new SkillResult(true, existed ? "скилл обновлён" : "скилл создан");
         }
@@ -291,7 +317,7 @@ public sealed class SkillStore
                 if (!TrySave(appended, out var appendError))
                     return new SkillResult(false, $"на диск записать не удалось, скилл не изменён ({appendError})");
 
-                _skills[name] = appended;
+                Commit(name, appended);
                 return new SkillResult(true, "дописано в конец");
             }
 
@@ -315,7 +341,7 @@ public sealed class SkillStore
             if (!TrySave(edited, out var error))
                 return new SkillResult(false, $"на диск записать не удалось, скилл не изменён ({error})");
 
-            _skills[name] = edited;
+            Commit(name, edited);
 
             return new SkillResult(true, newText.Trim().Length == 0 ? "фрагмент удалён" : "фрагмент заменён");
         }

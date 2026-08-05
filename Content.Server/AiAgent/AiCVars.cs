@@ -176,4 +176,27 @@ public sealed class AiCVars
     /// <summary>Empty resolves to &lt;server exe dir&gt;/../../ai_data. Benchmarks point this at a temp dir.</summary>
     public static readonly CVarDef<string> DataDir =
         CVarDef.Create("ai.data_dir", "", CVar.SERVERONLY);
+
+    // ----------------------------------------------------------------- отладка
+
+    /// <summary>
+    /// The agent event bus, for an external debugger.
+    ///
+    /// Off by default, and off is free: with no bus the conversation, the memory and the skill
+    /// library each do one null check and never build an event. On, the agent broadcasts every
+    /// change to its history, memory, skills and statistics.
+    /// </summary>
+    public static readonly CVarDef<bool> DebugEnabled =
+        CVarDef.Create("ai.debug_enabled", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// How many events the ring keeps for clients that fell behind.
+    ///
+    /// A turn produces on the order of ten frames every eight seconds, so the default is minutes of
+    /// tolerance for a debugger that blinked. Past the end of the ring a client is told to resync
+    /// rather than handed a partial history — which is the whole reason the ring is bounded and
+    /// nobody is registered as a subscriber.
+    /// </summary>
+    public static readonly CVarDef<int> DebugRing =
+        CVarDef.Create("ai.debug_ring", 512, CVar.SERVERONLY);
 }

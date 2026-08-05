@@ -35,9 +35,20 @@ public sealed partial class StationAiAgentSystem
         var dir = DataDir();
 
         var memory = new MemoryStore(dir, _sawmill);
-        memory.LoadFromDisk();
-
         var skills = new SkillStore(dir, _sawmill);
+
+        // Attached before the load, so the initial contents arrive on the bus like any other
+        // change. Attaching here rather than once at startup is the point: this method builds new
+        // stores every time, and a sink bound to the old pair would go on describing a store
+        // nobody writes to, with nothing anywhere reporting the divergence.
+        if (_bus != null)
+        {
+            var sink = _bus.ForProcess();
+            memory.AttachSink(sink);
+            skills.AttachSink(sink);
+        }
+
+        memory.LoadFromDisk();
         skills.LoadFromDisk();
 
         _memory = memory;

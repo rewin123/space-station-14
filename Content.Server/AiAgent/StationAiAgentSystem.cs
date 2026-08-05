@@ -91,6 +91,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Constructed here, on the main thread, so it learns which thread that is.
         _dispatcher = new MainThreadDispatcher(_taskManager, _sawmill, _cfg.GetCVar(AiCVars.MainThreadBudgetMs));
 
+        // Before the stores, so their initial contents arrive on the bus rather than appearing
+        // out of nowhere to whoever connects first.
+        StartDebugBus();
+
         // Eagerly, so no first touch from the agent thread can race one from the main thread and
         // build a second store that silently swallows whatever the loser wrote.
         ReloadAgentFiles();
@@ -288,8 +292,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _cfg.GetCVar(AiCVars.LogTranscript)
                 ? new Journal(System.IO.Path.Combine(DataDir(), "logs"), _sawmill)
                 : Journal.Disabled,
-            // Null until the debug bus is wired up; the conversation then costs one null check.
-            null,
+            // Null when the debug bus is off; the conversation then costs one null check.
+            _bus?.ForSession(SessionIdFor(brain)),
             _sawmill);
 
         self = session;

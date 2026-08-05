@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Content.Server.AiAgent.Bus;
 
 namespace Content.Server.AiAgent.Skills;
 
@@ -58,6 +59,15 @@ public sealed class MemoryStore
     private readonly object _sync = new();
 
     /// <summary>
+    /// Where changes are reported, or null when the debug bus is off.
+    ///
+    /// Set through <see cref="AttachSink"/> rather than the constructor because this store is
+    /// rebuilt wholesale by <c>ReloadAgentFiles</c> — a sink attached once to the first instance
+    /// would keep describing a store nobody writes to any more, and nothing would say so.
+    /// </summary>
+    private IAgentEventSink? _sink;
+
+    /// <summary>
     /// Limits are in CHARACTERS, not tokens: characters are model-independent, and the agent can
     /// count them itself when asked to consolidate.
     /// </summary>
@@ -76,6 +86,13 @@ public sealed class MemoryStore
     {
         _dir = Path.Combine(dataDir, "memory");
         _sawmill = sawmill;
+    }
+
+    /// <summary>Start reporting writes. Called from <c>ReloadAgentFiles</c>, once per instance.</summary>
+    public void AttachSink(IAgentEventSink sink)
+    {
+        lock (_sync)
+            _sink = sink;
     }
 
     public void ResetTurnCounters()
@@ -113,6 +130,11 @@ public sealed class MemoryStore
             {
                 _live[target] = ReadFile(PathFor(target));
                 _snapshot[target] = RenderBlock(target);
+
+                // A reload replaces the live entries wholesale. Reported for the same reason a
+                // compaction reports the whole body: a client holding the old list has no way to
+                // discover on its own that it is now describing a different file.
+                _sink?.MemoryUpdated(target, EntriesLocked(target));
             }
         }
     }
@@ -348,11 +370,19 @@ public sealed class MemoryStore
 
     // ------------------------------------------------------------------ helpers
 
+    /// <summary>
+    /// The one exit every successful write takes — and therefore the one place that reports it.
+    ///
+    /// Add, Replace and Remove all land here after <see cref="TrySave"/> has returned true, so a
+    /// write that was rolled back because the disk refused it publishes nothing. That is the point:
+    /// the event says what is now on disk, not what was attempted.
+    /// </summary>
     private MemoryResult Success(MemoryTarget target, string message)
     {
         _consolidationFailures = 0;
-        var used = Length(EntriesLocked(target));
-        return new MemoryResult(true, message, null, $"{used}/{LimitFor(target)}");
+        var entries = EntriesLocked(target);
+        _sink?.MemoryUpdated(target, entries);
+        return new MemoryResult(true, message, null, $"{Length(entries)}/{LimitFor(target)}");
     }
 
     /// <summary>
