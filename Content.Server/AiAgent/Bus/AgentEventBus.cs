@@ -212,7 +212,7 @@ public sealed class AgentEventBus
                 body_epoch = bodyEpoch,
                 index,
                 message = AgentMessageDto.From(index, message),
-            }, LlmJson.Options));
+            }, AgentDebugJson.Options));
         }
 
         public void HistoryReplaced(int bodyEpoch, IReadOnlyList<ChatMessageDto> body)
@@ -225,7 +225,7 @@ public sealed class AgentEventBus
             {
                 body_epoch = bodyEpoch,
                 messages,
-            }, LlmJson.Options));
+            }, AgentDebugJson.Options));
         }
 
         public void PrefixReplaced(string prefixHash, string systemPrompt, string toolsJson)
@@ -235,7 +235,7 @@ public sealed class AgentEventBus
                 prefix_hash = prefixHash,
                 system_prompt = systemPrompt,
                 tools_json = toolsJson,
-            }, LlmJson.Options));
+            }, AgentDebugJson.Options));
         }
 
         public void MemoryUpdated(MemoryTarget target, IReadOnlyList<string> entries)
@@ -244,7 +244,7 @@ public sealed class AgentEventBus
             {
                 target = target.ToString().ToLowerInvariant(),
                 entries,
-            }, LlmJson.Options));
+            }, AgentDebugJson.Options));
         }
 
         public void SkillUpdated(Skill skill)
@@ -254,12 +254,12 @@ public sealed class AgentEventBus
                 name = skill.Name,
                 when = skill.When,
                 body = skill.Body,
-            }, LlmJson.Options));
+            }, AgentDebugJson.Options));
         }
 
         public void Stats(AgentStatsDto stats)
         {
-            bus.Publish(AgentEventKind.Stats, sessionId, JsonSerializer.Serialize(stats, LlmJson.Options));
+            bus.Publish(AgentEventKind.Stats, sessionId, JsonSerializer.Serialize(stats, AgentDebugJson.Options));
         }
     }
 }
