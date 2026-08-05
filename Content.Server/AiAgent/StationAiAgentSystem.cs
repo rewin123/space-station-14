@@ -139,6 +139,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     {
         base.Shutdown();
         ReleaseAll("server shutdown");
+        StopDebugServer();
         (_llm as IDisposable)?.Dispose();
         _llm = null;
     }

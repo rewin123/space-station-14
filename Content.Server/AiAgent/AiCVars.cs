@@ -199,4 +199,29 @@ public sealed class AiCVars
     /// </summary>
     public static readonly CVarDef<int> DebugRing =
         CVarDef.Create("ai.debug_ring", 512, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Where the debug HTTP server listens. Its own port, not the engine's status host.
+    ///
+    /// Loopback by default and meant to stay there: put a reverse proxy in front if it has to be
+    /// reachable, because there is no TLS here. Separate from <see cref="DebugEnabled"/> on purpose
+    /// — one switch doubling as "off" and "address" is how somebody testing from another machine
+    /// ends up publishing <c>0.0.0.0</c> and forgetting.
+    /// </summary>
+    public static readonly CVarDef<string> DebugBind =
+        CVarDef.Create("ai.debug_bind", "127.0.0.1:9080", CVar.SERVERONLY);
+
+    /// <summary>
+    /// Bearer token for the debug endpoint. Empty means the server refuses to bind at all.
+    ///
+    /// Not optional, and the refusal is deliberate: <c>/state</c> returns the whole conversation,
+    /// the agent's memory and its soul, and <c>/command</c> can put words in its mouth. An
+    /// unauthenticated version of this endpoint is a metagame oracle for any player who finds it.
+    ///
+    /// ASCII only. It travels in an <c>Authorization</c> header, and header values are ASCII — a
+    /// client handed a Cyrillic token throws before the request is even sent, which presents as an
+    /// endpoint answering 401 to a token that looks right. The server refuses to bind on one.
+    /// </summary>
+    public static readonly CVarDef<string> DebugToken =
+        CVarDef.Create("ai.debug_token", "", CVar.SERVERONLY | CVar.CONFIDENTIAL);
 }

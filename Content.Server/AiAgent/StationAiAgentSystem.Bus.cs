@@ -32,8 +32,20 @@ public sealed partial class StationAiAgentSystem
     /// </summary>
     private volatile AgentSession? _debugSession;
 
+    private AgentDebugServer? _debugServer;
+
+    /// <summary>
+    /// One agent at a time (<c>ai.max_agents</c> is 1), so the id is a constant — the same one the
+    /// session snapshot on disk uses. It stays in the envelope anyway: a uniform frame shape costs
+    /// nothing now and is what a second agent would need later.
+    /// </summary>
+    private const string DebugSessionId = "current";
+
     /// <summary>The live bus, or null when <c>ai.debug_enabled</c> is off.</summary>
     public AgentEventBus? DebugBus => _bus;
+
+    /// <summary>Where the debug endpoint is listening, or null when it is not.</summary>
+    public string? DebugEndpoint => _debugServer?.Prefix;
 
     /// <summary>
     /// Bring the bus up if the operator asked for it. Main thread, from <c>Initialize</c>.
@@ -49,6 +61,37 @@ public sealed partial class StationAiAgentSystem
 
         _bus = new AgentEventBus(_cfg.GetCVar(AiCVars.DebugRing));
         _sawmill.Info($"шина отладки поднята, кольцо {_bus.Capacity}, instance {_bus.Instance}");
+
+        var router = new AgentDebugRouter(
+            _bus,
+            _cfg.GetCVar(AiCVars.DebugToken),
+            DebugSessionId,
+            () => _debugSession,
+            () => Memory,
+            () => Skills,
+            text => (SendUserMessage(text, out var reason), reason),
+            ChangeMemory,
+            ChangeSkill);
+
+        // May legitimately fail — a taken port must degrade to "no debug endpoint", never abort a
+        // round start. The bus stays up either way, so the console command can still read it.
+        _debugServer = AgentDebugServer.TryStart(
+            _cfg.GetCVar(AiCVars.DebugBind), _cfg.GetCVar(AiCVars.DebugToken), router, _sawmill);
+    }
+
+    /// <summary>
+    /// Take the debug server down. Called from the system's <c>Shutdown</c>.
+    ///
+    /// <c>Shutdown()</c> is never called on a dedicated server — <c>BaseServer.Cleanup</c> goes
+    /// through <c>EntitySystemManager.Clear()</c>, which does not call it — so on the real deployment
+    /// the socket is reclaimed by the OS at process exit and this costs nothing. It does run on the
+    /// client and in the integration harness, and there it is what stops a listener from outliving
+    /// the test that started it and failing the next one's bind.
+    /// </summary>
+    private void StopDebugServer()
+    {
+        _debugServer?.Dispose();
+        _debugServer = null;
     }
 
     /// <summary>A new agent took a core. Main thread only.</summary>

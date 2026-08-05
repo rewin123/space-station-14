@@ -17,7 +17,7 @@ public sealed class AiAgentCommand : IConsoleCommand
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
     public string Help => "aiagent status | claim [uid] | release | inject <канал> <текст> | " +
-                          "tool <имя> [json] | curate | skills | dryrun on|off";
+                          "tool <имя> [json] | curate | skills | debug | dryrun on|off";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
@@ -102,6 +102,23 @@ public sealed class AiAgentCommand : IConsoleCommand
             {
                 var index = system.Skills.RenderIndex();
                 shell.WriteLine(index.Length > 0 ? index : "библиотека скиллов пуста");
+                break;
+            }
+
+            case "debug":
+            {
+                var bus = system.DebugBus;
+
+                if (bus == null)
+                {
+                    shell.WriteLine("шина отладки выключена (ai.debug_enabled)");
+                    break;
+                }
+
+                shell.WriteLine($"instance {bus.Instance}, seq {bus.Seq}, кольцо {bus.Count}/{bus.Capacity}");
+                shell.WriteLine(system.DebugEndpoint is { } endpoint
+                    ? $"эндпоинт {endpoint}"
+                    : "HTTP-сервер не поднят — смотри ошибку выше в логе (порт занят или пустой ai.debug_token)");
                 break;
             }
 

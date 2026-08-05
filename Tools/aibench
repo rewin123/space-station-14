@@ -5,6 +5,7 @@
 #   Tools/aibench Look                  # by name substring
 #   Tools/aibench --scenario            # player scenarios on a REAL station (Box), ~15s per case
 #   Tools/aibench --live                # behavioural, needs the model
+#   Tools/aibench --socket              # the one test that binds a real port
 #   Tools/aibench --no-build            # skip the build step
 #
 # NO_PROXY is forced because this box exports a global HTTP_PROXY that swallows localhost.
@@ -39,6 +40,9 @@ for arg in "$@"; do
         # Player scenarios on a full station map. Each one loads Box from scratch — about
         # fifteen seconds apiece — so they are deliberately out of the per-commit run.
         --scenario) CATEGORY="Scenario" ;;
+        # The debug endpoint over a real socket. Out of the default run because the pool reuses
+        # server instances in one process, and a leaked listener fails whichever test binds NEXT.
+        --socket)   CATEGORY="AiBusSocket" ;;
         # Everything that runs without a model and without a map load. The CI default.
         --fast)     CATEGORY="!Live" ;;
         -*)         BUILD_ARGS+=("$arg") ;;
@@ -54,9 +58,11 @@ elif [[ "$CATEGORY" == "Live" ]]; then
     ARGS+=(--filter "TestCategory=Live")
 elif [[ "$CATEGORY" == "Scenario" ]]; then
     ARGS+=(--filter "TestCategory=Scenario")
+elif [[ "$CATEGORY" == "AiBusSocket" ]]; then
+    ARGS+=(--filter "TestCategory=AiBusSocket")
 else
-    # Default: neither the model nor a map load.
-    ARGS+=(--filter "TestCategory!=Live&TestCategory!=Scenario")
+    # Default: neither the model, nor a map load, nor a bound port.
+    ARGS+=(--filter "TestCategory!=Live&TestCategory!=Scenario&TestCategory!=AiBusSocket")
 fi
 
 # One worker: the pool hands out real server instances, and running them in parallel makes
