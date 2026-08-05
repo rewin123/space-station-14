@@ -78,7 +78,13 @@ public sealed class AgentSession : IDisposable
     public int ContextLimit { get; private set; }
 
     public EntityUid Brain { get; }
-    public ConversationState Conv { get; } = new();
+
+    /// <summary>Everything mutable about this agent. See <see cref="AgentState"/> for why.</summary>
+    public AgentState State { get; } = new();
+
+    // Forwarders. The console command, the SELF line, the speech tools and the benchmarks all read
+    // these, and keeping them here is what lets the state move without touching any of that.
+    public ConversationState Conv => State.Conv;
     /// <summary>The live tool registry — benchmarks invoke through it, never around it.</summary>
     public AiToolRegistry Registry => _registry;
 
@@ -102,19 +108,14 @@ public sealed class AgentSession : IDisposable
     /// <summary>Whether the observation that opened this turn contained speech near the core.</summary>
     public bool HeardSpeech { get; set; }
 
-    /// <summary>
-    /// One-line rendering of the laws as of the last turn, for spotting a rewrite.
-    ///
-    /// Polled rather than subscribed because upstream raises nothing on the path that matters: the
-    /// law board and the upload console reach <c>NotifyLawsChanged</c>, which is a virtual method,
-    /// not an event. <c>SiliconLawBoundComponent.Version</c> is no use either — it only increments
-    /// for entities with an <c>ActorComponent</c>, and this brain has none. Comparing the rendered
-    /// lawset costs one string per turn and catches every path, including the ion storm.
-    /// </summary>
-    public string? LastLawsDigest { get; set; }
+    public string? LastLawsDigest
+    {
+        get => State.LastLawsDigest;
+        set => State.LastLawsDigest = value;
+    }
 
     /// <summary>Turns that ended in prose and had to be delivered mechanically. Should stay near zero.</summary>
-    public int UntooledReplies { get; private set; }
+    public int UntooledReplies => State.UntooledReplies;
 
     /// <summary>
     /// Somebody asked for a review out of band (the <c>aiagent curate</c> console command).
@@ -130,22 +131,15 @@ public sealed class AgentSession : IDisposable
     /// <summary>Bumped by the owning system on every lifecycle change; marshalled calls check it.</summary>
     public int Generation;
 
-    private AgentMode _mode = AgentMode.Core;
-
     public AgentMode Mode
     {
-        get => _mode;
-        set
-        {
-            if (value != AgentMode.Review)
-                _modeBeforeReview = value;
-            _mode = value;
-        }
+        get => State.Mode;
+        set => State.Mode = value;
     }
 
     // Diagnostics surfaced by `aiagent status`.
-    public int Turns { get; private set; }
-    public int ConsecutiveFailures { get; private set; }
+    public int Turns => State.Turns;
+    public int ConsecutiveFailures => State.ConsecutiveFailures;
     public double LastCacheRatio { get; private set; }
     public string? LastError { get; private set; }
 
@@ -214,7 +208,7 @@ public sealed class AgentSession : IDisposable
 
                 idleStreak = 0;
                 await RunTurnAsync(observation ?? string.Empty, ct).ConfigureAwait(false);
-                ConsecutiveFailures = 0;
+                State.ConsecutiveFailures = 0;
                 LastError = null;
             }
             catch (OperationCanceledException)
@@ -233,7 +227,7 @@ public sealed class AgentSession : IDisposable
             }
             catch (Exception e)
             {
-                ConsecutiveFailures++;
+                State.ConsecutiveFailures++;
                 LastError = $"{e.GetType().Name}: {e.Message}";
                 _sawmill.Error($"agent turn failed ({ConsecutiveFailures}): {LastError}");
 
@@ -291,7 +285,7 @@ public sealed class AgentSession : IDisposable
     private async Task RunTurnAsync(string observation, CancellationToken ct)
     {
         Conv.AppendUser(observation);
-        Turns++;
+        State.Turns++;
 
         // The turn's input, verbatim. It carries the SELF line — where the eye is, whether the core
         // has power — which is the first thing anyone asks when the agent behaves oddly, and until
@@ -347,7 +341,7 @@ public sealed class AgentSession : IDisposable
             }
             finally
             {
-                Mode = _modeBeforeReview;
+                Mode = State.ModeBeforeReview;
             }
         }
 
@@ -499,7 +493,7 @@ public sealed class AgentSession : IDisposable
 
         if (undelivered != null)
         {
-            UntooledReplies++;
+            State.UntooledReplies++;
             RememberSpeech(undelivered);
 
             // Log after the attempt, not before: the delivery can decline (ai.speak_untooled_text
@@ -526,7 +520,7 @@ public sealed class AgentSession : IDisposable
     /// <summary>
     /// Run the curator over the live conversation, on the loop's own thread.
     ///
-    /// The mode is restored to <see cref="_modeBeforeReview"/> rather than to
+    /// The mode is restored to <see cref="AgentState.ModeBeforeReview"/> rather than to
     /// <see cref="AgentMode.Core"/>: an AI carded while the review was running must come back
     /// carded, or the device gate silently hands the station's equipment to an agent sitting in
     /// somebody's pocket.
@@ -551,21 +545,9 @@ public sealed class AgentSession : IDisposable
         }
         finally
         {
-            Mode = _modeBeforeReview;
+            Mode = State.ModeBeforeReview;
         }
     }
-
-    /// <summary>Mode to return to after a review; carding during a review must not be forgotten.</summary>
-    private AgentMode _modeBeforeReview = AgentMode.Core;
-
-    /// <summary>
-    /// The last few things the agent said, normalised, so it does not broadcast them again.
-    ///
-    /// This model fills silence: left alone it emits "Жду указаний" every turn, and the recovery
-    /// path below would dutifully put each copy on the radio. Suppressing an exact repeat is a
-    /// mechanical fix for a mechanical habit — no prompt wording survives contact with it.
-    /// </summary>
-    private readonly Queue<string> _recentSpeech = new();
 
     /// <summary>Keep a log line to one line — device_ui payloads are long and the point is the shape.</summary>
     private static string Trim(string? text, int max = 160)
@@ -577,30 +559,10 @@ public sealed class AgentSession : IDisposable
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
-    private static string Normalise(string text)
-    {
-        var sb = new System.Text.StringBuilder(text.Length);
-        foreach (var c in text)
-        {
-            if (char.IsLetterOrDigit(c))
-                sb.Append(char.ToLowerInvariant(c));
-        }
-
-        return sb.ToString();
-    }
-
-    private void RememberSpeech(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return;
-
-        _recentSpeech.Enqueue(Normalise(text));
-        while (_recentSpeech.Count > 4)
-            _recentSpeech.Dequeue();
-    }
+    private void RememberSpeech(string? text) => State.RememberSpeech(text);
 
     /// <summary>Has this exact line gone out in the last few turns? Public so the speech tools can refuse it.</summary>
-    public bool AlreadySaid(string text) => _recentSpeech.Contains(Normalise(text));
+    public bool AlreadySaid(string text) => State.AlreadySaid(text);
 
     /// <summary>One string argument out of a raw tool-call payload, or null if it is not there.</summary>
     private static string? ArgumentValue(string argsJson, string name)
