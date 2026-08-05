@@ -37,7 +37,7 @@ public static class DeviceGateExt
 {
     public static string ToError(this DeviceGate gate) => gate switch
     {
-        DeviceGate.NotWhitelisted => ToolError.NotVisible,
+        DeviceGate.NotWhitelisted => ToolError.NotControllable,
         DeviceGate.WireCut => ToolError.WireCut,
         DeviceGate.Unpowered => ToolError.Unpowered,
         DeviceGate.NotVisible => ToolError.NotVisible,

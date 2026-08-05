@@ -363,6 +363,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (!_sessions.TryGetValue(ent.Owner, out var session))
             return;
 
+        // Its own transmission comes straight back through this handler, and feeding it back in is
+        // a genuine feedback loop: the echo makes the next turn look like somebody addressed the
+        // AI, it fills the silence with a status line, hears that too, and broadcasts every eight
+        // seconds forever. Observed live. What it said is already in the conversation as its own
+        // assistant turn, so the echo carries no information and costs tokens every turn.
+        if (args.MessageSource == ent.Owner)
+            return;
+
         // The displayed voice name, exactly what a human player's chat line shows. Note we do NOT
         // pass args.MessageSource on: the entity behind a voice is more than a player can know.
         var speaker = GetVoiceName(args.MessageSource);

@@ -9,6 +9,15 @@ public static class ToolError
     public const string BadArgs = "bad_args";
     public const string StaleHandle = "stale_handle";
     public const string NotVisible = "not_visible";
+
+    /// <summary>
+    /// The device is not wired to the AI at all — a blast door, a hand-cranked shutter, a firelock.
+    ///
+    /// Distinct from <see cref="NotVisible"/> on purpose: reporting "no cameras" for something the
+    /// AI could never operate sends the model chasing camera coverage that would not help if it
+    /// found it. Observed live — it moved the eye repeatedly trying to fix an unfixable refusal.
+    /// </summary>
+    public const string NotControllable = "not_controllable";
     public const string NoAccess = "no_access";
     public const string Unpowered = "unpowered";
     public const string WireCut = "wire_cut";
