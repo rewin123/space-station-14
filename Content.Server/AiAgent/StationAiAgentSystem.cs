@@ -303,13 +303,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Restore a conversation from before a restart, if the prefix still matches.
         var snapshot = SessionStoreFor().Load(SessionIdFor(brain), session.Conv.PrefixHash, CurrentRoundId());
         if (snapshot != null)
-        {
-            session.Conv.RestoreBody(snapshot.Body, snapshot.VolatileTail, snapshot.CharsPerToken);
-
-            // A snapshot taken mid-turn can hold an assistant tool_calls with no matching results.
-            // Replaying that verbatim gets the whole request rejected, so close them first.
-            session.Conv.Repair();
-        }
+            session.State.Restore(snapshot);
 
         session.Start();
 
@@ -355,7 +349,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // this is the last moment the conversation is still coherent.
         try
         {
-            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.State.Compactions, CurrentRoundId());
+            SessionStoreFor().Save(SessionIdFor(brain), session.State, CurrentRoundId());
         }
         catch (Exception e)
         {
@@ -744,7 +738,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     public void SaveSessions()
     {
         foreach (var (brain, session) in _sessions)
-            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.State.Compactions, CurrentRoundId());
+            SessionStoreFor().Save(SessionIdFor(brain), session.State, CurrentRoundId());
     }
 
     private float _sinceAutoSave;

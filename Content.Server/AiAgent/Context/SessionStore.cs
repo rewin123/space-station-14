@@ -36,6 +36,38 @@ public sealed class SessionSnapshot
 
     [JsonPropertyName("body")]
     public List<ChatMessageDto> Body { get; set; } = new();
+
+    // --- v2: the agent, not just the conversation --------------------------------------------
+    //
+    // Additive only, and every field's initializer is what the agent starts a session with, so a
+    // file written before these existed loads and behaves exactly as it used to. That is why there
+    // is no version gate: the snapshot is already dropped whenever the prefix hash or the round
+    // changes, which is most restarts, and a second rejection would cost real history for nothing.
+    //
+    // The rule for whoever comes next: a field may be ADDED with a default. Renaming, retyping or
+    // removing one needs a version number and a refusal to load anything below it.
+
+    /// <summary>Turns the loop ran. Distinct from <c>turns</c>, which counts appended user messages.</summary>
+    [JsonPropertyName("agent_turns")]
+    public int AgentTurns { get; set; }
+
+    [JsonPropertyName("mode")]
+    public AgentMode Mode { get; set; } = AgentMode.Core;
+
+    [JsonPropertyName("untooled_replies")]
+    public int UntooledReplies { get; set; }
+
+    [JsonPropertyName("compaction_armed")]
+    public bool CompactionArmed { get; set; } = true;
+
+    /// <summary>
+    /// What the agent said just before the restart.
+    ///
+    /// Without it a restored agent repeats into the radio whatever it broadcast thirty seconds
+    /// before going down — and repeat suppression exists precisely because this model fills silence.
+    /// </summary>
+    [JsonPropertyName("recent_speech")]
+    public List<string> RecentSpeech { get; set; } = new();
 }
 
 /// <summary>
@@ -66,23 +98,13 @@ public sealed class SessionStore
 
     private string PathFor(string id) => Path.Combine(_dir, $"{id}.json");
 
-    public void Save(string id, ConversationState conv, int compactions, int roundId)
+    public void Save(string id, AgentState state, int roundId)
     {
         try
         {
             Directory.CreateDirectory(_dir);
 
-            var snapshot = new SessionSnapshot
-            {
-                PrefixHash = conv.PrefixHash,
-                RoundId = roundId,
-                Turns = conv.TurnCount,
-                Compactions = compactions,
-                CharsPerToken = conv.CharsPerToken,
-                VolatileTail = conv.VolatileTail,
-                Body = new List<ChatMessageDto>(conv.Body),
-            };
-
+            var snapshot = state.ToSnapshot(state.Conv.PrefixHash, roundId);
             var json = JsonSerializer.Serialize(snapshot, LlmJson.Options);
 
             // Write-then-rename: a crash mid-write must not leave a half-file that fails to parse

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using Content.Server.AiAgent.Context;
+using Content.Server.AiAgent.Llm;
 
 namespace Content.Server.AiAgent;
 
@@ -114,6 +115,50 @@ public sealed class AgentState
     }
 
     private const int RecentSpeechDepth = 4;
+
+    /// <summary>Everything worth carrying across a restart.</summary>
+    public SessionSnapshot ToSnapshot(string prefixHash, int roundId) => new()
+    {
+        PrefixHash = prefixHash,
+        RoundId = roundId,
+        Turns = Conv.TurnCount,
+        Compactions = Compactions,
+        CharsPerToken = Conv.CharsPerToken,
+        VolatileTail = Conv.VolatileTail,
+        Body = new List<ChatMessageDto>(Conv.Body),
+
+        AgentTurns = Turns,
+        Mode = Mode,
+        UntooledReplies = UntooledReplies,
+        CompactionArmed = CompactionArmed,
+        RecentSpeech = new List<string>(_recentSpeech),
+    };
+
+    /// <summary>
+    /// Reinstate a snapshot. Repairs the conversation itself, so no caller can forget to.
+    /// </summary>
+    public void Restore(SessionSnapshot snapshot)
+    {
+        Conv.RestoreBody(snapshot.Body, snapshot.VolatileTail, snapshot.CharsPerToken);
+
+        // A snapshot taken mid-turn can hold an assistant tool_calls with no matching results.
+        // Replaying that verbatim gets the whole request rejected, so close them here rather than
+        // relying on every caller to remember.
+        Conv.Repair();
+
+        Turns = snapshot.AgentTurns;
+        UntooledReplies = snapshot.UntooledReplies;
+        Compactions = snapshot.Compactions;
+        CompactionArmed = snapshot.CompactionArmed;
+        RestoreRecentSpeech(snapshot.RecentSpeech);
+
+        // Anything but Core or Carded collapses to Core, and this is load-bearing: a snapshot taken
+        // mid-compaction holds Review, and restoring it would leave the agent refusing every game
+        // action with review_mode for the rest of the round — a silent failure that looks exactly
+        // like a model which has stopped trying. The world re-asserts Carded through the container
+        // events anyway; the stored value only covers the gap before the first of them.
+        Mode = snapshot.Mode is AgentMode.Core or AgentMode.Carded ? snapshot.Mode : AgentMode.Core;
+    }
 
     /// <summary>Letters and digits only, lowercased — so punctuation and case cannot dodge the check.</summary>
     public static string Normalise(string text)
