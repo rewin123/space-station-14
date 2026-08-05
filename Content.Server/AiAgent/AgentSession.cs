@@ -71,8 +71,17 @@ public sealed class AgentSession : IDisposable
     /// <summary>Prefix-cache watchdog. A broken cache is silent; this is what makes it loud.</summary>
     public CacheMetrics Cache { get; }
 
-    /// <summary>Machine-readable event log for the acceptance run. <see cref="Journal.Disabled"/> when off.</summary>
-    public Journal Journal { get; init; } = Journal.Disabled;
+    /// <summary>
+    /// Machine-readable event log for the acceptance run. <see cref="Journal.Disabled"/> when off.
+    ///
+    /// A constructor parameter, deliberately, and not an <c>init</c> property: the constructor hands
+    /// this to <see cref="TurnRunner"/>, and an object initializer runs <em>after</em> the constructor.
+    /// As an <c>init</c> property it read <see cref="Journal.Disabled"/> every time, so the four
+    /// per-turn event kinds never reached disk while the compaction event — the only one written
+    /// through this property at call time — did. A day of acceptance log said "1 compaction" and
+    /// nothing else, and nothing anywhere reported an error.
+    /// </summary>
+    public Journal Journal { get; }
 
     /// <summary>
     /// The model server's real context window, asked for once when the loop starts.
@@ -151,9 +160,11 @@ public sealed class AgentSession : IDisposable
         Func<Task>? curate,
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CompactionOptions compaction,
+        Journal journal,
         ISawmill sawmill)
     {
         Brain = brain;
+        Journal = journal;
         _llm = llm;
         _registry = registry;
         Queue = queue;

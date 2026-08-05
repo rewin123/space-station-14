@@ -285,12 +285,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 Low = () => _cfg.GetCVar(AiCVars.CompactLow),
                 KeepTail = () => _cfg.GetCVar(AiCVars.CompactKeepTail),
             },
-            _sawmill)
-        {
-            Journal = _cfg.GetCVar(AiCVars.LogTranscript)
+            _cfg.GetCVar(AiCVars.LogTranscript)
                 ? new Journal(System.IO.Path.Combine(DataDir(), "logs"), _sawmill)
                 : Journal.Disabled,
-        };
+            _sawmill);
 
         self = session;
 
