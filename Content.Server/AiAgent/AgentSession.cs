@@ -134,6 +134,12 @@ public sealed class AgentSession : IDisposable
     /// owner is the loop.
     /// </summary>
     public volatile bool CurateRequested;
+
+    /// <summary>
+    /// Text an operator injected through the debug API, for the next turn. Same rule as
+    /// <see cref="CurateRequested"/>: asked for from outside, applied by the loop.
+    /// </summary>
+    public AgentInbox Inbox { get; } = new();
     public CancellationTokenSource Cts { get; } = new();
     public Task Loop { get; private set; } = Task.CompletedTask;
 
@@ -216,15 +222,41 @@ public sealed class AgentSession : IDisposable
                 var wait = idle ? _options.TickSecondsIdle() : _options.TickSeconds();
                 await Task.Delay(TimeSpan.FromSeconds(wait), ct).ConfigureAwait(false);
 
+                // Claimed HERE, at the top of the body, and not at the end of the turn where
+                // CurateRequested is picked up.
+                //
+                // On an idle station _buildObservation returns null and the loop `continue`s
+                // without running a turn at all; force only kicks in after six such ticks, which
+                // at tick_seconds_idle = 25 is up to 150 seconds. An operator's message sitting
+                // there for two and a half minutes is not a debugger. Claiming here — and forcing
+                // on it — means the very next tick carries it.
+                //
+                // It also has to be here for correctness: the previous turn's
+                // finally { Conv.CloseTurn(); } has already run by this point, so nothing can land
+                // between an assistant's tool_calls and their results.
+                var pending = Inbox.Claim();
+
                 // Force a turn occasionally even when nothing was heard, so the agent can act on
                 // its own initiative rather than only ever reacting to being spoken to.
-                var force = idleStreak >= 6;
+                var force = idleStreak >= 6 || pending != null;
                 var perception = await _buildObservation(force, ct).ConfigureAwait(false);
 
                 if (perception == null)
                 {
                     idleStreak++;
                     continue;
+                }
+
+                // Merged into the one observation rather than appended as a second user message:
+                // two adjacent user messages fabricate a turn boundary that TurnBoundaries() will
+                // happily cut at, and strict providers reject the alternation outright.
+                if (pending != null)
+                {
+                    perception = perception with
+                    {
+                        Text = pending + "\n\n" + perception.Text,
+                        Forced = true,
+                    };
                 }
 
                 idleStreak = 0;

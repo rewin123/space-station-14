@@ -303,6 +303,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         session.Cache.SetExpectedPrefix(session.Conv.PrefixHash);
 
         _sessions[brain] = session;
+        AttachDebugSession(session);
 
         // Restore a conversation from before a restart, if the prefix still matches.
         var snapshot = SessionStoreFor().Load(SessionIdFor(brain), session.Conv.PrefixHash, CurrentRoundId());
@@ -348,6 +349,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return;
 
         _sawmill.Info($"releasing agent on {brain}: {why}");
+
+        // Before anything else, and on the main thread: past this point the session's CTS is
+        // cancelled and Update will dispose it, so a debug thread still holding the reference
+        // would get an ObjectDisposedException off it.
+        DetachDebugSession(session, why);
 
         // Snapshot before cancelling: a server restart mid-round should not amnesia the agent, and
         // this is the last moment the conversation is still coherent.
