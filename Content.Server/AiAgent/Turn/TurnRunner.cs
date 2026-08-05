@@ -109,6 +109,19 @@ public sealed class TurnRunner
             {
                 ctx.Enter(TurnPhase.Prose);
 
+                // Told the crew it would do something, then stopped without doing it. Same failure
+                // as inaudible prose — the model believes the saying was the doing — so it gets the
+                // same one reminder. Checked before the prose nudge; the two cannot both apply,
+                // because promising requires having spoken and the prose nudge requires not having.
+                if (TryNudgePromise(ctx))
+                {
+                    if (ctx.TryAdvanceStep())
+                        continue;
+
+                    ctx.Finish(TurnExit.BudgetExhausted, TurnDelivery.NothingOwed);
+                    return;
+                }
+
                 if (TryNudge(ctx, response.Content?.Trim()))
                 {
                     if (ctx.TryAdvanceStep())
@@ -161,6 +174,39 @@ public sealed class TurnRunner
 
         if (!string.IsNullOrWhiteSpace(response.Content))
             _sawmill.Debug($"thought: {response.Content!.Trim()}");
+    }
+
+    /// <summary>
+    /// Remind it, once, that it promised the crew something and then stopped.
+    ///
+    /// Declining is a legitimate answer — "открою, когда подтвердит инженер" is a real thing to
+    /// mean — so the reminder asks rather than insists. What it must not be is silent: from the
+    /// crew's side an unkept promise is worse than a refusal, because they are standing at a door
+    /// they were told would open.
+    /// </summary>
+    private bool TryNudgePromise(TurnContext ctx)
+    {
+        if (!ctx.HasUnkeptPromise || ctx.NudgedPromise)
+            return false;
+
+        ctx.Enter(TurnPhase.Nudge);
+        ctx.MarkPromiseNudged();
+
+        Conv.AppendUser(
+            "NOTIFY Ты сказал экипажу, что сейчас что-то сделаешь, но ни одного действия не " +
+            "вызвал. Сделай это сейчас — либо скажи вслух, что передумал или чего ждёшь. " +
+            "Обещание, о котором забыли, для экипажа хуже отказа.");
+
+        _sawmill.Warning($"обещание без действия: {Trim(ctx.Promised, 200)}");
+        _state.BrokenPromises++;
+
+        _journal.Write("promise", new Dictionary<string, object?>
+        {
+            ["turn"] = ctx.Index,
+            ["said"] = Trim(ctx.Promised, 300),
+        });
+
+        return true;
     }
 
     /// <summary>
@@ -233,7 +279,19 @@ public sealed class TurnRunner
             if (result.Ok && invocation.Tool is { Speech: true } speech)
             {
                 ctx.MarkSpoke();
-                _state.RememberSpeech(speech.SpokenText?.Invoke(invocation.Args));
+
+                var spoken = speech.SpokenText?.Invoke(invocation.Args);
+                _state.RememberSpeech(spoken);
+                ctx.MarkPromised(spoken);
+            }
+
+            // Any successful action on the station settles whatever was promised. Deliberately not
+            // matched against the promise: the model may well have said "открою" and then bolted
+            // instead after looking, and second-guessing which action it meant would be a worse
+            // reading of intent than simply noticing that it acted.
+            else if (result.Ok && invocation.Tool is { GameAction: true, Speech: false })
+            {
+                ctx.MarkActed();
             }
         }
     }

@@ -75,6 +75,21 @@ public sealed class TurnTests
 
             return this;
         }
+
+        /// <summary>A game-acting tool that is not speech — the thing a promise is settled by.</summary>
+        public Harness WithDeviceTool(string name = "device_action")
+        {
+            Registry.Register(new AiTool
+            {
+                Name = name,
+                Description = "тест",
+                SchemaJson = "{\"type\":\"object\"}",
+                GameAction = true,
+                Handler = (_, _) => Task.FromResult(ToolResult.Success()),
+            });
+
+            return this;
+        }
     }
 
     private static TurnPerception Addressed(string text = "RADIO Binary | Иван: \"ИИ, приём\"") =>
@@ -273,6 +288,65 @@ public sealed class TurnTests
         Assert.That(h.State.Conv.Build().Any(m => m.Content?.Contains("История сжата") == true), Is.False,
             "и после этого исчезнуть из промпта");
     }
+
+    // -------------------------------------------------- обещал и не сделал
+
+    [Test]
+    public async Task PromisedAnActionAndDidNothing_IsRemindedOnce()
+    {
+        // Found by a live benchmark, not by reasoning: asked to open a door and given a reason, the
+        // AI checked the scene with its own cameras, said "Открою дверь…" and then finished the turn
+        // without opening anything. Every tool behaved; the gap was entirely between what was said
+        // and what was done, and from the crew's side that is worse than a refusal.
+        var h = new Harness().WithSpeechTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("radio", """{"channel":"Common","text":"Открою дверь, сейчас посмотрю."}""")
+            .Then("готово");
+
+        await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.BrokenPromises, Is.EqualTo(1));
+            Assert.That(llm.SeenPrompts.Last().Any(m => m.Content?.Contains("ни одного действия") == true),
+                Is.True, "модель обязана была получить напоминание: " +
+                         string.Join(" | ", llm.SeenPrompts.Last().Select(m => Trim(m.Content))));
+        });
+    }
+
+    [Test]
+    public async Task PromisedAndThenActed_IsNotReminded()
+    {
+        // The other half. An agent nagged after doing exactly what it said would learn to stop
+        // saying anything, which is the failure this whole recovery path exists to prevent.
+        var h = new Harness().WithSpeechTool().WithDeviceTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("radio", """{"channel":"Common","text":"Открою дверь."}""")
+            .ThenCall("device_action", """{"handle":"door-1","action":"open"}""")
+            .Then("готово");
+
+        await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.That(h.State.BrokenPromises, Is.Zero, "сказал и сделал — упрекать не за что");
+    }
+
+    [Test]
+    public async Task PlainAnswerWithoutAPromise_IsNotReminded()
+    {
+        // "У вас нет доступа" promises nothing. Nagging about it would fire on every refusal the
+        // agent makes, which is most of what a well-behaved AI says.
+        var h = new Harness().WithSpeechTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("radio", """{"channel":"Common","text":"У вас нет доступа в инженерный."}""")
+            .Then("всё");
+
+        await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.That(h.State.BrokenPromises, Is.Zero);
+    }
+
+    private static string Trim(string s) =>
+        string.IsNullOrEmpty(s) ? "" : s.Length <= 120 ? s : s[..120] + "…";
 
     [Test]
     public void EveryTerminalForm_HasAName()

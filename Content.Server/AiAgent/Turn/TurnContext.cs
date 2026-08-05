@@ -81,6 +81,26 @@ public sealed class TurnContext
 
     public bool Nudged { get; private set; }
 
+    /// <summary>The last thing it told the crew it was about to do, until it does it.</summary>
+    public string? Promised { get; private set; }
+
+    /// <summary>Whether it has already been reminded about an unkept promise this turn.</summary>
+    public bool NudgedPromise { get; private set; }
+
+    /// <summary>Said it would act on the station, then finished the turn without acting.</summary>
+    public bool HasUnkeptPromise => Promised != null;
+
+    public void MarkPromised(string? spoken)
+    {
+        if (SpokenIntent.PromisesAction(spoken))
+            Promised = spoken;
+    }
+
+    /// <summary>A game action landed, so whatever was promised is no longer outstanding.</summary>
+    public void MarkActed() => Promised = null;
+
+    public void MarkPromiseNudged() => NudgedPromise = true;
+
     /// <summary>Prose the crew has not heard and this turn owes them, or null.</summary>
     public string? UnheardProse { get; private set; }
 

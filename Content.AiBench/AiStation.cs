@@ -108,6 +108,22 @@ public sealed class AiStation : IAsyncDisposable
 
             cfg.SetCVar(AiCVars.DataDir, w.DataDir);
             cfg.SetCVar(AiCVars.CuratorEnabled, false);
+
+            // Which model answers, from the environment.
+            //
+            // A behavioural benchmark is only worth running twice if the second run can be against
+            // a different model on the same scenario — that comparison is the whole reason to have
+            // scripted stations at all. The key comes from the environment rather than a file so it
+            // never lands in the repository by accident.
+            //
+            //   AI_ENDPOINT=https://api.deepseek.com/v1 AI_MODEL=deepseek-v4-flash \
+            //   AI_API_KEY=… AI_MAX_TOKENS=3000 Tools/aibench --live
+            Override(cfg, "AI_ENDPOINT", AiCVars.Endpoint);
+            Override(cfg, "AI_MODEL", AiCVars.Model);
+            Override(cfg, "AI_API_KEY", AiCVars.ApiKey);
+
+            if (int.TryParse(Environment.GetEnvironmentVariable("AI_MAX_TOKENS"), out var maxTokens))
+                cfg.SetCVar(AiCVars.MaxTokens, maxTokens);
         });
 
         // Bring the real SOUL.md along.
@@ -158,6 +174,13 @@ public sealed class AiStation : IAsyncDisposable
 
         await server.WaitRunTicks(10);
         return w;
+    }
+
+    private static void Override(IConfigurationManager cfg, string variable, CVarDef<string> cvar)
+    {
+        var value = Environment.GetEnvironmentVariable(variable);
+        if (!string.IsNullOrWhiteSpace(value))
+            cfg.SetCVar(cvar, value);
     }
 
     /// <summary>

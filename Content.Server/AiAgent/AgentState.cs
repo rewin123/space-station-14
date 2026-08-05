@@ -36,6 +36,15 @@ public sealed class AgentState
 
     public int ConsecutiveFailures { get; set; }
 
+    /// <summary>
+    /// Turns where it told the crew it would act and then did not.
+    ///
+    /// Counted rather than merely logged, because "worse than a refusal" deserves a number: the
+    /// crew is standing at a door they were told would open, and a habit like that is invisible in
+    /// a transcript read one run at a time.
+    /// </summary>
+    public int BrokenPromises { get; set; }
+
     public int Compactions { get; set; }
 
     /// <summary>

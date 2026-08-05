@@ -178,8 +178,19 @@ public sealed record LlmResponse(
     int PromptTokens,
     int CachedTokens,
     int CompletionTokens,
-    double DurationSeconds)
+    double DurationSeconds,
+    string? FinishReason = null,
+    int ReasoningTokens = 0)
 {
+    /// <summary>
+    /// The completion was cut off mid-sentence by max_tokens.
+    ///
+    /// Invisible until a reasoning model made it common: DeepSeek spends its budget thinking before
+    /// it writes, so a limit tuned for a non-reasoning model truncates the tool call itself — and a
+    /// half-written call reads downstream as a model that simply behaved strangely.
+    /// </summary>
+    public bool Truncated => FinishReason == "length";
+
     /// <summary>
     /// Share of the prompt served from cache. Below ~0.9 on a turn that did not just compact
     /// means the prefix drifted — the canary for an accidental timestamp in the system prompt.

@@ -97,8 +97,16 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         string? text = null;
         var calls = new List<ToolCallDto>();
 
+        string? finishReason = null;
+
         if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
         {
+            if (choices[0].TryGetProperty("finish_reason", out var finishEl)
+                && finishEl.ValueKind == JsonValueKind.String)
+            {
+                finishReason = finishEl.GetString();
+            }
+
             var message = choices[0].GetProperty("message");
 
             if (message.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.String)
@@ -128,6 +136,7 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         var prompt = 0;
         var cached = 0;
         var completion = 0;
+        var reasoning = 0;
 
         // Cache accounting, in order of preference. llama-server's non-standard `timings` block is
         // the most direct signal; `usage.prompt_tokens_details.cached_tokens` is the OpenAI-shaped
@@ -140,6 +149,16 @@ public sealed class LlamaClient : ILlmClient, IDisposable
 
             if (usage.TryGetProperty("prompt_tokens_details", out var details))
                 cached = GetInt(details, "cached_tokens");
+
+            // Reasoning models spend part of the completion budget thinking before they write, and
+            // that share does not appear anywhere else. Without it, "out 300т" looks like a verbose
+            // answer when it was in fact 215 tokens of deliberation and a sentence that got cut off.
+            if (usage.TryGetProperty("completion_tokens_details", out var completionDetails))
+                reasoning = GetInt(completionDetails, "reasoning_tokens");
+
+            // DeepSeek reports its cache split under its own names.
+            if (cached == 0)
+                cached = GetInt(usage, "prompt_cache_hit_tokens");
         }
 
         if (root.TryGetProperty("timings", out var timings))
@@ -154,7 +173,14 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             }
         }
 
-        return new LlmResponse(text, calls, prompt, cached, completion, seconds);
+        if (finishReason == "length")
+        {
+            _sawmill.Warning(
+                $"ответ обрезан по max_tokens ({completion}т, из них {reasoning}т размышлений) — " +
+                "вызов инструмента мог не дописаться; подними ai.max_tokens");
+        }
+
+        return new LlmResponse(text, calls, prompt, cached, completion, seconds, finishReason, reasoning);
     }
 
     public async Task<int?> GetContextSizeAsync(CancellationToken ct)

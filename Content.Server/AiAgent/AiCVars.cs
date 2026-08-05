@@ -61,6 +61,15 @@ public sealed class AiCVars
     public static readonly CVarDef<float> MinP =
         CVarDef.Create("ai.min_p", 0.05f, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Ceiling on one completion.
+    ///
+    /// 640 is sized for a non-reasoning model, where the whole budget goes into the answer. A
+    /// reasoning model spends most of it thinking first — DeepSeek measured at 215 tokens of
+    /// deliberation before a one-sentence radio call — so on one of those this has to go up several
+    /// times over or the tool call itself gets truncated mid-argument. The client now warns when
+    /// that happens instead of leaving it to look like the model behaving oddly.
+    /// </summary>
     public static readonly CVarDef<int> MaxTokens =
         CVarDef.Create("ai.max_tokens", 640, CVar.SERVERONLY);
 
