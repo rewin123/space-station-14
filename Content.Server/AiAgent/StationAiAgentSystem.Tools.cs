@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Perception;
 using Content.Server.AiAgent.Tools;
+using Content.Shared.Silicons.Laws.Components;
 
 namespace Content.Server.AiAgent;
 
@@ -266,6 +267,9 @@ public sealed partial class StationAiAgentSystem
         {
             _dispatcher.AssertMainThread("observation");
 
+            // Before the drain, so a rewrite lands in the very turn that notices it.
+            NoticeLawChange(session);
+
             var (items, dropped) = session.Queue.Drain();
 
             // Remember how the AI was addressed while the raw observations still exist — the
@@ -275,6 +279,39 @@ public sealed partial class StationAiAgentSystem
 
             return ObservationFormatter.Format(items, dropped, RoundTime(), SelfLine(session), force);
         }, generation, () => GenerationOf(brain), ct, what: "observation").ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Notice that somebody rewrote the laws, and say so in full.
+    ///
+    /// A human in this role gets a notice on screen with the new lawset the moment it changes. The
+    /// agent got nothing at all: an ion storm could turn it hostile and it would go on being polite,
+    /// because the only way to learn was to call <c>laws</c> unprompted — which it had no reason to
+    /// do. The whole text goes into the observation rather than a "go and check" nudge, for the same
+    /// reason the human sees the text: this is the one thing that overrides everything else it does.
+    /// </summary>
+    private void NoticeLawChange(AgentSession session)
+    {
+        if (!HasComp<SiliconLawBoundComponent>(session.Brain))
+            return;
+
+        var lawset = _laws.GetLaws(session.Brain);
+        var digest = lawset.LoggingString();
+
+        if (digest == session.LastLawsDigest)
+            return;
+
+        var first = session.LastLawsDigest == null;
+        session.LastLawsDigest = digest;
+
+        // The first reading is what the round started with, not a change.
+        if (first)
+            return;
+
+        var rows = string.Join(" ", lawset.Laws
+            .Select(l => $"{l.LawIdentifierOverride ?? l.Order.ToString()}. {Loc.GetString(l.LawString)}"));
+
+        session.Queue.Push(Observation.Laws($"твои законы переписаны, теперь они такие: {rows}", RoundTime()));
     }
 
     /// <summary>
@@ -308,6 +345,13 @@ public sealed partial class StationAiAgentSystem
         {
             sb.Append(" core=none");
         }
+
+        // Carried every turn rather than only on change. The change event does not fire at round
+        // start, so an agent that only ever learned the level from an ALERT line would spend the
+        // first shift believing it was green because nobody had said otherwise.
+        var station = _station.GetOwningStation(brain);
+        if (station != null && TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
+            sb.Append(" тревога=").Append(alert.CurrentAlertLevel);
 
         sb.Append(" turn=").Append(session.Turns.ToString(CultureInfo.InvariantCulture));
         return sb.ToString();

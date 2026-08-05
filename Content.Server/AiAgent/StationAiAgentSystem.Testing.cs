@@ -123,6 +123,10 @@ public sealed partial class StationAiAgentSystem
         if (!_sessions.TryGetValue(brain, out var session))
             return null;
 
+        // Same order as the real path, law poll included — a test hook that skipped it would report
+        // the agent as blind to a rewrite it actually notices, or the reverse.
+        NoticeLawChange(session);
+
         var (items, dropped) = session.Queue.Drain();
         return Perception.ObservationFormatter.Format(items, dropped, RoundTime(), SelfLine(session), force);
     }

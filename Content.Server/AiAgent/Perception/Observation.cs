@@ -9,7 +9,6 @@ public enum ObsKind : byte
 {
     Radio,
     Speech,
-    Notify,
     Announce,
     Alert,
     Laws,
@@ -36,9 +35,6 @@ public sealed record Observation(
 
     public static Observation Speech(string where, string speaker, string text, TimeSpan t) =>
         new(ObsKind.Speech, where, speaker, text, t);
-
-    public static Observation Notify(string text, TimeSpan t) =>
-        new(ObsKind.Notify, string.Empty, string.Empty, text, t);
 
     public static Observation Announce(string sender, string text, TimeSpan t) =>
         new(ObsKind.Announce, string.Empty, sender, text, t);

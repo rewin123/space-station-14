@@ -97,6 +97,17 @@ public sealed class AgentSession : IDisposable
     /// <summary>Whether the observation that opened this turn contained speech near the core.</summary>
     public bool HeardSpeech { get; set; }
 
+    /// <summary>
+    /// One-line rendering of the laws as of the last turn, for spotting a rewrite.
+    ///
+    /// Polled rather than subscribed because upstream raises nothing on the path that matters: the
+    /// law board and the upload console reach <c>NotifyLawsChanged</c>, which is a virtual method,
+    /// not an event. <c>SiliconLawBoundComponent.Version</c> is no use either — it only increments
+    /// for entities with an <c>ActorComponent</c>, and this brain has none. Comparing the rendered
+    /// lawset costs one string per turn and catches every path, including the ion storm.
+    /// </summary>
+    public string? LastLawsDigest { get; set; }
+
     /// <summary>Turns that ended in prose and had to be delivered mechanically. Should stay near zero.</summary>
     public int UntooledReplies { get; private set; }
 

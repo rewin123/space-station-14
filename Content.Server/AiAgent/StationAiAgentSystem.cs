@@ -9,7 +9,9 @@ using Content.Server.AiAgent.Perception;
 using Content.Server.AiAgent.Threading;
 using Content.Server.AiAgent.Tools;
 using Content.Server.Chat.Systems;
+using Content.Server.Communications;
 using Content.Server.GameTicking;
+using Content.Shared.AlertLevel;
 using Content.Server.Ghost.Roles.Components;
 using Content.Server.Radio;
 using Content.Server.Radio.EntitySystems;
@@ -104,6 +106,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // distance ourselves. Vanilla parity: the AI hears within VoiceRange of its physical core
         // and nowhere else — it has no camera microphones.
         SubscribeLocalEvent<EntitySpokeEvent>(OnEntitySpoke);
+
+        // Station-wide happenings. Both broadcast, both server-side.
+        //
+        // Without these the agent was structurally deaf to two of the things the prompt promised it
+        // would hear: an ion storm could rewrite its laws and a captain could raise the alert to red,
+        // and it went on behaving exactly as before because nothing ever told it.
+        SubscribeLocalEvent<AlertLevelChangedEvent>(OnAlertLevelChanged);
+        SubscribeLocalEvent<CommunicationConsoleAnnouncementEvent>(OnConsoleAnnouncement);
 
         // Carding moves the brain between the core and an intellicard; the mode gate follows it.
         //
@@ -546,6 +556,49 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             // "ядро", not "core": the prompt tells the model this field reads in Russian, and the
             // formatter puts it on the wire verbatim.
             session.Queue.Push(Observation.Speech("ядро", speaker, text, now));
+        }
+    }
+
+    /// <summary>
+    /// The alert level changed. Only for the station the AI is actually on — a second station on
+    /// the map is not its business, and a human in the role would see only its own console.
+    /// </summary>
+    private void OnAlertLevelChanged(ref AlertLevelChangedEvent args)
+    {
+        foreach (var (brain, session) in _sessions)
+        {
+            if (_station.GetOwningStation(brain) != args.Station)
+                continue;
+
+            session.Queue.Push(Observation.Alert($"уровень тревоги на станции: {args.AlertLevel.Id}", RoundTime()));
+        }
+    }
+
+    /// <summary>
+    /// An announcement made from a communications console.
+    ///
+    /// This is the only announcement path reachable without editing upstream. Central Command,
+    /// shuttle calls and round-end messages go out as raw chat packets to player <em>sessions</em>,
+    /// and a brain with no session is not a recipient of anything — there is no server-side entity
+    /// event to hook. The prompt says so rather than letting the model assume it heard everything.
+    /// </summary>
+    private void OnConsoleAnnouncement(ref CommunicationConsoleAnnouncementEvent args)
+    {
+        if (_sessions.Count == 0)
+            return;
+
+        var sender = args.Sender != null ? GetVoiceName(args.Sender.Value) : "Центральное командование";
+
+        foreach (var (brain, session) in _sessions)
+        {
+            // Its own announcements come back through here; it already knows what it said.
+            if (args.Sender == brain)
+                continue;
+
+            if (_station.GetOwningStation(brain) != _station.GetOwningStation(args.Uid))
+                continue;
+
+            session.Queue.Push(Observation.Announce(sender, args.Text, RoundTime()));
         }
     }
 

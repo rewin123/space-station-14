@@ -21,7 +21,6 @@ public static class ObservationFormatter
     {
         ObsKind.Radio => $"RADIO {o.Channel} | {o.Speaker}: \"{o.Text}\"",
         ObsKind.Speech => $"SPEECH {o.Channel} | {o.Speaker}: \"{o.Text}\"",
-        ObsKind.Notify => $"NOTIFY {o.Text}",
         ObsKind.Announce => string.IsNullOrEmpty(o.Speaker)
             ? $"ANNOUNCE {o.Text}"
             : $"ANNOUNCE {o.Speaker}: \"{o.Text}\"",
@@ -69,7 +68,6 @@ public static class ObservationFormatter
     {
         ObsKind.Radio,
         ObsKind.Speech,
-        ObsKind.Notify,
         ObsKind.Announce,
         ObsKind.Alert,
         ObsKind.Laws,

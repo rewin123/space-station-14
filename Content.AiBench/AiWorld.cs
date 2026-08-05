@@ -31,6 +31,9 @@ public sealed class AiWorld : IAsyncDisposable
     public EntityUid Core { get; private set; }
     public EntityUid Brain { get; private set; }
 
+    /// <summary>The station entity the grid belongs to — alert level, records, and so on.</summary>
+    public EntityUid Station { get; private set; }
+
     /// <summary>
     /// Scratch directory for this world's skills and memory.
     ///
@@ -144,6 +147,19 @@ public sealed class AiWorld : IAsyncDisposable
         // open space — which reads as "unpowered" and "not visible" and looks exactly like an
         // agent bug until you go and check. Lay a proper floor patch first.
         await world.LayFloor(server, radius);
+
+        // A grid is not a station. Without one, GetOwningStation returns null and everything that
+        // hangs off the station entity — the alert level, station records — simply is not there,
+        // which reads in a test as "the agent did not notice" rather than as "there was nothing to
+        // notice". TestStation is upstream's own cut-down prototype for exactly this.
+        await server.WaitPost(() =>
+        {
+            var stations = server.System<Content.Server.Station.Systems.StationSystem>();
+            world.Station = ent.SpawnEntity("TestStation", Robust.Shared.Map.MapCoordinates.Nullspace);
+            stations.AddGridToStation(world.Station, world.Map.Grid.Owner);
+        });
+
+        await server.WaitRunTicks(3);
 
         await server.WaitPost(() =>
         {
