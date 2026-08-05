@@ -102,7 +102,8 @@ public sealed partial class StationAiAgentSystem
             || !TryComp<MapGridComponent>(gridUid, out var mapGrid)
             || !TryComp<BroadphaseComponent>(gridUid, out var broadphase))
         {
-            failure = ToolResult.Fail(ToolError.NotVisible, "глаз не на станции");
+            failure = ToolResult.Fail(ToolError.Internal,
+                "твой глаз сейчас не на станции — вернись к ядру через jump_to_core", retry: "later");
             return false;
         }
 
@@ -128,7 +129,7 @@ public sealed partial class StationAiAgentSystem
         {
             failure = ToolResult.Fail(ToolError.NotVisible,
                 string.Create(CultureInfo.InvariantCulture,
-                    $"в точку ({x:F0},{y:F0}) не добивают камеры"),
+                    $"в точку ({x:F0},{y:F0}) {DeviceGateExt.NoCameraDetail}"),
                 retry: "other_target");
             return false;
         }

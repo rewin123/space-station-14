@@ -32,6 +32,7 @@ public sealed partial class StationAiAgentSystem
     {
         var expand = Math.Clamp(GetInt(args, "expand", 0), 0, 3);
         TryGetString(args, "near", out var near);
+        TryGetString(args, "kind", out var kind);
 
         // A longer timeout than the default: GetView is the one genuinely expensive call in the
         // whole tool surface, and upstream says as much in a comment.
@@ -39,10 +40,12 @@ public sealed partial class StationAiAgentSystem
         {
             var seen = GetVisibleEntities(s.Brain, 8.5f + expand * 4f, out var failure);
             if (failure != null)
-                return ToolResult.Fail(ToolError.Carded, failure);
+                return ToolResult.Fail(ToolError.Internal, failure, retry: "later");
 
             // Mint handles first and for everything worth naming, so the anchor can be looked up by
-            // name against the same set the listing is built from.
+            // name against the same set the listing is built from. The kind filter is applied to the
+            // LISTING, not here: an anchor named by the crew may well be of a different kind than
+            // the things being asked about ("какие двери рядом с Иваном").
             var interesting = new List<EntityUid>();
             foreach (var uid in seen)
             {
@@ -79,6 +82,10 @@ public sealed partial class StationAiAgentSystem
             foreach (var uid in interesting)
             {
                 if (uid == anchor)
+                    continue;
+
+                if (!string.IsNullOrWhiteSpace(kind)
+                    && !string.Equals(KindOf(uid), kind, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var handle = s.Handles.GetOrCreate(uid, KindOf(uid));
@@ -120,14 +127,20 @@ public sealed partial class StationAiAgentSystem
             if (rows.Count > limit)
             {
                 result["обрезано"] = rows.Count - limit;
+
+                // The old advice led with "expand поменьше", which is impossible: expand defaults to
+                // 0, its minimum, so in the overwhelmingly common case the first remedy offered
+                // could not be taken. The kind filter is the one that actually works.
                 result["как_увидеть_остальное"] =
-                    "список обрезан по расстоянию, дальнее не показано. Сузь обзор (expand поменьше), " +
-                    "либо смотри от человека: look {\"near\":\"<имя>\"}, либо переведи глаз ближе к цели";
+                    "список обрезан по расстоянию, дальнее не показано. Сузь его: " +
+                    "look {\"kind\":\"door\"} покажет только двери, look {\"near\":\"<имя>\"} — то, " +
+                    "что вокруг человека. Либо переведи глаз ближе к цели";
             }
 
             if (anchor != null)
             {
                 result["near"] = Identity.Name(anchor.Value, EntityManager);
+                result["near_handle"] = s.Handles.GetOrCreate(anchor.Value, KindOf(anchor.Value));
                 result["near_facing"] = FacingRu(anchor.Value);
                 result["note"] = "расстояния и стороны света отсчитаны от него; север — вверх экрана";
             }
@@ -219,13 +232,17 @@ public sealed partial class StationAiAgentSystem
         return OnMainAsync(s, "map", () =>
         {
             if (!_stationAi.TryGetCore(s.Brain, out var core) || core.Comp?.RemoteEntity == null)
-                return ToolResult.Fail(ToolError.Carded, "нет доступа к карте — нет ядра");
+                return ToolResult.Fail(ToolError.Internal, "карта недоступна — у тебя сейчас нет ядра",
+                    retry: "later");
 
             var eye = core.Comp.RemoteEntity.Value;
             var gridUid = Transform(eye).GridUid;
 
             if (gridUid == null || !TryComp<NavMapComponent>(gridUid, out var navMap))
-                return ToolResult.Fail(ToolError.NotVisible, "карта этой станции недоступна");
+                // Not not_visible: the prompt teaches that code as a camera problem, so the model
+                // would move the eye and retry forever against a station that simply has no nav map.
+                return ToolResult.Fail(ToolError.Internal,
+                    "у этой станции нет навигационной карты — названий мест не будет", retry: "none");
 
             // Centring on a given point matters because the model does not do geometry: handed a
             // crewman's coordinates and a list of places measured from its own camera, it will
@@ -258,8 +275,6 @@ public sealed partial class StationAiAgentSystem
 
             var d = new Dictionary<string, object?>
             {
-                ["count"] = rows.Count,
-                ["places"] = rows.Select(r => r.Text).Take(80).ToList(),
                 ["note"] = haveX && haveY
                     ? string.Create(CultureInfo.InvariantCulture,
                         $"направления и расстояния отсчитаны от точки ({cx:F0},{cy:F0}); координаты идут в move_camera {{x,y}}")
@@ -267,6 +282,9 @@ public sealed partial class StationAiAgentSystem
                       "что рядом с человеком, передай сюда его координаты: map {\"x\":…,\"y\":…}. " +
                       "Координаты идут в move_camera {x,y}",
             };
+
+            AddRows(d, "places", rows.Select(r => r.Text).ToList(), 80,
+                "карта обрезана. Сузь её: map {\"query\":\"<часть названия>\"} — подписи английские");
 
             if (rows.Count == 0 && !string.IsNullOrWhiteSpace(query))
                 d["note"] = $"по запросу '{query}' ничего нет — вызови map без query, чтобы увидеть все места";
@@ -368,12 +386,13 @@ public sealed partial class StationAiAgentSystem
             if (!TryResolve(s, args, out var uid, out var failure))
                 return failure!;
 
+            var visible = IsVisibleToAi(s.Brain, uid);
+
             var d = new Dictionary<string, object?>
             {
                 ["name"] = Identity.Name(uid, EntityManager),
                 ["kind"] = KindOf(uid),
-                ["visible"] = IsVisibleToAi(s.Brain, uid),
-                ["powered"] = _power.IsPowered(uid),
+                ["visible"] = visible,
             };
 
             // Whether the AI's own control wire has been cut is genuinely useful and genuinely
@@ -382,6 +401,24 @@ public sealed partial class StationAiAgentSystem
                 d["ai_control"] = whitelist.Enabled ? "есть" : "провод перерезан";
             else
                 d["ai_control"] = "нет";
+
+            // Handles live for the whole shift, and this used to report live bolt, breaker, charge
+            // and pressure readings for anything the AI had ever laid eyes on — from the other end
+            // of the station, through walls. identify already refuses on the same grounds and the
+            // access half of this very tool goes through VisibleOrExplain; only the device half was
+            // exempt. It is not refused outright, because knowing what a thing IS and what can be
+            // done with it costs nothing and refusing burns a turn — but the live readings go.
+            if (!visible)
+            {
+                d["устарело"] = "сейчас ты этого не видишь ни одной камерой — текущее состояние " +
+                                "неизвестно, это только то, что ты знал раньше. Наведи камеру, " +
+                                "если состояние важно";
+                d["actions"] = AvailableActions(uid);
+                AddAccessInfo(s, args, uid, d);
+                return ToolResult.Success(d);
+            }
+
+            d["powered"] = _power.IsPowered(uid);
 
             if (TryComp<DoorComponent>(uid, out var door))
             {
@@ -497,7 +534,10 @@ public sealed partial class StationAiAgentSystem
 
         if (!TryResolvePerson(s, by!, out var person, out var why))
         {
-            d["access_by"] = why;
+            // A separate key, not access_by. Putting a Russian error sentence in the field where
+            // the model expects a name, while access_allowed silently vanishes, reads to a
+            // mediocre model as "no access" — and it goes and tells the person so.
+            d["access_by_ошибка"] = why;
             return;
         }
 
@@ -612,7 +652,8 @@ public sealed partial class StationAiAgentSystem
             // Read straight off the AI entity: the AiHeld bundle gives it an intrinsic
             // CrewMonitoringConsole, so no UI and no console entity is involved.
             if (!TryComp<CrewMonitoringConsoleComponent>(s.Brain, out var monitor))
-                return ToolResult.Fail(ToolError.Carded, "монитор экипажа недоступен");
+                return ToolResult.Fail(ToolError.Internal, "монитор экипажа сейчас недоступен",
+                    retry: "later");
 
             var rows = new List<string>();
 
@@ -657,18 +698,46 @@ public sealed partial class StationAiAgentSystem
 
             rows.Sort(StringComparer.Ordinal);
 
-            return ToolResult.Success(new Dictionary<string, object?>
+            var d = new Dictionary<string, object?>
             {
-                ["count"] = rows.Count,
-                ["crew"] = rows.Take(60).ToList(),
                 ["note"] = "видны только те, у кого включён датчик костюма; координаты — только у тех, " +
                            "у кого он выставлен на передачу координат. По координатам можно навести глаз: move_camera x,y",
-            });
+            };
+
+            AddRows(d, "crew", rows, 60,
+                "список обрезан. Сузь его: crew_status {\"filter\":\"<имя, должность или отдел>\"}");
+
+            return ToolResult.Success(d);
         }, ct);
     }
 
     private static bool Match(string haystack, string needle) =>
         haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Put a listing in the answer and, if it was cut, say so and say what to do about it.
+    ///
+    /// <c>look</c> has always done this; <c>map</c>, <c>crew_status</c> and <c>records</c> reported a
+    /// <c>count</c> that quietly exceeded the array beside it. A real station has more beacons than
+    /// the cap and often more crew, so the model would scan a truncated list and tell somebody their
+    /// department was not on the map — with complete confidence, because nothing said otherwise.
+    /// </summary>
+    private static void AddRows(
+        Dictionary<string, object?> d,
+        string key,
+        List<string> rows,
+        int limit,
+        string howToNarrow)
+    {
+        d["count"] = rows.Count;
+        d[key] = rows.Take(limit).ToList();
+
+        if (rows.Count <= limit)
+            return;
+
+        d["обрезано"] = rows.Count - limit;
+        d["как_увидеть_остальное"] = howToNarrow;
+    }
 
     // ------------------------------------------------------------------- identify
 
@@ -763,11 +832,11 @@ public sealed partial class StationAiAgentSystem
 
             rows.Sort(StringComparer.Ordinal);
 
-            return ToolResult.Success(new Dictionary<string, object?>
-            {
-                ["count"] = rows.Count,
-                ["records"] = rows.Take(60).ToList(),
-            });
+            var d = new Dictionary<string, object?>();
+            AddRows(d, "records", rows, 60,
+                "список обрезан. Сузь его: records {\"query\":\"<имя или должность>\"}");
+
+            return ToolResult.Success(d);
         }, ct);
     }
 
@@ -813,11 +882,16 @@ public sealed partial class StationAiAgentSystem
             if (_stationAi.TryGetCore(s.Brain, out var core) && core.Comp != null)
             {
                 d["core_powered"] = _power.IsPowered(core.Owner);
-                d["core_mode"] = core.Comp.Remote ? "камеры" : "голопад";
+
+                // Same vocabulary as the SELF line's core= field. Two words for one fact is two
+                // things to learn, and the model has no way to know they mean the same.
+                d["core"] = core.Comp.Remote ? "remote" : "projected";
             }
 
             d["mode"] = s.Mode.ToString().ToLowerInvariant();
-            d["known_handles"] = s.Handles.Count;
+
+            // known_handles used to be reported here: an internal registry counter that means
+            // nothing in the world and that the model cannot act on.
 
             return ToolResult.Success(d);
         }, ct);

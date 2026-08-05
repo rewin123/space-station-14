@@ -43,9 +43,10 @@ public sealed partial class StationAiAgentSystem
                           "сторона света и расстояние. Так отвечают на «открой дверь рядом со мной».",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
-                "expand":{"type":"integer","minimum":0,"maximum":3,"default":0,"description":"Расширить обзор сверх стандартного."},
+                "expand":{"type":"integer","minimum":0,"maximum":3,"default":0,"description":"Смотреть дальше вокруг глаза: 0 — комната, 3 — дальше всего. Список от этого только растёт."},
+                "kind":{"type":"string","enum":["door","crew","apc","camera","airalarm","power","canister","computer","locker","device","obj"],"description":"Показать только объекты этого вида. Так сужают длинный список."},
                 "near":{"type":"string","description":"Имя человека или хендл. Список пересчитается от него: направления и расстояния будут относительно него, ближайшее первым."},
-                "via_skill":{"type":"string","description":"Имя скилла, если действуешь по нему."}}}
+                "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => LookAsync(s, a, ct),
         });
@@ -54,8 +55,10 @@ public sealed partial class StationAiAgentSystem
         {
             Name = "inspect",
             Description = "Подробное состояние одного объекта по хендлу: дверь (открыта, болты, " +
-                          "электризация), APC (рубильник, заряд), воздушная тревога, турель, " +
+                          "электризация), APC (рубильник, заряд), воздушная тревога, " +
                           "перерезан ли твой провод к устройству, какой доступ требует замок. " +
+                          "Живое состояние — только пока объект видно камерами; иначе вернётся " +
+                          "то, что ты знал о нём раньше, с пометкой «устарело». " +
                           "С параметром by отвечает, пустит ли эта дверь конкретного человека.",
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
@@ -74,7 +77,7 @@ public sealed partial class StationAiAgentSystem
                           "отдел, о котором говорит экипаж. Координаты отсюда идут прямо в move_camera.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
-                "query":{"type":"string","description":"Подстрока названия места, например 'engine' или 'мост'. Без неё — вся карта."},
+                "query":{"type":"string","description":"Подстрока названия места, например 'engine', 'bridge', 'medical' — подписи на карте английские. Без неё — вся карта."},
                 "x":{"type":"number","description":"Считать расстояния не от своего глаза, а от этой точки — например от координат человека из crew_status."},
                 "y":{"type":"number","description":"Задаётся вместе с x."},
                 "via_skill":{"type":"string"}}}
@@ -111,7 +114,7 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "records",
-            Description = "Учётные записи станции: имя, возраст, должность, вид, отпечатки, ДНК. " +
+            Description = "Учётные записи станции: имя, возраст, должность, вид. " +
                           "Это официальная база — она может расходиться с тем, что человек предъявляет.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
@@ -124,7 +127,8 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "laws",
-            Description = "Перечитать свои законы. Делай это, если сомневаешься или если пришло уведомление о смене законов.",
+            Description = "Перечитать свои законы. О перепрошивке тебе сообщит строка LAWS с новым " +
+                          "текстом; этот инструмент — чтобы свериться, когда сомневаешься.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{"via_skill":{"type":"string"}}}
                 """,
@@ -134,7 +138,7 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "station_status",
-            Description = "Сводка по станции: уровень тревоги, состояние ядра, питание, целостность.",
+            Description = "Сводка по станции: уровень тревоги, состояние твоего ядра, питание.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{"via_skill":{"type":"string"}}}
                 """,
@@ -180,7 +184,7 @@ public sealed partial class StationAiAgentSystem
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "text":{"type":"string","maxLength":800,"description":"Текст объявления."},
-                "alert_level":{"type":"string","enum":["green","blue","violet","yellow","orange","red"],"description":"Новый уровень тревоги."},
+                "alert_level":{"type":"string","enum":["Green","Blue","Yellow","Violet","Red"],"description":"Новый уровень тревоги. Регистр важен: это идентификаторы, а не слова."},
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => AnnounceAsync(s, a, ct),
@@ -222,14 +226,14 @@ public sealed partial class StationAiAgentSystem
         {
             Name = "device_action",
             Description = "Управление оборудованием станции: двери, болты, электризация, аварийный " +
-                          "доступ, рубильник APC, режим воздушной тревоги, лампа камеры. " +
+                          "доступ, рубильник APC, режим воздушной тревоги. " +
                           "Ответ содержит effect — реально считанное состояние после действия.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["handle","action"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"Хендл устройства из look."},
-                "action":{"type":"string","enum":["open","close","bolt","unbolt","electrify","unelectrify","emergency_access_on","emergency_access_off","light_on","light_off","apc_breaker_on","apc_breaker_off","air_alarm_mode"],"description":"Что сделать."},
-                "value":{"type":"string","description":"Только для air_alarm_mode: filtering, panic, replace, none."},
+                "action":{"type":"string","enum":["open","close","bolt","unbolt","electrify","unelectrify","emergency_access_on","emergency_access_off","apc_breaker_on","apc_breaker_off","air_alarm_mode"],"description":"Что сделать."},
+                "value":{"type":"string","enum":["filtering","wide_filtering","fill","panic","none"],"description":"Режим воздушной тревоги. Нужен только когда action=air_alarm_mode."},
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => DeviceActionAsync(s, a, ct),
@@ -238,13 +242,13 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "device_ui",
-            Description = "Команда консоли, для которой нет отдельного действия. Список доступных " +
-                          "команд для конкретного устройства показывает inspect.",
+            Description = "Команда консоли, для которой нет отдельного действия. Если ошибёшься в " +
+                          "имени команды, в alternatives придут те, что эта консоль понимает.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["handle","command"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string"},
-                "command":{"type":"string","description":"Имя команды, см. inspect."},
+                "command":{"type":"string","description":"Имя команды. Ошибёшься — придёт список подходящих."},
                 "text":{"type":"string","description":"Текстовый аргумент, если команда его требует."},
                 "via_skill":{"type":"string"}}}
                 """,

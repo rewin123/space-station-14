@@ -126,10 +126,12 @@ public sealed partial class StationAiAgentSystem
         return OnMainAsync(s, "announce", () =>
         {
             if (s.Mode == AgentMode.Carded)
-                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
+                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail(),
+                    DeviceGate.Carded.Retry());
 
             if (!HasComp<CommunicationsConsoleComponent>(s.Brain))
-                return ToolResult.Fail(ToolError.Carded, "консоль связи недоступна");
+                return ToolResult.Fail(ToolError.Internal, "консоль связи сейчас недоступна",
+                    retry: "later");
 
             var effect = new Dictionary<string, object?>();
 
@@ -168,7 +170,22 @@ public sealed partial class StationAiAgentSystem
             // the caller's side.
             var station = _station.GetOwningStation(s.Brain);
             if (station != null && TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
+            {
                 effect["alert_level_now"] = alert.CurrentAlertLevel;
+
+                // …and COMPARE it. Reading it back and not looking was the whole bug: prototype ids
+                // are Green/Blue/Red, the schema offered green/blue/red, ProtoId resolution is
+                // ordinal, and SetLevel returns early on an unknown id without raising anything. So
+                // every alert level the model could request was a silent no-op that answered ok:true
+                // — and it went and told the crew the station was on red.
+                if (!string.IsNullOrWhiteSpace(level)
+                    && !string.Equals(alert.CurrentAlertLevel, level, StringComparison.Ordinal))
+                {
+                    effect["alert_level_отказано"] =
+                        $"уровень не сменился и остался {alert.CurrentAlertLevel}: либо консоль на " +
+                        "кулдауне, либо такого уровня нет. Не объявляй экипажу смену, которой не было";
+                }
+            }
 
             _sawmill.Info($"[LLM] announce text='{text}' level='{level}'");
             return ToolResult.Effected("self", effect);
@@ -201,10 +218,11 @@ public sealed partial class StationAiAgentSystem
         return OnMainAsync(s, "move_camera", () =>
         {
             if (s.Mode == AgentMode.Carded)
-                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
+                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail(),
+                    DeviceGate.Carded.Retry());
 
             if (!_stationAi.TryGetCore(s.Brain, out var core) || core.Comp?.RemoteEntity == null)
-                return ToolResult.Fail(ToolError.Carded, "нет глаза");
+                return ToolResult.Fail(ToolError.Internal, "у тебя сейчас нет глаза", retry: "later");
 
             var eye = core.Comp.RemoteEntity.Value;
 
@@ -217,8 +235,7 @@ public sealed partial class StationAiAgentSystem
                     return failure!;
 
                 if (!IsVisibleToAi(s.Brain, uid))
-                    return ToolResult.Fail(ToolError.NotVisible,
-                        "туда не добивают камеры — сначала переместись ближе к тому, что видно",
+                    return ToolResult.Fail(ToolError.NotVisible, DeviceGateExt.NoCameraDetail,
                         retry: "other_target");
 
                 destination = Transform(uid).Coordinates;
@@ -232,7 +249,13 @@ public sealed partial class StationAiAgentSystem
                 if (!TryPointOnGrid(eye, px, py, out destination, out var why))
                     return why!;
 
+                // Name the place, not just the numbers. "at": "точка (112,-40)" told the model
+                // nothing it could repeat to the crew, and every other tool answers with a landmark.
+                var place = PlaceNear(_xform.ToMapCoordinates(destination));
                 at = string.Create(CultureInfo.InvariantCulture, $"точка ({px:F0},{py:F0})");
+
+                if (place != "неизвестно")
+                    at += $", у {place}";
             }
 
             if (_cfg.GetCVar(AiCVars.DryRun))
@@ -255,7 +278,8 @@ public sealed partial class StationAiAgentSystem
         return OnMainAsync(s, "jump_to_core", () =>
         {
             if (s.Mode == AgentMode.Carded)
-                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail());
+                return ToolResult.Fail(ToolError.Carded, DeviceGate.Carded.ToDetail(),
+                    DeviceGate.Carded.Retry());
 
             if (_cfg.GetCVar(AiCVars.DryRun))
                 return ToolResult.Effected("self", new Dictionary<string, object?> { ["dry_run"] = true });
@@ -334,7 +358,7 @@ public sealed partial class StationAiAgentSystem
     private static readonly HashSet<string> KnownActions = new()
     {
         "open", "close", "bolt", "unbolt", "electrify", "unelectrify",
-        "emergency_access_on", "emergency_access_off", "light_on", "light_off",
+        "emergency_access_on", "emergency_access_off",
         "apc_breaker_on", "apc_breaker_off", "air_alarm_mode",
     };
 
@@ -385,11 +409,12 @@ public sealed partial class StationAiAgentSystem
                 });
                 return true;
 
-            case "light_on":
-            case "light_off":
-                RaiseLocalEvent(uid, (object)new StationAiLightEvent { Enabled = action == "light_on", User = brain });
-                return true;
-
+            // light_on / light_off used to live here, and were the only branch with no component
+            // check: on anything other than an ItemTogglePointLight the event went nowhere and the
+            // tool still answered ok:true with a door's state attached. Removed rather than guarded,
+            // because on this fork no prototype carries both ItemTogglePointLight and
+            // StationAiWhitelist — so the action was unreachable as well as unchecked, and
+            // advertising a verb that can never work costs the model a turn every time it tries.
             case "apc_breaker_on":
             case "apc_breaker_off":
             {
@@ -408,8 +433,14 @@ public sealed partial class StationAiAgentSystem
                 if (!HasComp<AirAlarmComponent>(uid))
                     return Fail(out why, "это не воздушная тревога");
 
-                if (!Enum.TryParse<AirAlarmMode>(value, ignoreCase: true, out var mode))
-                    return Fail(out why, "нужен 'value': filtering, panic, replace или none");
+                // "replace" was offered here and in the schema and is not a member of the enum, so
+                // the error text handed the model back the same invalid value it had just been
+                // refused for — a guaranteed retry loop. The real set is below.
+                var wanted = value?.Trim().Replace("_", "", StringComparison.Ordinal);
+
+                if (!Enum.TryParse<AirAlarmMode>(wanted, ignoreCase: true, out var mode))
+                    return Fail(out why,
+                        "нужен 'value': filtering, wide_filtering, fill, panic или none");
 
                 _airAlarm.SetMode(uid, Name(brain), mode, uiOnly: false);
                 return true;

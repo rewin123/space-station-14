@@ -52,20 +52,38 @@ public static class DeviceGateExt
         DeviceGate.NotWhitelisted => "это устройство не подключено к системам ИИ",
         DeviceGate.WireCut => "провод управления ИИ перерезан — устройство больше не отвечает",
         DeviceGate.Unpowered => "устройство обесточено",
-        DeviceGate.NotVisible => "устройство вне зоны действия камер или на другом гриде",
+        DeviceGate.NotVisible => NoCameraDetail,
         DeviceGate.NoAccess => "нет прав доступа к этому устройству",
         DeviceGate.Carded => "ты в интелликарте — оборудование станции недоступно",
         DeviceGate.Dead => "ИИ выведен из строя",
         _ => "неизвестная ошибка",
     };
 
-    public static string? Retry(this DeviceGate gate) => gate switch
+    /// <summary>
+    /// The one wording for "no camera reaches there", shared by every producer of not_visible.
+    ///
+    /// It deliberately says the eye cannot help. Visibility in this game is computed from cameras
+    /// near the TARGET — <c>StationAiVisionSystem.IsAccessible</c> gathers seeds around the tile
+    /// being asked about and the eye's own position never enters the calculation. So "наведи глаз
+    /// ближе", which is what the prompt and three call sites used to advise, is a no-op, and the
+    /// model would spend its whole turn budget on move_camera → device_action → not_visible.
+    /// </summary>
+    public const string NoCameraDetail =
+        "рядом с этим местом нет работающей камеры — разбита, обесточена или её там нет. " +
+        "Двигать глаз бесполезно: видимость зависит от камер у цели, а не от того, куда ты смотришь";
+
+    public static string Retry(this DeviceGate gate) => gate switch
     {
         DeviceGate.Unpowered => "later",
         DeviceGate.NotVisible => "other_target",
         DeviceGate.NoAccess => "other_target",
         DeviceGate.WireCut => "none",
         DeviceGate.NotWhitelisted => "none",
-        _ => null,
+
+        // Being in an intellicard is the most obviously temporary condition in the game; somebody
+        // will put the card back. Returning null here left the model with a dead end and no hint.
+        DeviceGate.Carded => "later",
+        DeviceGate.Dead => "none",
+        _ => "later",
     };
 }

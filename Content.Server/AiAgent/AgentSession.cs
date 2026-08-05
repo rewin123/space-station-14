@@ -463,6 +463,13 @@ public sealed class AgentSession : IDisposable
                     ["ok"] = result.Ok,
                     ["error"] = result.Error,
                     ["detail"] = result.Ok ? null : Trim(result.Detail, 200),
+
+                    // The one consumer of via_skill. It is declared on every game-facing tool and
+                    // was read by nothing at all — fifteen parameters sitting in the frozen prefix
+                    // referring to a concept the prompt never mentioned. Recorded here it becomes
+                    // what it was meant to be: mechanical attribution, so which skills actually
+                    // route is a question with an answer instead of a guess.
+                    ["via_skill"] = ArgumentValue(call.Function.Arguments, "via_skill"),
                 });
 
                 if (result.Ok && SpeechTools.Contains(call.Function.Name))
@@ -593,13 +600,16 @@ public sealed class AgentSession : IDisposable
     public bool AlreadySaid(string text) => _recentSpeech.Contains(Normalise(text));
 
     /// <summary>Pull the spoken text out of a say/radio/announce call so repeats can be spotted.</summary>
-    private static string? SpokenText(string argsJson)
+    private static string? SpokenText(string argsJson) => ArgumentValue(argsJson, "text");
+
+    /// <summary>One string argument out of a raw tool-call payload, or null if it is not there.</summary>
+    private static string? ArgumentValue(string argsJson, string name)
     {
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
             return doc.RootElement.ValueKind == JsonValueKind.Object
-                   && doc.RootElement.TryGetProperty("text", out var el)
+                   && doc.RootElement.TryGetProperty(name, out var el)
                    && el.ValueKind == JsonValueKind.String
                 ? el.GetString()
                 : null;
@@ -618,13 +628,14 @@ public sealed class AgentSession : IDisposable
         {
             return ToolResult.Fail(
                 ToolError.UnknownTool,
-                $"no tool named '{name}'",
+                $"нет инструмента '{name}'",
                 retry: "other_target",
                 alternatives: _registry.Nearest(name));
         }
 
         if (Mode == AgentMode.Review && tool.GameAction)
-            return ToolResult.Fail(ToolError.ReviewMode, "acting on the station is disabled during review");
+            return ToolResult.Fail(ToolError.ReviewMode,
+                "сейчас идёт разбор прошедшего отрезка — действовать на станции нельзя", retry: "later");
 
         JsonElement args;
         try
@@ -636,7 +647,8 @@ public sealed class AgentSession : IDisposable
         }
         catch (JsonException e)
         {
-            return ToolResult.Fail(ToolError.BadArgs, $"{name}: arguments are not valid JSON ({e.Message})");
+            return ToolResult.Fail(ToolError.BadArgs,
+                $"{name}: аргументы не разобрались как JSON ({e.Message})", retry: "other_target");
         }
 
         try
@@ -645,7 +657,7 @@ public sealed class AgentSession : IDisposable
         }
         catch (StaleGenerationException)
         {
-            return ToolResult.Fail(ToolError.Dead, "the AI is no longer in play");
+            return ToolResult.Fail(ToolError.Dead, "ты больше не в игре", retry: "none");
         }
         catch (OperationCanceledException)
         {
@@ -653,7 +665,12 @@ public sealed class AgentSession : IDisposable
         }
         catch (TimeoutException)
         {
-            return ToolResult.Fail(ToolError.Timeout, $"{name} did not complete in time", retry: "later");
+            // retry:"none", not "later". The timed-out delegate is still queued for the main thread
+            // and will run when the tick gets to it, so the action may well have happened; telling
+            // the model to repeat it is how a door ends up bolted twice.
+            return ToolResult.Fail(ToolError.Timeout,
+                $"{name} не успел ответить. Действие могло всё-таки пройти — проверь состояние, " +
+                "прежде чем повторять", retry: "none");
         }
         catch (Exception e)
         {

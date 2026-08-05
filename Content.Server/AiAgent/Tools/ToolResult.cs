@@ -73,7 +73,7 @@ public sealed class ToolResult
     /// Never the raw stack — it is thousands of tokens the model cannot act on.
     /// </summary>
     public static ToolResult FromException(string tool, Exception e) =>
-        Fail(ToolError.Internal, $"{tool}: {e.GetType().Name}: {e.Message}", retry: "later");
+        Fail(ToolError.Internal, $"{tool}: сбой на нашей стороне ({e.GetType().Name})", retry: "later");
 
     /// <summary>Just the effect, for a one-line log entry that does not repeat the whole envelope.</summary>
     public string EffectJson()
