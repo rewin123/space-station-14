@@ -7,6 +7,7 @@ using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Perception;
 using Content.Server.AiAgent.Threading;
 using Content.Server.AiAgent.Tools;
+using Content.Server.AiAgent.Turn;
 
 namespace Content.Server.AiAgent;
 
@@ -53,11 +54,16 @@ public sealed class AgentSession : IDisposable
 
     private readonly ISawmill _sawmill;
     private readonly AgentLoopOptions _options;
-    private readonly Func<bool, CancellationToken, Task<string?>> _buildObservation;
+    private readonly Func<bool, CancellationToken, Task<TurnPerception?>> _buildObservation;
     private readonly Func<string, Task> _announce;
     private readonly Func<string, string?, Task<bool>> _speak;
     private readonly Func<Task>? _curate;
     private readonly Func<(string SystemPrompt, string ToolsJson)> _rebuildPrefix;
+
+    private readonly TurnRunner _turn;
+
+    /// <summary>How the last turn ended, for diagnostics and for tests that assert on the shape.</summary>
+    public TurnContext? LastTurn { get; private set; }
 
     /// <summary>Context compaction, wired in phase 3.</summary>
     public Compactor Compactor { get; }
@@ -97,16 +103,6 @@ public sealed class AgentSession : IDisposable
 
     /// <summary>Handle registry — per session, so names never leak between rounds.</summary>
     public Handles.EntityHandleRegistry Handles { get; } = new();
-
-    /// <summary>
-    /// Channel of the last radio line in the observation that opened this turn, or null if the
-    /// turn heard no radio. Set by the observation builder while it drains the queue, because that
-    /// is the only place the raw <see cref="Perception.Observation"/> list still exists.
-    /// </summary>
-    public string? HeardOnChannel { get; set; }
-
-    /// <summary>Whether the observation that opened this turn contained speech near the core.</summary>
-    public bool HeardSpeech { get; set; }
 
     public string? LastLawsDigest
     {
@@ -149,7 +145,7 @@ public sealed class AgentSession : IDisposable
         AiToolRegistry registry,
         ObservationQueue queue,
         AgentLoopOptions options,
-        Func<bool, CancellationToken, Task<string?>> buildObservation,
+        Func<bool, CancellationToken, Task<TurnPerception?>> buildObservation,
         Func<string, Task> announce,
         Func<string, string?, Task<bool>> speak,
         Func<Task>? curate,
@@ -172,6 +168,7 @@ public sealed class AgentSession : IDisposable
         Cache = new CacheMetrics(sawmill);
         Compactor = new Compactor(llm, compaction, sawmill);
         Dispatcher = new ToolDispatcher(registry, sawmill);
+        _turn = new TurnRunner(llm, registry, Dispatcher, queue, State, Cache, Journal, speak, sawmill);
     }
 
     public void Start()
@@ -198,16 +195,16 @@ public sealed class AgentSession : IDisposable
                 // Force a turn occasionally even when nothing was heard, so the agent can act on
                 // its own initiative rather than only ever reacting to being spoken to.
                 var force = idleStreak >= 6;
-                var observation = await _buildObservation(force, ct).ConfigureAwait(false);
+                var perception = await _buildObservation(force, ct).ConfigureAwait(false);
 
-                if (observation == null && !force)
+                if (perception == null)
                 {
                     idleStreak++;
                     continue;
                 }
 
                 idleStreak = 0;
-                await RunTurnAsync(observation ?? string.Empty, ct).ConfigureAwait(false);
+                await RunTurnAsync(perception, ct).ConfigureAwait(false);
                 State.ConsecutiveFailures = 0;
                 LastError = null;
             }
@@ -282,15 +279,15 @@ public sealed class AgentSession : IDisposable
         }
     }
 
-    private async Task RunTurnAsync(string observation, CancellationToken ct)
+    private async Task RunTurnAsync(TurnPerception perception, CancellationToken ct)
     {
-        Conv.AppendUser(observation);
+        Conv.AppendUser(perception.Text);
         State.Turns++;
 
         // The turn's input, verbatim. It carries the SELF line — where the eye is, whether the core
         // has power — which is the first thing anyone asks when the agent behaves oddly, and until
         // now the only copy of it lived inside the request nobody could see.
-        _sawmill.Debug($"turn {Turns} <- {Trim(observation, 400)}");
+        _sawmill.Debug($"turn {Turns} <- {Trim(perception.Text, 400)}");
 
         // The turn closes on the way out, whatever the way out is.
         //
@@ -301,7 +298,11 @@ public sealed class AgentSession : IDisposable
         // happened to paper over it on the one path that was taken; nothing made it true.
         try
         {
-            await RunStepsAsync(_options.MaxToolCallsPerTurn(), ct).ConfigureAwait(false);
+            var outcome = await _turn.RunAsync(perception, _options.MaxToolCallsPerTurn(), ct)
+                .ConfigureAwait(false);
+
+            LastCacheRatio = outcome.LastCacheRatio;
+            LastTurn = outcome;
         }
         finally
         {
@@ -353,167 +354,6 @@ public sealed class AgentSession : IDisposable
 
             if (!compacted)
                 await RunReviewAsync(ct).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// The model-facing part of one turn: call, dispatch, repeat until it stops or the budget runs
-    /// out, then deliver anything the crew was owed and never heard.
-    /// </summary>
-    private async Task RunStepsAsync(int maxSteps, CancellationToken ct)
-    {
-        // A turn that heard nobody is the agent musing to itself; a turn that was addressed owes
-        // an answer. The distinction is what keeps the recovery below from broadcasting idle
-        // thoughts over the radio every eight seconds.
-        var addressed = HeardOnChannel != null || HeardSpeech;
-        var nudged = false;
-        string? undelivered = null;
-
-        // Set the moment a say/radio/announce actually lands. Everything below hangs off it: once
-        // the crew has heard something, trailing prose is the model tidying up its own turn
-        // ("Всё.", "Я уже ответила"), not an unspoken reply. Treating that as unspoken is how the
-        // first cut of this recovery broadcast every answer twice.
-        var spoke = false;
-
-        for (var step = 0; step < maxSteps; step++)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var response = await _llm
-                .ChatAsync(Conv.Build(), _registry.WireSchemas(), ct)
-                .ConfigureAwait(false);
-
-            Conv.LastPromptTokens = response.PromptTokens;
-            Conv.Calibrate(response.PromptTokens);
-            LastCacheRatio = response.CacheRatio;
-
-            Cache.Record(response.PromptTokens, response.CachedTokens, Conv.PrefixHash, Conv.SystemPrompt);
-            Conv.AppendAssistant(response);
-
-            _sawmill.Info($"turn {Turns} step {step}  " +
-                          Cache.Format(response.PromptTokens, response.CachedTokens,
-                              response.CompletionTokens, response.DurationSeconds,
-                              response.ToolCalls.Count, Mode.ToString()));
-
-            Journal.Write("step", new Dictionary<string, object?>
-            {
-                ["turn"] = Turns,
-                ["step"] = step,
-                ["prompt_tokens"] = response.PromptTokens,
-                ["cached_tokens"] = response.CachedTokens,
-                ["completion_tokens"] = response.CompletionTokens,
-                ["seconds"] = Math.Round(response.DurationSeconds, 2),
-                ["tools"] = response.ToolCalls.Count,
-                ["mode"] = Mode.ToString(),
-            });
-
-            if (!string.IsNullOrWhiteSpace(response.Content))
-                _sawmill.Debug($"thought: {response.Content!.Trim()}");
-
-            if (response.ToolCalls.Count == 0)
-            {
-                var prose = response.Content?.Trim();
-
-                // The failure this guards against: the model composes a perfectly good reply as
-                // plain text and stops, believing it has answered. Nothing reaches the station and
-                // the crew sees a dead AI. Prompting alone does not fix it reliably, so the loop
-                // says so out loud and gives it one more step to say it properly.
-                if (!nudged && addressed && !spoke && !string.IsNullOrEmpty(prose))
-                {
-                    nudged = true;
-                    undelivered = prose;
-                    Conv.AppendUser(
-                        "NOTIFY Этого никто не услышал: обычный текст не доходит до экипажа. " +
-                        "Если хочешь ответить — вызови инструмент say или radio.");
-                    continue;
-                }
-
-                // Still prose after being told. Rather than let the crew face a silent AI, deliver
-                // it on the channel the request arrived on. Loud in the log on purpose: this is a
-                // model failure being papered over, and it must be countable.
-                undelivered = addressed && !spoke && !string.IsNullOrEmpty(prose) ? prose : null;
-                break;
-            }
-
-            undelivered = null;
-
-            foreach (var call in response.ToolCalls)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                var gate = Mode == AgentMode.Review ? DispatchGate.NoGameActions : DispatchGate.None;
-                var invocation = await Dispatcher.InvokeAsync(call, gate, ct).ConfigureAwait(false);
-                var result = invocation.Result;
-
-                // Every result carries whatever arrived while the model was mid-turn. Reporting a
-                // bare count is not enough: a bot that answers a question it never heard reads as
-                // broken, and "wait, not that one" has to be actionable.
-                result.Unread = Queue.PeekUnread(6);
-                Conv.AppendToolResult(call.Id, result.ToJson());
-
-                // Without this the log shows "tools=1" and nothing else: which tool ran, with what
-                // arguments, and which gate refused are all invisible. That turns any behavioural
-                // question — why did it not move the eye, why did it give up — into guesswork.
-                _sawmill.Debug(
-                    $"  {call.Function.Name}({Trim(call.Function.Arguments)}) -> " +
-                    (result.Ok ? "ok " + Trim(result.EffectJson(), 1200) : $"{result.Error}: {result.Detail}"));
-
-                Journal.Write("tool", new Dictionary<string, object?>
-                {
-                    ["turn"] = Turns,
-                    ["name"] = call.Function.Name,
-                    ["args"] = Trim(call.Function.Arguments, 400),
-                    ["ok"] = result.Ok,
-                    ["error"] = result.Error,
-                    ["detail"] = result.Ok ? null : Trim(result.Detail, 200),
-
-                    // The one consumer of via_skill. It is declared on every game-facing tool and
-                    // was read by nothing at all — fifteen parameters sitting in the frozen prefix
-                    // referring to a concept the prompt never mentioned. Recorded here it becomes
-                    // what it was meant to be: mechanical attribution, so which skills actually
-                    // route is a question with an answer instead of a guess.
-                    ["via_skill"] = ArgumentValue(call.Function.Arguments, "via_skill"),
-                });
-
-                if (result.Ok && invocation.Tool is { Speech: true } speech)
-                {
-                    spoke = true;
-                    RememberSpeech(speech.SpokenText?.Invoke(invocation.Args));
-                }
-            }
-        }
-
-        // Repeating itself on the radio is worse than saying nothing: the crew reads it as a stuck
-        // machine, and it is the failure this model reaches for whenever it has nothing to add.
-        if (undelivered != null && AlreadySaid(undelivered))
-        {
-            _sawmill.Debug($"проза повторяет уже сказанное, не доставляю: {undelivered}");
-            undelivered = null;
-        }
-
-        if (undelivered != null)
-        {
-            State.UntooledReplies++;
-            RememberSpeech(undelivered);
-
-            // Log after the attempt, not before: the delivery can decline (ai.speak_untooled_text
-            // off, dry run, AI no longer in play), and a line claiming a broadcast that never
-            // happened is worse than no line at all.
-            var delivered = await _speak(undelivered, HeardOnChannel).ConfigureAwait(false);
-
-            _sawmill.Warning(delivered
-                ? $"модель ответила текстом без say/radio даже после напоминания — доставлено " +
-                  $"вручную ({(HeardOnChannel is { } ch ? "radio " + ch : "say")}): {undelivered}"
-                : $"модель ответила текстом без say/radio даже после напоминания; доставка выключена, " +
-                  $"экипаж этого не услышал: {undelivered}");
-
-            Journal.Write("untooled", new Dictionary<string, object?>
-            {
-                ["turn"] = Turns,
-                ["channel"] = HeardOnChannel,
-                ["delivered"] = delivered,
-                ["text"] = Trim(undelivered, 400),
-            });
         }
     }
 

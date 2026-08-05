@@ -267,8 +267,8 @@ public sealed partial class StationAiAgentSystem
 
     // ---------------------------------------------------------------- observation
 
-    /// <summary>Drain perception on the main thread and format the one user message for this turn.</summary>
-    private async Task<string?> BuildObservationAsync(AgentSession session, bool force, CancellationToken ct)
+    /// <summary>Drain perception on the main thread and build this turn's input as one value.</summary>
+    private async Task<TurnPerception?> BuildObservationAsync(AgentSession session, bool force, CancellationToken ct)
     {
         var brain = session.Brain;
         var generation = session.Generation;
@@ -281,13 +281,20 @@ public sealed partial class StationAiAgentSystem
             NoticeLawChange(session);
 
             var (items, dropped) = session.Queue.Drain();
+            var roundTime = RoundTime();
 
-            // Remember how the AI was addressed while the raw observations still exist — the
+            var text = ObservationFormatter.Format(items, dropped, roundTime, SelfLine(session), force);
+            if (text == null)
+                return null;
+
+            // How the AI was addressed, captured while the raw observations still exist — the
             // formatted string is for the model, not for us to parse back out.
-            session.HeardOnChannel = items.LastOrDefault(i => i.Kind == ObsKind.Radio)?.Channel;
-            session.HeardSpeech = items.Any(i => i.Kind == ObsKind.Speech);
-
-            return ObservationFormatter.Format(items, dropped, RoundTime(), SelfLine(session), force);
+            return new TurnPerception(
+                text,
+                items.LastOrDefault(i => i.Kind == ObsKind.Radio)?.Channel,
+                items.Any(i => i.Kind == ObsKind.Speech),
+                force,
+                ObservationFormatter.FormatRoundTime(roundTime));
         }, generation, () => GenerationOf(brain), ct, what: "observation").ConfigureAwait(false);
     }
 

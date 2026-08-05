@@ -6,32 +6,25 @@ using NUnit.Framework;
 namespace Content.AiBench;
 
 /// <summary>
-/// The recovery path for a model that answers in prose instead of calling say/radio.
+/// The whole wiring for an untooled reply, end to end on a real server.
 ///
-/// This exists because both halves of it failed in front of live players. First the agent was
-/// simply mute: it composed good replies as plain text, believed it had answered, and nothing
-/// reached the station. Then the recovery itself misfired — it could not tell a genuinely unspoken
-/// reply from the model tidying up after one ("Всё.", "Я уже ответила"), so every answer went out
-/// twice, once by tool and once by hand.
+/// The behavioural matrix — nudge once, deliver on the originating channel, suppress an exact
+/// repeat, decline honestly — lives in <see cref="TurnTests"/>, where it costs milliseconds instead
+/// of thirty seconds a case and can assert things this shape cannot reach at all (which channel the
+/// reply went out on, what the last step exited with). What is left here is the one thing those
+/// cannot prove: that the pieces are actually connected to each other.
 ///
-/// Both failures are silent in the ordinary sense: nothing throws, no request is rejected, the
-/// cache stays hot. Only these assertions catch them.
+/// InjectRadio → RadioSystem → RadioReceiveEvent → the observation queue → perception → the turn →
+/// SpeakUntooledAsync → ChatSystem. Any one of those coming loose presents as an agent that answers
+/// perfectly in the transcript and says nothing on the station.
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
 public sealed class SpeechRecoveryTests
 {
-    private const string Nudge = "Этого никто не услышал";
-
-    private static bool PromptsContain(ScriptedLlmClient llm, string fragment) =>
-        llm.SeenPrompts.Any(p => p.Any(m => m.Content != null && m.Content.Contains(fragment)));
-
     [Test]
-    public async Task ProseWithoutSpeaking_IsNudgedThenDelivered()
+    public async Task UntooledReply_ReachesTheStationThroughTheRealWiring()
     {
-        // The original bug: asked over the radio, the model writes a reply as content and stops.
-        // The loop must tell it that nobody heard, and — if it answers in prose again — put the
-        // words on the air itself rather than leave the crew talking to a dead machine.
         var llm = new ScriptedLlmClient()
             .Then("Слышу вас.")
             .Then("Я же ответила.");
@@ -46,40 +39,9 @@ public sealed class SpeechRecoveryTests
         Assert.Multiple(() =>
         {
             Assert.That(recovered, Is.True, "проза без say/radio должна была уехать в эфир вручную");
-            Assert.That(PromptsContain(llm, Nudge), Is.True,
-                "модели обязано было прийти напоминание, что её текст не слышен");
-        });
-    }
-
-    [Test]
-    public async Task ProseAfterSpeaking_IsNeitherNudgedNorRebroadcast()
-    {
-        // The regression that shipped to live players: the model answered correctly with radio at
-        // step 0, added "Всё." at step 1, and the recovery treated that trailing thought as an
-        // unspoken reply — nudging it, then broadcasting the model's own "я уже ответила" to the
-        // whole channel. Every single turn. A speech act anywhere in the turn has to disarm both.
-        var llm = new ScriptedLlmClient()
-            .ThenCall("radio", "{\"channel\":\"Binary\",\"text\":\"Слышу вас.\"}")
-            .Then("Всё.");
-
-        await using var w = await AiWorld.Create(llm);
-
-        var spoke = await w.SayToAiAndWait(
-            "ИИ, ты меня слышишь?",
-            () => llm.Calls >= 2,
-            seconds: 30);
-
-        Assert.That(spoke, Is.True, "агент не отработал ход по обращению");
-
-        // Let the turn finish so a stray nudge would have had time to happen.
-        await w.Pair.Server.WaitRunTicks(30);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(w.System.GetSession(w.Brain)!.UntooledReplies, Is.Zero,
-                "ход, в котором уже прозвучал radio, не должен доставляться вручную");
-            Assert.That(PromptsContain(llm, Nudge), Is.False,
-                "напоминание не должно приходить после успешной реплики");
+            Assert.That(
+                llm.SeenPrompts.Any(p => p.Any(m => m.Content?.Contains("Этого никто не услышал") == true)),
+                Is.True, "модели обязано было прийти напоминание, что её текст не слышен");
         });
     }
 }
