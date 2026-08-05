@@ -50,18 +50,14 @@ public sealed class Compactor
 {
     private readonly ILlmClient _llm;
     private readonly CompactionOptions _options;
+    private readonly CacheMetrics _cache;
     private readonly ISawmill _sawmill;
 
-    /// <summary>False until usage has fallen back below <see cref="CompactionOptions.Low"/>.</summary>
-    private bool _armed = true;
-
-    public int Compactions { get; private set; }
-    public string? LastSummary { get; private set; }
-
-    public Compactor(ILlmClient llm, CompactionOptions options, ISawmill sawmill)
+    public Compactor(ILlmClient llm, CompactionOptions options, CacheMetrics cache, ISawmill sawmill)
     {
         _llm = llm;
         _options = options;
+        _cache = cache;
         _sawmill = sawmill;
     }
 
@@ -73,12 +69,14 @@ public sealed class Compactor
     /// prefill each time to reclaim almost nothing. And an open tool call means the only safe cut
     /// points are behind us, so we wait for the turn to close.
     /// </summary>
-    public bool ShouldCompact(ConversationState conv)
+    public bool ShouldCompact(AgentState state)
     {
-        if (conv.LastPromptTokens < _options.Low())
-            _armed = true;
+        var conv = state.Conv;
 
-        if (!_armed)
+        if (conv.LastPromptTokens < _options.Low())
+            state.CompactionArmed = true;
+
+        if (!state.CompactionArmed)
             return false;
 
         if (conv.LastPromptTokens < _options.High())
@@ -87,154 +85,90 @@ public sealed class Compactor
         return !conv.HasOpenToolCalls;
     }
 
-    /// <param name="announce">
-    /// Says something in-game. Not decoration: it gives the crew an honest explanation for the
-    /// pause, and it puts a marker in the game log at the exact moment of every compaction, so the
-    /// timeline can be read without digging through the transcript.
-    /// </param>
-    /// <param name="rebuildPrefix">Returns the (possibly refreshed) system prompt for zone 0.</param>
-    public async Task<bool> CompactAsync(
-        ConversationState conv,
-        IReadOnlyList<ToolDto>? tools,
-        Func<Task>? curate,
-        Func<string, Task> announce,
-        Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
-        CancellationToken ct)
-    {
-        var beforeTokens = conv.LastPromptTokens;
-        var beforeMessages = conv.Body.Count;
-
-        // Check that a cut is actually possible BEFORE promising the crew anything.
-        //
-        // The first live run announced "буферы переполнены, провожу очистку памяти" and then
-        // cancelled, because a single long turn has no second boundary to cut at. Telling the crew
-        // you are doing something and then not doing it is worse than staying quiet.
-        var keepChars = (int)(_options.KeepTail() * conv.CharsPerToken);
-        var cut = conv.SafeCutIndex(keepChars);
-
-        if (cut <= 0)
-        {
-            // Do NOT disarm here.
-            //
-            // Disarming is for "we just compacted, wait for usage to fall back". Having no cut
-            // point yet is a transient condition — the very next turn creates a new boundary. The
-            // first live run disarmed on it and then never compacted again for the rest of the
-            // round, growing the context unboundedly while reporting nothing wrong.
-            _sawmill.Info("компакция отложена: пока нет безопасной границы хода для разреза");
-            return false;
-        }
-
-        // --- step 1: tell the crew FIRST ------------------------------------------------------
-        //
-        // Before the slow work, not after it. The curator is several model calls back to back —
-        // measured at about a minute — and the summariser adds another. Announcing afterwards
-        // would leave the crew talking to a silent AI for that whole stretch and only then hearing
-        // why. The announcement is the explanation for the pause, so it has to precede the pause.
-        try
-        {
-            await announce("Внимание: буферы переполнены, провожу очистку памяти. Реакция может замедлиться.")
-                .ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            // A failed announcement must never block the compaction it announces.
-            _sawmill.Warning($"не удалось объявить о компакции: {e.Message}");
-        }
-
-        // --- step 2: curator ------------------------------------------------------------------
-        if (curate != null)
-        {
-            try
-            {
-                await curate().ConfigureAwait(false);
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
-            {
-                // A failed review must never block the compaction it precedes: the context still
-                // has to shrink, learned lesson or not. Cancellation is the exception to that — see
-                // the note on the summariser's catch.
-                _sawmill.Warning($"куратор не отработал: {e.GetType().Name}: {e.Message}");
-            }
-        }
-
-        // --- step 3: summarise ----------------------------------------------------------------
-        var summary = await SummariseAsync(conv, tools, ct).ConfigureAwait(false);
-
-        // --- step 4: fold ---------------------------------------------------------------------
-        var tail = conv.BodyFrom(cut).ToList();
-        conv.ReplaceBody(summary, tail);
-
-        // --- step 5: rebuild zone 0 -----------------------------------------------------------
-        var (systemPrompt, toolsJson) = rebuildPrefix();
-        conv.SetPrefix(systemPrompt, toolsJson);
-        conv.VolatileTail = $"История сжата в {Perception.ObservationFormatter.FormatRoundTime(TimeSpan.Zero)}. " +
-                            "Ниже — сводка того, что было раньше, и последние ходы целиком.";
-
-        // Do not let the stale reading re-fire compaction on the very next turn.
-        conv.LastPromptTokens = 0;
-        _armed = false;
-        Compactions++;
-        LastSummary = summary;
-
-        _sawmill.Info(string.Create(CultureInfo.InvariantCulture,
-            $"компакция #{Compactions}: {beforeMessages} сообщений / {beforeTokens}т свёрнуто, " +
-            $"оставлено {tail.Count} сообщений, сводка {summary.Length} символов, " +
-            $"новый хэш зоны 0 {conv.PrefixHash}"));
-
-        return true;
-    }
-
     /// <summary>
-    /// Ask for the summary as one more turn appended to a <b>copy</b> of the live conversation.
+    /// Walk the ritual. Returns true when it committed.
     ///
-    /// A separate prompt would have to re-digest ten thousand-plus tokens from cold; continuing the
-    /// existing chain costs one short question over a prefix the server has already computed, so
-    /// the summarisation call itself runs at ~95% cache hit. The copy is what keeps the question
-    /// out of the real history.
+    /// The <c>finally</c> is the part that did not exist. If the prefix rebuild threw, the body was
+    /// already folded, the prefix was stale, arming was still true and the token reading was
+    /// unchanged — so the very next turn tried to compact an already-folded body, and the cache
+    /// watchdog screamed "ПРЕФИКС ИЗМЕНИЛСЯ ВНЕ КОМПАКЦИИ" about a bug that was not there.
     /// </summary>
-    private async Task<string> SummariseAsync(ConversationState conv, IReadOnlyList<ToolDto>? tools,
+    public async Task<bool> CompactAsync(
+        AgentState state,
+        IReadOnlyList<ToolDto>? tools,
+        CompactionHooks hooks,
+        string roundStamp,
         CancellationToken ct)
     {
-        var messages = conv.Build();
-        messages.Add(ChatMessageDto.User(
-            "Твоя память переполняется, и старая часть разговора сейчас будет свёрнута. " +
-            "Сожми всё, что было выше, в не более чем 1500 символов: что произошло, что ты узнал " +
-            "о станции и об экипаже, что осталось незакрытым. Пиши по-русски, от первого лица, " +
-            "без вступлений и без вызова инструментов — только сам текст сводки."));
+        var conv = state.Conv;
+
+        var armedAtEntry = state.CompactionArmed;
+        var tokensAtEntry = conv.LastPromptTokens;
+        var hashAtEntry = conv.PrefixHash;
+        var promptAtEntry = conv.SystemPrompt;
+        var toolsJsonAtEntry = conv.ToolsJson;
+
+        var ctx = new CompactionContext
+        {
+            State = state,
+            Tools = tools,
+            Hooks = hooks,
+            RoundStamp = roundStamp,
+            Llm = _llm,
+            Options = _options,
+            Sawmill = _sawmill,
+        };
+
+        var committed = false;
 
         try
         {
-            // The SAME tools array as every other call — this is not optional.
-            //
-            // Sending null here looked harmless ("the summariser has nothing to do in the world"),
-            // but tool definitions are rendered into the system block by the chat template, so
-            // dropping them makes the prompt diverge at token zero. The first live run paid two
-            // full prefills for it — one for the summariser, one for the next real turn — and the
-            // prefix-cache watchdog reported 0% twice in a row. The summariser is told not to act
-            // in the prompt text instead.
-            var response = await _llm.ChatAsync(messages, tools, ct).ConfigureAwait(false);
-            var text = response.Content?.Trim();
+            foreach (var step in CompactionSteps.Ritual)
+            {
+                try
+                {
+                    if (!await step.RunAsync(ctx, ct).ConfigureAwait(false))
+                        return false;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Never swallowed, at any fatality. Cancellation is not "a step that failed";
+                    // it is the ritual not happening, and the body must be left untouched.
+                    throw;
+                }
+                catch (Exception e) when (!step.Fatal)
+                {
+                    _sawmill.Warning(
+                        $"шаг компакции '{step.Name}' не отработал: {e.GetType().Name}: {e.Message}");
+                }
+            }
 
-            if (!string.IsNullOrWhiteSpace(text))
-                return "СВОДКА ПРЕДЫДУЩИХ СОБЫТИЙ:\n" + text;
-
-            _sawmill.Warning("суммаризатор вернул пустой ответ");
+            committed = true;
+            return true;
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        finally
         {
-            // Everything except cancellation degrades to the honest placeholder below.
-            //
-            // Cancellation must NOT: it means the server is going down, and the caller is about to
-            // fold the body around whatever this returns and then persist the result. Catching it
-            // here turned "shut the server down during a compaction" into "permanently destroy the
-            // middle of the conversation and write the damage to disk". Letting it propagate leaves
-            // the body untouched and the snapshot intact.
-            _sawmill.Error($"суммаризация упала: {e.GetType().Name}: {e.Message}");
-        }
+            if (!committed)
+            {
+                // Arming exactly as it was: a half-ritual must not silently stop future compactions.
+                state.CompactionArmed = armedAtEntry;
 
-        // Losing the middle without a summary is the documented worst case of this design, so say
-        // so in the text itself rather than pretending the history was intact.
-        return "СВОДКА ПРЕДЫДУЩИХ СОБЫТИЙ:\n" +
-               "(не удалось составить сводку — часть истории потеряна, опирайся на наблюдения и память)";
+                // The token reading, so the next turn re-evaluates honestly instead of on a zero.
+                conv.LastPromptTokens = tokensAtEntry;
+
+                // Zone 0 byte-for-byte, if the rebuild got that far and then threw.
+                if (conv.PrefixHash != hashAtEntry)
+                    conv.SetPrefix(promptAtEntry, toolsJsonAtEntry);
+            }
+
+            // Tell the watchdog the truth about the prefix, whatever path we took. This is the one
+            // place that may do so: the old code reported only on success, so a throwing rebuild
+            // left the metrics expecting a hash that no longer existed.
+            if (conv.PrefixHash != hashAtEntry)
+            {
+                _cache.SetExpectedPrefix(conv.PrefixHash);
+                _cache.ExpectMiss = true;
+            }
+        }
     }
 }

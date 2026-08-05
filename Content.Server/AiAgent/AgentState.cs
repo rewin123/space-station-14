@@ -35,6 +35,19 @@ public sealed class AgentState
 
     public int ConsecutiveFailures { get; set; }
 
+    public int Compactions { get; set; }
+
+    /// <summary>
+    /// False until usage has fallen back below <c>ai.compact_low</c> — the hysteresis.
+    ///
+    /// It lived as a private field on the compactor, which meant the only way for a test to set up
+    /// the hysteresis case was <c>GetField(..., NonPublic | Instance)</c>. Reflection in a test is
+    /// the clearest possible sign that a piece of state is in the wrong class.
+    /// </summary>
+    public bool CompactionArmed { get; set; } = true;
+
+    public string? LastSummary { get; set; }
+
     /// <summary>
     /// One-line rendering of the laws as of the last turn, for spotting a rewrite.
     ///

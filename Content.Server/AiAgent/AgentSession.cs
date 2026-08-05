@@ -166,7 +166,7 @@ public sealed class AgentSession : IDisposable
         _sawmill = sawmill;
 
         Cache = new CacheMetrics(sawmill);
-        Compactor = new Compactor(llm, compaction, sawmill);
+        Compactor = new Compactor(llm, compaction, Cache, sawmill);
         Dispatcher = new ToolDispatcher(registry, sawmill);
         _turn = new TurnRunner(llm, registry, Dispatcher, queue, State, Cache, Journal, speak, sawmill);
     }
@@ -316,27 +316,31 @@ public sealed class AgentSession : IDisposable
         // body may be cut without orphaning a tool result from its parent call.
         var compacted = false;
 
-        if (Compactor.ShouldCompact(Conv))
+        if (Compactor.ShouldCompact(State))
         {
             Mode = AgentMode.Review;
             try
             {
+                var hooks = new CompactionHooks
+                {
+                    Announce = _announce,
+                    RebuildPrefix = _rebuildPrefix,
+                    Curate = _curate,
+                };
+
                 compacted = await Compactor
-                    .CompactAsync(Conv, _registry.WireSchemas(), _curate, _announce, _rebuildPrefix, ct)
+                    .CompactAsync(State, _registry.WireSchemas(), hooks, perception.RoundStamp, ct)
                     .ConfigureAwait(false);
 
                 if (compacted)
                 {
-                    Cache.SetExpectedPrefix(Conv.PrefixHash);
-                    Cache.ExpectMiss = true;
-
                     Journal.Write("compaction", new Dictionary<string, object?>
                     {
                         ["turn"] = Turns,
-                        ["n"] = Compactor.Compactions,
+                        ["n"] = State.Compactions,
                         ["messages_after"] = Conv.Body.Count,
                         ["prefix_hash"] = Conv.PrefixHash,
-                        ["summary_chars"] = Compactor.LastSummary?.Length ?? 0,
+                        ["summary_chars"] = State.LastSummary?.Length ?? 0,
                     });
                 }
             }

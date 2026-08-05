@@ -1,6 +1,8 @@
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System;
+using Content.Server.AiAgent;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using NUnit.Framework;
@@ -86,36 +88,61 @@ public sealed class ContextTests
 
     // --------------------------------------------------------------- compaction
 
-    private static Compactor MakeCompactor(ILlmClient llm, int high, int low, int keepTail) =>
-        new(llm, new CompactionOptions
+    private static Compactor MakeCompactor(ILlmClient llm, int high, int low, int keepTail)
+    {
+        var sawmill = new Robust.Shared.Log.LogManager().GetSawmill("test");
+        return new Compactor(llm, new CompactionOptions
         {
             High = () => high,
             Low = () => low,
             KeepTail = () => keepTail,
-        }, new Robust.Shared.Log.LogManager().GetSawmill("test"));
+        }, new CacheMetrics(sawmill), sawmill);
+    }
+
+    /// <summary>The three doors the ritual has outward, with sane no-ops for the ones under test.</summary>
+    private static CompactionHooks Hooks(
+        Func<string, Task> announce = null,
+        Func<Task> curate = null,
+        Func<(string, string)> prefix = null) =>
+        new()
+        {
+            Announce = announce ?? (_ => Task.CompletedTask),
+            RebuildPrefix = prefix ?? (() => ("СИСТЕМНЫЙ ПРОМПТ", "[]")),
+            Curate = curate,
+        };
+
+    /// <summary>A state wrapping a prepared conversation, since the ritual now takes the whole agent.</summary>
+    private static AgentState StateOf(ConversationState conv)
+    {
+        var state = new AgentState();
+        state.Conv.SetPrefix(conv.SystemPrompt, conv.ToolsJson);
+        state.Conv.RestoreBody(conv.Body, conv.VolatileTail, conv.CharsPerToken);
+        state.Conv.LastPromptTokens = conv.LastPromptTokens;
+        return state;
+    }
 
     [Test]
     public void ShouldCompact_HasHysteresis()
     {
-        var conv = Fresh();
+        var state = new AgentState();
         var compactor = MakeCompactor(new ScriptedLlmClient(), high: 1000, low: 500, keepTail: 100);
 
-        conv.LastPromptTokens = 1200;
-        Assert.That(compactor.ShouldCompact(conv), Is.True, "выше порога — должна сработать");
+        state.Conv.LastPromptTokens = 1200;
+        Assert.That(compactor.ShouldCompact(state), Is.True, "выше порога — должна сработать");
 
-        // Simulate having compacted: disarmed until usage falls back below the floor.
-        conv.LastPromptTokens = 1100;
-        typeof(Compactor).GetField("_armed", System.Reflection.BindingFlags.NonPublic
-                                             | System.Reflection.BindingFlags.Instance)!
-            .SetValue(compactor, false);
+        // Simulate having compacted: disarmed until usage falls back below the floor. This used to
+        // need GetField(NonPublic|Instance) — reflection in a test being the clearest possible sign
+        // that a piece of state was living in the wrong class.
+        state.Conv.LastPromptTokens = 1100;
+        state.CompactionArmed = false;
 
-        Assert.That(compactor.ShouldCompact(conv), Is.False,
+        Assert.That(compactor.ShouldCompact(state), Is.False,
             "без гистерезиса компакция срабатывала бы каждый ход у самого порога");
 
-        conv.LastPromptTokens = 400;
-        compactor.ShouldCompact(conv);            // re-arms
-        conv.LastPromptTokens = 1200;
-        Assert.That(compactor.ShouldCompact(conv), Is.True, "после спада должна снова взводиться");
+        state.Conv.LastPromptTokens = 400;
+        compactor.ShouldCompact(state);            // re-arms
+        state.Conv.LastPromptTokens = 1200;
+        Assert.That(compactor.ShouldCompact(state), Is.True, "после спада должна снова взводиться");
     }
 
     [Test]
@@ -131,7 +158,7 @@ public sealed class ContextTests
         }, 10, 9, 1, 0.1));
         conv.LastPromptTokens = 1000;
 
-        Assert.That(compactor.ShouldCompact(conv), Is.False,
+        Assert.That(compactor.ShouldCompact(StateOf(conv)), Is.False,
             "с открытым вызовом безопасной границы впереди нет");
     }
 
@@ -149,13 +176,12 @@ public sealed class ContextTests
         var compactor = MakeCompactor(llm, high: 1000, low: 500, keepTail: 200);
 
         var announced = (string)null;
-        var ok = await compactor.CompactAsync(
-            conv,
-            System.Array.Empty<ToolDto>(),
-            curate: null,
-            text => { announced = text; return Task.CompletedTask; },
-            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
-            CancellationToken.None);
+        var state = StateOf(conv);
+        var ok = await compactor.CompactAsync(state, System.Array.Empty<ToolDto>(),
+            Hooks(announce: text => { announced = text; return Task.CompletedTask; }),
+            "T+0:05:00", CancellationToken.None);
+
+        conv = state.Conv;
 
         Assert.Multiple(() =>
         {
@@ -165,7 +191,7 @@ public sealed class ContextTests
             Assert.That(conv.Body.First().Content, Does.Contain("СВОДКА"), "первым сообщением должна быть сводка");
             Assert.That(announced, Is.Not.Null, "ИИ обязан сказать экипажу, что чистит память");
             Assert.That(announced, Does.Contain("памяти"));
-            Assert.That(compactor.Compactions, Is.EqualTo(1));
+            Assert.That(state.Compactions, Is.EqualTo(1));
             Assert.That(conv.LastPromptTokens, Is.Zero,
                 "устаревшее значение не должно немедленно вызвать вторую компакцию");
         });
@@ -184,11 +210,12 @@ public sealed class ContextTests
         // than pretending the history is intact.
         var compactor = MakeCompactor(new ThrowingLlmClient(), high: 1000, low: 500, keepTail: 200);
 
-        var ok = await compactor.CompactAsync(conv, System.Array.Empty<ToolDto>(), null, _ => Task.CompletedTask,
-            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None);
+        var state = StateOf(conv);
+        var ok = await compactor.CompactAsync(state, System.Array.Empty<ToolDto>(), Hooks(),
+            "T+0:05:00", CancellationToken.None);
 
         Assert.That(ok, Is.True, "падение суммаризатора не должно ронять компакцию");
-        Assert.That(conv.Body.First().Content, Does.Contain("не удалось составить сводку"));
+        Assert.That(state.Conv.Body.First().Content, Does.Contain("не удалось составить сводку"));
     }
 
     [Test]
@@ -212,8 +239,7 @@ public sealed class ContextTests
 
         var tools = new[] { new ToolDto { Function = new ToolFunctionDto { Name = "look" } } };
 
-        await compactor.CompactAsync(conv, tools, null, _ => Task.CompletedTask,
-            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None);
+        await compactor.CompactAsync(StateOf(conv), tools, Hooks(), "T+0:05:00", CancellationToken.None);
 
         Assert.That(llm.LastTools, Is.Not.Null,
             "суммаризатор ушёл без инструментов — это рвёт префикс с нулевого токена");
@@ -238,13 +264,10 @@ public sealed class ContextTests
         var llm = new ScriptedLlmClient().Then("сводка");
         var compactor = MakeCompactor(llm, high: 1000, low: 500, keepTail: 200);
 
-        await compactor.CompactAsync(
-            conv,
-            System.Array.Empty<ToolDto>(),
-            curate: () => { order.Add("curator"); return Task.CompletedTask; },
-            _ => { order.Add("announce"); return Task.CompletedTask; },
-            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
-            CancellationToken.None);
+        await compactor.CompactAsync(StateOf(conv), System.Array.Empty<ToolDto>(),
+            Hooks(announce: _ => { order.Add("announce"); return Task.CompletedTask; },
+                  curate: () => { order.Add("curator"); return Task.CompletedTask; }),
+            "T+0:05:00", CancellationToken.None);
 
         Assert.That(order, Is.EqualTo(new[] { "announce", "curator" }),
             "объявление обязано идти ДО куратора — оно объясняет паузу, которую куратор и создаёт");
@@ -263,13 +286,10 @@ public sealed class ContextTests
         var curated = false;
         var compactor = MakeCompactor(new ScriptedLlmClient(), high: 1000, low: 500, keepTail: 100_000);
 
-        var ok = await compactor.CompactAsync(
-            conv,
-            System.Array.Empty<ToolDto>(),
-            curate: () => { curated = true; return Task.CompletedTask; },
-            _ => { announced = true; return Task.CompletedTask; },
-            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"),
-            CancellationToken.None);
+        var ok = await compactor.CompactAsync(StateOf(conv), System.Array.Empty<ToolDto>(),
+            Hooks(announce: _ => { announced = true; return Task.CompletedTask; },
+                  curate: () => { curated = true; return Task.CompletedTask; }),
+            "T+0:05:00", CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -292,11 +312,133 @@ public sealed class ContextTests
 
         var compactor = MakeCompactor(new ScriptedLlmClient(), high: 1000, low: 500, keepTail: 100_000);
 
-        compactor.CompactAsync(conv, System.Array.Empty<ToolDto>(), null, _ => Task.CompletedTask,
-            () => ("СИСТЕМНЫЙ ПРОМПТ", "[]"), CancellationToken.None).GetAwaiter().GetResult();
+        var state = StateOf(conv);
+        compactor.CompactAsync(state, System.Array.Empty<ToolDto>(), Hooks(), "T+0:05:00",
+            CancellationToken.None).GetAwaiter().GetResult();
 
-        Assert.That(compactor.ShouldCompact(conv), Is.True,
+        Assert.That(compactor.ShouldCompact(state), Is.True,
             "после пропуска из-за отсутствия границы компактор обязан остаться взведённым");
+    }
+
+    [Test]
+    public void Compact_RitualOrderIsTheArray()
+    {
+        // The order used to be the order of statements in an eighty-eight-line method with the
+        // steps marked by comment banners, and only one of its edges had a test. Nothing but that
+        // layout stopped somebody moving the announcement below the curator — which is exactly the
+        // bug an earlier commit had to fix.
+        Assert.That(CompactionSteps.Ritual.Select(s => s.Name),
+            Is.EqualTo(new[] { "feasibility", "announce", "curator", "summary", "fold", "prefix", "commit" }));
+    }
+
+    [Test]
+    public void Compact_OnlyTheOutwardStepsMayFail()
+    {
+        // Announcing, reviewing and summarising may fail — the context still has to shrink, told or
+        // untold, learned lesson or not. Folding and rebuilding may not: a failure there leaves the
+        // conversation half-rewritten.
+        var byName = CompactionSteps.Ritual.ToDictionary(s => s.Name, s => s.Fatal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(byName["announce"], Is.False);
+            Assert.That(byName["curator"], Is.False);
+            Assert.That(byName["summary"], Is.False);
+            Assert.That(byName["fold"], Is.True);
+            Assert.That(byName["prefix"], Is.True);
+            Assert.That(byName["commit"], Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Compact_FailedPrefixRebuild_LeavesEverythingConsistent()
+    {
+        // The failure mode the finally exists for. The body was already folded, the prefix stale,
+        // arming still true and the token reading unchanged — so the very next turn tried to compact
+        // an already-folded body, and the cache watchdog screamed about a prefix change that our own
+        // half-finished ritual had caused.
+        var conv = Fresh();
+        for (var i = 0; i < 20; i++)
+            AddTurn(conv, $"наблюдение {i} с достаточным количеством текста", "look");
+
+        conv.LastPromptTokens = 5000;
+
+        var state = StateOf(conv);
+        var hashBefore = state.Conv.PrefixHash;
+
+        var compactor = MakeCompactor(new ScriptedLlmClient().Then("сводка"),
+            high: 1000, low: 500, keepTail: 200);
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await compactor.CompactAsync(state, System.Array.Empty<ToolDto>(),
+                Hooks(prefix: () => throw new InvalidOperationException("файл памяти не читается")),
+                "T+0:05:00", CancellationToken.None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.CompactionArmed, Is.True,
+                "полуритуал не должен молча отключать будущие компакции");
+            Assert.That(state.Conv.LastPromptTokens, Is.EqualTo(5000),
+                "показание должно вернуться, чтобы следующий ход оценивал честно, а не по нулю");
+            Assert.That(state.Conv.PrefixHash, Is.EqualTo(hashBefore),
+                "зона 0 обязана откатиться байт в байт");
+            Assert.That(state.Compactions, Is.Zero);
+        });
+
+        await Task.CompletedTask;
+    }
+
+    [Test]
+    public void Compact_CancelledDuringSummary_LeavesTheBodyIntact()
+    {
+        // Cancellation means the server is going down, and the fold step is about to replace the
+        // body with whatever the summariser produced and then persist it. Catching it turned "shut
+        // the server down during a compaction" into "permanently destroy the middle of the
+        // conversation and write the damage to disk".
+        var conv = Fresh();
+        for (var i = 0; i < 20; i++)
+            AddTurn(conv, $"наблюдение {i} с достаточным количеством текста", "look");
+
+        conv.LastPromptTokens = 5000;
+
+        var state = StateOf(conv);
+        var bodyBefore = state.Conv.Body.Count;
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var compactor = MakeCompactor(new ScriptedLlmClient().Then("сводка"),
+            high: 1000, low: 500, keepTail: 200);
+
+        Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await compactor.CompactAsync(state, System.Array.Empty<ToolDto>(), Hooks(),
+                "T+0:05:00", cts.Token));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.Conv.Body.Count, Is.EqualTo(bodyBefore), "тело не должно быть свёрнуто");
+            Assert.That(state.Conv.Body.First().Content, Does.Not.Contain("СВОДКА"));
+            Assert.That(state.Compactions, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task Compact_NoteCarriesTheRealRoundTime()
+    {
+        // The tail used to say "История сжата в T+0:00:00" on every compaction, because the
+        // compactor reached into the perception layer for a clock it did not have and formatted a
+        // constant zero. The model reads that as a fact.
+        var conv = Fresh();
+        for (var i = 0; i < 20; i++)
+            AddTurn(conv, $"наблюдение {i} с достаточным количеством текста", "look");
+
+        conv.LastPromptTokens = 5000;
+
+        var state = StateOf(conv);
+        await MakeCompactor(new ScriptedLlmClient().Then("сводка"), high: 1000, low: 500, keepTail: 200)
+            .CompactAsync(state, System.Array.Empty<ToolDto>(), Hooks(), "T+1:23:45", CancellationToken.None);
+
+        Assert.That(state.Conv.VolatileTail, Does.Contain("T+1:23:45"));
     }
 
     // ----------------------------------------------------------- prefix watchdog

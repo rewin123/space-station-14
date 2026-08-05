@@ -355,7 +355,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // this is the last moment the conversation is still coherent.
         try
         {
-            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.Compactor.Compactions, CurrentRoundId());
+            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.State.Compactions, CurrentRoundId());
         }
         catch (Exception e)
         {
@@ -744,7 +744,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     public void SaveSessions()
     {
         foreach (var (brain, session) in _sessions)
-            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.Compactor.Compactions, CurrentRoundId());
+            SessionStoreFor().Save(SessionIdFor(brain), session.Conv, session.State.Compactions, CurrentRoundId());
     }
 
     private float _sinceAutoSave;

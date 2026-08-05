@@ -49,6 +49,11 @@ public sealed class ScriptedLlmClient : ILlmClient
         IReadOnlyList<ToolDto> tools,
         CancellationToken ct)
     {
+        // A real client honours the token, and a stand-in that does not hides exactly the class of
+        // bug this suite is here to catch — most concretely a compaction that keeps folding the
+        // conversation while the server is going down.
+        ct.ThrowIfCancellationRequested();
+
         Calls++;
         SeenPrompts.Add(new List<ChatMessageDto>(messages));
 
