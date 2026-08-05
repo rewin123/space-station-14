@@ -111,6 +111,17 @@ public sealed class AiCVars
 
     // ----------------------------------------------------------- diagnostics
 
+    /// <summary>
+    /// How many rows a single look may return.
+    ///
+    /// Generous on purpose: the model's context is large, and blindness costs far more than
+    /// verbosity — an agent that lists sixty of four hundred things tells the crew "there is no
+    /// SMES here" with complete confidence. Rows come out nearest-first, so a cut removes the far
+    /// end of the room, and the answer says out loud that it was cut.
+    /// </summary>
+    public static readonly CVarDef<int> LookLimit =
+        CVarDef.Create("ai.look_limit", 300, CVar.SERVERONLY);
+
     /// <summary>Budget for a single marshalled main-thread call; over it we log a warning.</summary>
     public static readonly CVarDef<float> MainThreadBudgetMs =
         CVarDef.Create("ai.mainthread_budget_ms", 5f, CVar.SERVERONLY);

@@ -199,7 +199,43 @@ public sealed partial class StationAiAgentSystem
         if (HasComp<StationAiWhitelistComponent>(uid))
             return "device";
 
-        return "thing";
+        // Everything below this line is scenery the AI cannot operate — and it used to be dropped
+        // from look entirely. That made the agent blind to exactly what the crew asks about: it
+        // told an engineer standing beside the SMES bank that no such device was in view. A player
+        // sees the whole room; withholding the uncontrollable half is not parity, it is a handicap.
+        if (HasComp<Content.Server.Power.Components.PowerNetworkBatteryComponent>(uid)
+            || HasComp<Content.Shared.Power.Components.BatteryComponent>(uid))
+            return "power";
+        if (HasComp<Content.Shared.Atmos.Piping.Unary.Components.GasCanisterComponent>(uid))
+            return "canister";
+        if (HasComp<Content.Server.Construction.Components.ComputerComponent>(uid))
+            return "computer";
+        if (HasComp<Content.Shared.Storage.Components.EntityStorageComponent>(uid))
+            return "locker";
+
+        return "obj";
+    }
+
+    /// <summary>
+    /// Would a player looking at this tile see the thing at all?
+    ///
+    /// Handing the model literally every entity in the broadphase is not "what a player sees": it
+    /// is also the cable under the floor, the pipe beneath it and the spare pen inside someone's
+    /// backpack. Those are invisible on screen, and listing them buries the room the crew is
+    /// actually asking about.
+    /// </summary>
+    private bool IsOnScreen(EntityUid uid)
+    {
+        // Under the plating: cables, pipes, disposals. Hidden from players too.
+        if (HasComp<Content.Shared.SubFloor.SubFloorHideComponent>(uid))
+            return false;
+
+        // Inside a bag, a locker or a machine — including the AI's own brain in its core.
+        if (_container.IsEntityInContainer(uid))
+            return false;
+
+        // Markers, spawn points and other invisible bookkeeping carry no name worth reporting.
+        return !string.IsNullOrWhiteSpace(Name(uid));
     }
 
     /// <summary>

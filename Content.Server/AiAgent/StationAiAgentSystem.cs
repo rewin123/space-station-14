@@ -68,6 +68,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private SiliconLawSystem _laws = default!;
     [Dependency] private SharedStationSystem _station = default!;
     [Dependency] private Content.Server.Pinpointer.NavMapSystem _navMap = default!;
+    [Dependency] private Content.Shared.Power.EntitySystems.SharedBatterySystem _battery = default!;
+    [Dependency] private SharedContainerSystem _container = default!;
 
     private ISawmill _sawmill = default!;
     private MainThreadDispatcher _dispatcher = default!;

@@ -46,7 +46,7 @@ public sealed partial class StationAiAgentSystem
             var interesting = new List<EntityUid>();
             foreach (var uid in seen)
             {
-                if (KindOf(uid) == "thing")
+                if (!IsOnScreen(uid))
                     continue;
 
                 s.Handles.GetOrCreate(uid, KindOf(uid));
@@ -104,11 +104,26 @@ public sealed partial class StationAiAgentSystem
                 ? a.Dist.CompareTo(b.Dist)
                 : string.CompareOrdinal(a.Text, b.Text));
 
+            // Nearest first, so a cut always removes the far half of the room rather than something
+            // standing next to the person who asked.
+            var limit = _cfg.GetCVar(AiCVars.LookLimit);
+
             var result = new Dictionary<string, object?>
             {
                 ["count"] = rows.Count,
-                ["seen"] = rows.Select(r => r.Text).Take(60).ToList(),
+                ["seen"] = rows.Select(r => r.Text).Take(limit).ToList(),
             };
+
+            // Silent truncation is the worst of both worlds: the model reports "there is no SMES
+            // here" with total confidence about a list that was cut before the SMES. If the list is
+            // short, say so out loud and say what to do about it.
+            if (rows.Count > limit)
+            {
+                result["обрезано"] = rows.Count - limit;
+                result["как_увидеть_остальное"] =
+                    "список обрезан по расстоянию, дальнее не показано. Сузь обзор (expand поменьше), " +
+                    "либо смотри от человека: look {\"near\":\"<имя>\"}, либо переведи глаз ближе к цели";
+            }
 
             if (anchor != null)
             {
@@ -349,6 +364,7 @@ public sealed partial class StationAiAgentSystem
                 d["mob_state"] = mobState.ToString();
             }
 
+            AddReadableState(uid, d);
             AddAccessInfo(s, args, uid, d);
 
             // Tell the model what it may actually do here, so it does not have to probe.
@@ -356,6 +372,37 @@ public sealed partial class StationAiAgentSystem
 
             return ToolResult.Success(d);
         }, ct);
+    }
+
+    /// <summary>
+    /// State the AI can read off a thing it cannot operate.
+    ///
+    /// Looking and controlling are different rights, and the gate chain only ever governed the
+    /// second one. A SMES bank wears its charge on its face — five indicator lamps, readable across
+    /// the room — and a gas canister has a pressure gauge on the side. A player standing at a camera
+    /// reads both without touching anything, so refusing to report them is a handicap, not parity.
+    ///
+    /// Deliberately coarse. The AI has no power-monitoring console in its AiHeld bundle (radar,
+    /// crew monitor, records, laws and comms — that is the whole list), so it has no telemetry
+    /// feed: it is reading lamps. Rounding to the steps the sprite actually shows keeps the answer
+    /// honest instead of inventing three decimal places the role could never see.
+    /// </summary>
+    private void AddReadableState(EntityUid uid, Dictionary<string, object?> d)
+    {
+        if (TryComp<Content.Shared.Power.Components.BatteryComponent>(uid, out var battery)
+            && battery.MaxCharge > 0)
+        {
+            var fraction = _battery.GetCharge((uid, battery)) / battery.MaxCharge;
+            var steps = Math.Clamp((int)Math.Round(fraction * 5f), 0, 5);
+
+            d["заряд"] = string.Create(CultureInfo.InvariantCulture, $"{steps * 20}% (по индикатору)");
+        }
+
+        if (TryComp<Content.Shared.Atmos.Piping.Unary.Components.GasCanisterComponent>(uid, out var canister))
+        {
+            d["давление"] = string.Create(CultureInfo.InvariantCulture,
+                $"{canister.Air.Pressure:F0} кПа (по манометру)");
+        }
     }
 
     /// <summary>
