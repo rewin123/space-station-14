@@ -134,7 +134,9 @@ public sealed class AgentState
         Compactions = Compactions,
         CharsPerToken = Conv.CharsPerToken,
         VolatileTail = Conv.VolatileTail,
-        Body = new List<ChatMessageDto>(Conv.Body),
+        // Snapshot(), not a copy of the live list: this runs on the main thread, from the periodic
+        // autosave, while the agent thread is appending.
+        Body = Conv.Snapshot(),
 
         AgentTurns = Turns,
         Mode = Mode,

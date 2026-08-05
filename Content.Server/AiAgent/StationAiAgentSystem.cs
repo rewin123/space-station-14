@@ -288,6 +288,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _cfg.GetCVar(AiCVars.LogTranscript)
                 ? new Journal(System.IO.Path.Combine(DataDir(), "logs"), _sawmill)
                 : Journal.Disabled,
+            // Null until the debug bus is wired up; the conversation then costs one null check.
+            null,
             _sawmill);
 
         self = session;

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Server.AiAgent.Bus;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Perception;
@@ -161,6 +162,7 @@ public sealed class AgentSession : IDisposable
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CompactionOptions compaction,
         Journal journal,
+        IAgentEventSink? sink,
         ISawmill sawmill)
     {
         Brain = brain;
@@ -180,6 +182,13 @@ public sealed class AgentSession : IDisposable
         Compactor = new Compactor(llm, compaction, Cache, sawmill);
         Dispatcher = new ToolDispatcher(registry, sawmill);
         _turn = new TurnRunner(llm, registry, Dispatcher, queue, State, Cache, Journal, speak, sawmill);
+
+        // Here rather than in the field initializer: the conversation is built before this
+        // constructor body runs (AgentState's field initializer builds it), so it cannot take the
+        // sink as a constructor parameter the way every other collaborator here does. Attaching
+        // before Start() means the loop's very first append is already reported.
+        if (sink != null)
+            Conv.AttachSink(sink);
     }
 
     public void Start()

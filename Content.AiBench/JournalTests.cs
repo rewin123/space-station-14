@@ -67,6 +67,7 @@ public sealed class JournalTests
                 KeepTail = () => 1000,
             },
             new Journal(logDir, Sawmill),
+            null,
             Sawmill);
     }
 
