@@ -41,9 +41,9 @@ public sealed class SessionTests
         try
         {
             var conv = Populated();
-            store.Save("current", conv, compactions: 2);
+            store.Save("current", conv, compactions: 2, roundId: 7);
 
-            var loaded = store.Load("current", conv.PrefixHash);
+            var loaded = store.Load("current", conv.PrefixHash, currentRoundId: 7);
 
             Assert.That(loaded, Is.Not.Null, "снапшот должен читаться");
             Assert.That(loaded!.Body.Count, Is.EqualTo(conv.Body.Count));
@@ -63,13 +63,40 @@ public sealed class SessionTests
         try
         {
             var conv = Populated("СТАРЫЙ ПРОМПТ");
-            store.Save("current", conv, compactions: 0);
+            store.Save("current", conv, compactions: 0, roundId: 7);
 
             var other = Populated("НОВЫЙ ПРОМПТ");
-            var loaded = store.Load("current", other.PrefixHash);
+            var loaded = store.Load("current", other.PrefixHash, currentRoundId: 7);
 
             Assert.That(loaded, Is.Null,
                 "тело, записанное под другой префикс, воспроизводить нельзя — оно писалось не для него");
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public void Load_RefusesASnapshotFromAnotherRound()
+    {
+        // The prefix hash does NOT discriminate rounds — it is byte-stable across a restart by
+        // design, which is the whole point of it. So without the round id the snapshot written at
+        // the end of one shift was restored at the start of the next, and the AI woke up
+        // mid-conversation about people who were no longer on board.
+        var (store, dir) = MakeStore();
+        try
+        {
+            var conv = Populated();
+            store.Save("current", conv, compactions: 0, roundId: 41);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(store.Load("current", conv.PrefixHash, currentRoundId: 42), Is.Null,
+                    "новая смена — новый разговор");
+                Assert.That(store.Load("current", conv.PrefixHash, currentRoundId: 41), Is.Not.Null,
+                    "но перезапуск посреди той же смены обязан восстановиться — ради этого всё и писалось");
+            });
         }
         finally
         {
@@ -86,7 +113,7 @@ public sealed class SessionTests
             Directory.CreateDirectory(Path.Combine(dir, "sessions"));
             File.WriteAllText(Path.Combine(dir, "sessions", "current.json"), "{ это не json");
 
-            Assert.That(store.Load("current", "ЛЮБОЙ"), Is.Null,
+            Assert.That(store.Load("current", "ЛЮБОЙ", currentRoundId: 7), Is.Null,
                 "битый снапшот должен молча игнорироваться, а не ронять запуск агента");
         }
         finally
@@ -110,8 +137,8 @@ public sealed class SessionTests
                 new ToolCallDto { Id = "call_1", Function = new FunctionCallDto { Name = "look", Arguments = "{}" } },
             }, 100, 90, 5, 0.1));
 
-            store.Save("current", conv, 0);
-            var loaded = store.Load("current", conv.PrefixHash);
+            store.Save("current", conv, 0, roundId: 7);
+            var loaded = store.Load("current", conv.PrefixHash, currentRoundId: 7);
             Assert.That(loaded, Is.Not.Null);
 
             var restored = new ConversationState();

@@ -12,6 +12,16 @@ public sealed class SessionSnapshot
     [JsonPropertyName("prefix_hash")]
     public string PrefixHash { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Which round this conversation belongs to.
+    ///
+    /// Zero on a file written before this field existed; such a snapshot is dropped rather than
+    /// guessed at. The id comes from the database, so it survives a server restart and increments
+    /// on a new round.
+    /// </summary>
+    [JsonPropertyName("round_id")]
+    public int RoundId { get; set; }
+
     [JsonPropertyName("turns")]
     public int Turns { get; set; }
 
@@ -36,6 +46,12 @@ public sealed class SessionSnapshot
 /// while everything else moved on. The stored hash is compared instead — a mismatch means the
 /// prompt changed under us and the body is dropped rather than replayed against a prefix it was
 /// never written for.
+///
+/// <b>Mid-round</b> is the whole point, and it used to be the one thing this did not do. The hash
+/// alone does not discriminate rounds — it is byte-stable across a restart by design — so a
+/// snapshot written at the end of one round was restored at the start of the next, and the AI woke
+/// up mid-conversation about a shift that no longer existed, naming crew who were not on board.
+/// The round id is what makes the guard mean what the paragraph above claims.
 /// </summary>
 public sealed class SessionStore
 {
@@ -50,7 +66,7 @@ public sealed class SessionStore
 
     private string PathFor(string id) => Path.Combine(_dir, $"{id}.json");
 
-    public void Save(string id, ConversationState conv, int compactions)
+    public void Save(string id, ConversationState conv, int compactions, int roundId)
     {
         try
         {
@@ -59,6 +75,7 @@ public sealed class SessionStore
             var snapshot = new SessionSnapshot
             {
                 PrefixHash = conv.PrefixHash,
+                RoundId = roundId,
                 Turns = conv.TurnCount,
                 Compactions = compactions,
                 CharsPerToken = conv.CharsPerToken,
@@ -84,7 +101,7 @@ public sealed class SessionStore
     /// Restore a body, or null. Returns null — rather than throwing — for every failure mode:
     /// a missing file, a corrupt file, or a prefix that no longer matches.
     /// </summary>
-    public SessionSnapshot? Load(string id, string currentPrefixHash)
+    public SessionSnapshot? Load(string id, string currentPrefixHash, int currentRoundId)
     {
         var path = PathFor(id);
 
@@ -104,6 +121,13 @@ public sealed class SessionStore
                 return null;
             }
 
+            if (snapshot.RoundId != currentRoundId)
+            {
+                _sawmill.Info(
+                    $"снапшот сессии отброшен: это другой раунд ({snapshot.RoundId} -> {currentRoundId})");
+                return null;
+            }
+
             _sawmill.Info($"восстановлена сессия: {snapshot.Body.Count} сообщений, {snapshot.Turns} ходов");
             return snapshot;
         }
@@ -111,19 +135,6 @@ public sealed class SessionStore
         {
             _sawmill.Warning($"снапшот сессии не читается, начинаю с чистого листа: {e.Message}");
             return null;
-        }
-    }
-
-    public void Delete(string id)
-    {
-        try
-        {
-            if (File.Exists(PathFor(id)))
-                File.Delete(PathFor(id));
-        }
-        catch (Exception e)
-        {
-            _sawmill.Warning($"не удалось удалить снапшот: {e.Message}");
         }
     }
 }

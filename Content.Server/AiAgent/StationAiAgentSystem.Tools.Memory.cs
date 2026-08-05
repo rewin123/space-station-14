@@ -19,28 +19,33 @@ public sealed partial class StationAiAgentSystem
     private MemoryStore? _memory;
     private SkillStore? _skills;
 
-    public MemoryStore Memory => _memory ??= LoadMemory();
-    public SkillStore Skills => _skills ??= LoadSkills();
+    /// <summary>
+    /// Both stores are built eagerly, at <c>Initialize</c>, rather than on first touch.
+    ///
+    /// Lazy construction was reachable from both the agent thread and the main thread, so two racing
+    /// first touches could build two stores and quietly drop whatever the loser wrote. There is no
+    /// upside to deferring: the constructor is a path join and a directory read.
+    /// </summary>
+    public MemoryStore Memory => _memory ?? throw new InvalidOperationException("память ещё не загружена");
+    public SkillStore Skills => _skills ?? throw new InvalidOperationException("скиллы ещё не загружены");
 
-    private MemoryStore LoadMemory()
-    {
-        var store = new MemoryStore(DataDir(), _sawmill);
-        store.LoadFromDisk();
-        return store;
-    }
-
-    private SkillStore LoadSkills()
-    {
-        var store = new SkillStore(DataDir(), _sawmill);
-        store.LoadFromDisk();
-        return store;
-    }
-
-    /// <summary>Drop the cached stores so the next access reloads from disk. Used by benchmarks.</summary>
+    /// <summary>(Re)build both stores against the current <c>ai.data_dir</c>. Main thread only.</summary>
     public void ReloadAgentFiles()
     {
-        _memory = null;
-        _skills = null;
+        var dir = DataDir();
+
+        var memory = new MemoryStore(dir, _sawmill);
+        memory.LoadFromDisk();
+
+        var skills = new SkillStore(dir, _sawmill);
+        skills.LoadFromDisk();
+
+        _memory = memory;
+        _skills = skills;
+
+        // The snapshot store is keyed off the same directory; a benchmark that repoints ai.data_dir
+        // must not keep writing into the previous scenario's scratch folder.
+        _sessionStore = null;
     }
 
     private void RegisterMemoryTools(AgentSession s, AiToolRegistry r)

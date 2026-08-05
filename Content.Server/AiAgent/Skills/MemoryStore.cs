@@ -47,6 +47,17 @@ public sealed class MemoryStore
     private readonly Dictionary<MemoryTarget, string> _snapshot = new();
 
     /// <summary>
+    /// This store is reached from two threads and nothing else in the fork is.
+    ///
+    /// The memory tools run on the agent thread (they touch files, not entities, so they
+    /// deliberately do not marshal), <see cref="RefreshSnapshot"/> is called from the compaction
+    /// ritual on that same thread — and <see cref="Snapshot"/> is read from the main thread when a
+    /// session starts or the console prints status. Uncontended in practice; the lock costs nothing
+    /// and removes a "Collection was modified" that would only ever appear under load.
+    /// </summary>
+    private readonly object _sync = new();
+
+    /// <summary>
     /// Limits are in CHARACTERS, not tokens: characters are model-independent, and the agent can
     /// count them itself when asked to consolidate.
     /// </summary>
@@ -67,15 +78,26 @@ public sealed class MemoryStore
         _sawmill = sawmill;
     }
 
-    public void ResetTurnCounters() => _consolidationFailures = 0;
+    public void ResetTurnCounters()
+    {
+        lock (_sync)
+            _consolidationFailures = 0;
+    }
 
     private string PathFor(MemoryTarget t) =>
         Path.Combine(_dir, t == MemoryTarget.Memory ? "MEMORY.md" : "CREW.md");
 
     private int LimitFor(MemoryTarget t) => t == MemoryTarget.Memory ? MemoryLimit : CrewLimit;
 
-    public IReadOnlyList<string> Entries(MemoryTarget t) =>
-        _live.TryGetValue(t, out var list) ? list : Array.Empty<string>();
+    /// <summary>A copy: the live list is mutated under <see cref="_sync"/> and must not escape it.</summary>
+    public IReadOnlyList<string> Entries(MemoryTarget t)
+    {
+        lock (_sync)
+            return EntriesLocked(t);
+    }
+
+    private IReadOnlyList<string> EntriesLocked(MemoryTarget t) =>
+        _live.TryGetValue(t, out var list) ? list.ToList() : Array.Empty<string>();
 
     private List<string> Live(MemoryTarget t) => _live.TryGetValue(t, out var l) ? l : _live[t] = new List<string>();
 
@@ -85,10 +107,13 @@ public sealed class MemoryStore
 
     public void LoadFromDisk()
     {
-        foreach (var target in new[] { MemoryTarget.Memory, MemoryTarget.Crew })
+        lock (_sync)
         {
-            _live[target] = ReadFile(PathFor(target));
-            _snapshot[target] = RenderBlock(target);
+            foreach (var target in new[] { MemoryTarget.Memory, MemoryTarget.Crew })
+            {
+                _live[target] = ReadFile(PathFor(target));
+                _snapshot[target] = RenderBlock(target);
+            }
         }
     }
 
@@ -116,7 +141,16 @@ public sealed class MemoryStore
         }
     }
 
-    private void Save(MemoryTarget target)
+    /// <summary>
+    /// Write the live entries out. Returns false — and says why — rather than swallowing the error.
+    ///
+    /// Swallowing it is the worst available failure mode for this particular store. The tool would
+    /// answer <c>{"ok":true,"result":"записано"}</c>, the curator would take that as done and never
+    /// retry, and the lesson would vanish at the next reload. A self-evolving memory that confidently
+    /// loses what it learned is worse than one that admits it could not write. Every caller rolls the
+    /// in-memory edit back on failure, so live state and disk never disagree.
+    /// </summary>
+    private bool TrySave(MemoryTarget target, out string error)
     {
         try
         {
@@ -126,23 +160,35 @@ public sealed class MemoryStore
 
             File.WriteAllText(tmp, string.Join(Delimiter, Live(target)));
             File.Move(tmp, path, overwrite: true);
+
+            error = string.Empty;
+            return true;
         }
         catch (Exception e)
         {
-            _sawmill.Error($"память не сохранена: {e.Message}");
+            error = $"{e.GetType().Name}: {e.Message}";
+            _sawmill.Error($"память не сохранена: {error}");
+            return false;
         }
     }
 
     // ------------------------------------------------------------------ snapshot
 
     /// <summary>The frozen text for zone 0. Never changes between rebuilds.</summary>
-    public string Snapshot(MemoryTarget t) => _snapshot.GetValueOrDefault(t, string.Empty);
+    public string Snapshot(MemoryTarget t)
+    {
+        lock (_sync)
+            return _snapshot.GetValueOrDefault(t, string.Empty);
+    }
 
     /// <summary>Catch the snapshot up to the live state. Called only at a prefix rebuild.</summary>
     public void RefreshSnapshot()
     {
-        foreach (var target in new[] { MemoryTarget.Memory, MemoryTarget.Crew })
-            _snapshot[target] = RenderBlock(target);
+        lock (_sync)
+        {
+            foreach (var target in new[] { MemoryTarget.Memory, MemoryTarget.Crew })
+                _snapshot[target] = RenderBlock(target);
+        }
     }
 
     /// <summary>
@@ -151,7 +197,7 @@ public sealed class MemoryStore
     /// </summary>
     private string RenderBlock(MemoryTarget target)
     {
-        var entries = Entries(target);
+        var entries = EntriesLocked(target);
         if (entries.Count == 0)
             return string.Empty;
 
@@ -176,23 +222,32 @@ public sealed class MemoryStore
         if (content.Length == 0)
             return new MemoryResult(false, "пустую запись добавить нельзя");
 
-        var entries = Live(target);
+        lock (_sync)
+        {
+            var entries = Live(target);
 
-        if (entries.Any(e => e == content))
-            return new MemoryResult(true, "такая запись уже есть");
+            if (entries.Any(e => e == content))
+                return new MemoryResult(true, "такая запись уже есть");
 
-        var limit = LimitFor(target);
-        var candidate = entries.Append(content);
-        var newTotal = Length(candidate);
+            var limit = LimitFor(target);
+            var candidate = entries.Append(content);
+            var newTotal = Length(candidate);
 
-        if (newTotal > limit)
-            return ConsolidationFailure(target,
-                $"память заполнена: {newTotal}/{limit} символов. Сократи запись или удали устаревшие " +
-                "через memory(action='remove'), и повтори — всё в этом же ходу.");
+            if (newTotal > limit)
+                return ConsolidationFailure(target,
+                    $"память заполнена: {newTotal}/{limit} символов. Сократи запись или удали устаревшие " +
+                    "через memory(action='remove'), и повтори — всё в этом же ходу.");
 
-        entries.Add(content);
-        Save(target);
-        return Success(target, "записано");
+            entries.Add(content);
+
+            if (!TrySave(target, out var error))
+            {
+                entries.RemoveAt(entries.Count - 1);
+                return NotWritten(target, error);
+            }
+
+            return Success(target, "записано");
+        }
     }
 
     /// <summary>
@@ -212,40 +267,50 @@ public sealed class MemoryStore
         if (newContent.Length == 0)
             return new MemoryResult(false, "пустая замена. Чтобы удалить запись, используй action='remove'");
 
-        var entries = Live(target);
-        var matches = entries.Select((e, i) => (Entry: e, Index: i))
-            .Where(x => x.Entry.Contains(oldText, StringComparison.Ordinal))
-            .ToList();
+        lock (_sync)
+        {
+            var entries = Live(target);
+            var matches = entries.Select((e, i) => (Entry: e, Index: i))
+                .Where(x => x.Entry.Contains(oldText, StringComparison.Ordinal))
+                .ToList();
 
-        if (matches.Count == 0)
-            return ConsolidationFailure(target,
-                $"ни одна запись не содержит '{Preview(oldText)}'. Ты помнишь текст неточно — " +
-                "посмотри список ниже и скопируй фрагмент дословно.");
+            if (matches.Count == 0)
+                return ConsolidationFailure(target,
+                    $"ни одна запись не содержит '{Preview(oldText)}'. Ты помнишь текст неточно — " +
+                    "посмотри список ниже и скопируй фрагмент дословно.");
 
-        if (matches.Select(m => m.Entry).Distinct().Count() > 1)
-            return new MemoryResult(false,
-                $"фрагмент '{Preview(oldText)}' встречается в нескольких разных записях — возьми подлиннее",
-                matches.Select(m => Preview(m.Entry)).ToList());
+            if (matches.Select(m => m.Entry).Distinct().Count() > 1)
+                return new MemoryResult(false,
+                    $"фрагмент '{Preview(oldText)}' встречается в нескольких разных записях — возьми подлиннее",
+                    matches.Select(m => Preview(m.Entry)).ToList());
 
-        var idx = matches[0].Index;
-        var limit = LimitFor(target);
+            var idx = matches[0].Index;
+            var limit = LimitFor(target);
 
-        var test = entries.ToList();
-        test[idx] = newContent;
-        var newTotal = Length(test);
+            var test = entries.ToList();
+            test[idx] = newContent;
+            var newTotal = Length(test);
 
-        // Shrinking is always allowed, even while still over the limit — otherwise an overflowing
-        // memory can never be repaired.
-        var grew = newContent.Length > entries[idx].Length;
+            // Shrinking is always allowed, even while still over the limit — otherwise an overflowing
+            // memory can never be repaired.
+            var grew = newContent.Length > entries[idx].Length;
 
-        if (newTotal > limit && grew)
-            return ConsolidationFailure(target,
-                $"после замены будет {newTotal}/{limit} символов. Сократи текст или сначала " +
-                "выбрось устаревшее — всё в этом же ходу.");
+            if (newTotal > limit && grew)
+                return ConsolidationFailure(target,
+                    $"после замены будет {newTotal}/{limit} символов. Сократи текст или сначала " +
+                    "выбрось устаревшее — всё в этом же ходу.");
 
-        entries[idx] = newContent;
-        Save(target);
-        return Success(target, "запись заменена");
+            var previous = entries[idx];
+            entries[idx] = newContent;
+
+            if (!TrySave(target, out var error))
+            {
+                entries[idx] = previous;
+                return NotWritten(target, error);
+            }
+
+            return Success(target, "запись заменена");
+        }
     }
 
     public MemoryResult Remove(MemoryTarget target, string oldText)
@@ -254,21 +319,31 @@ public sealed class MemoryStore
         if (oldText.Length == 0)
             return new MemoryResult(false, "нужен фрагмент 'match'");
 
-        var entries = Live(target);
-        var matches = entries.Where(e => e.Contains(oldText, StringComparison.Ordinal)).ToList();
+        lock (_sync)
+        {
+            var entries = Live(target);
+            var matches = entries.Where(e => e.Contains(oldText, StringComparison.Ordinal)).ToList();
 
-        if (matches.Count == 0)
-            return new MemoryResult(false, $"ни одна запись не содержит '{Preview(oldText)}'",
-                entries.Select(Preview).ToList());
+            if (matches.Count == 0)
+                return new MemoryResult(false, $"ни одна запись не содержит '{Preview(oldText)}'",
+                    entries.Select(Preview).ToList());
 
-        if (matches.Distinct().Count() > 1)
-            return new MemoryResult(false,
-                $"фрагмент '{Preview(oldText)}' встречается в нескольких разных записях — возьми подлиннее",
-                matches.Select(Preview).ToList());
+            if (matches.Distinct().Count() > 1)
+                return new MemoryResult(false,
+                    $"фрагмент '{Preview(oldText)}' встречается в нескольких разных записях — возьми подлиннее",
+                    matches.Select(Preview).ToList());
 
-        entries.Remove(matches[0]);
-        Save(target);
-        return Success(target, "запись удалена");
+            var at = entries.IndexOf(matches[0]);
+            entries.RemoveAt(at);
+
+            if (!TrySave(target, out var error))
+            {
+                entries.Insert(at, matches[0]);
+                return NotWritten(target, error);
+            }
+
+            return Success(target, "запись удалена");
+        }
     }
 
     // ------------------------------------------------------------------ helpers
@@ -276,9 +351,18 @@ public sealed class MemoryStore
     private MemoryResult Success(MemoryTarget target, string message)
     {
         _consolidationFailures = 0;
-        var used = Length(Entries(target));
+        var used = Length(EntriesLocked(target));
         return new MemoryResult(true, message, null, $"{used}/{LimitFor(target)}");
     }
+
+    /// <summary>
+    /// The edit was rolled back because the disk refused it. Told plainly, and with
+    /// <c>retry: later</c> semantics in the wording, so the model does not treat it as a rejection
+    /// of the content and rewrite it into something worse.
+    /// </summary>
+    private MemoryResult NotWritten(MemoryTarget target, string error) =>
+        new(false, $"на диск записать не удалось, память не изменилась ({error}). Попробуй позже.",
+            null, $"{Length(EntriesLocked(target))}/{LimitFor(target)}");
 
     private MemoryResult ConsolidationFailure(MemoryTarget target, string error)
     {
@@ -289,10 +373,10 @@ public sealed class MemoryStore
         if (_consolidationFailures > MaxConsolidationFailuresPerTurn)
             return new MemoryResult(false,
                 "запись пропущена — не трать на неё этот ход, ответь экипажу и попробуй позже",
-                null, $"{Length(Entries(target))}/{LimitFor(target)}");
+                null, $"{Length(EntriesLocked(target))}/{LimitFor(target)}");
 
-        return new MemoryResult(false, error, Entries(target).Select(Preview).ToList(),
-            $"{Length(Entries(target))}/{LimitFor(target)}");
+        return new MemoryResult(false, error, EntriesLocked(target).Select(Preview).ToList(),
+            $"{Length(EntriesLocked(target))}/{LimitFor(target)}");
     }
 
     private static string Preview(string s) =>

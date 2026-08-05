@@ -148,10 +148,11 @@ public sealed class Compactor
             {
                 await curate().ConfigureAwait(false);
             }
-            catch (Exception e)
+            catch (Exception e) when (e is not OperationCanceledException)
             {
                 // A failed review must never block the compaction it precedes: the context still
-                // has to shrink, learned lesson or not.
+                // has to shrink, learned lesson or not. Cancellation is the exception to that — see
+                // the note on the summariser's catch.
                 _sawmill.Warning($"куратор не отработал: {e.GetType().Name}: {e.Message}");
             }
         }
@@ -219,8 +220,15 @@ public sealed class Compactor
 
             _sawmill.Warning("суммаризатор вернул пустой ответ");
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
+            // Everything except cancellation degrades to the honest placeholder below.
+            //
+            // Cancellation must NOT: it means the server is going down, and the caller is about to
+            // fold the body around whatever this returns and then persist the result. Catching it
+            // here turned "shut the server down during a compaction" into "permanently destroy the
+            // middle of the conversation and write the damage to disk". Letting it propagate leaves
+            // the body untouched and the snapshot intact.
             _sawmill.Error($"суммаризация упала: {e.GetType().Name}: {e.Message}");
         }
 

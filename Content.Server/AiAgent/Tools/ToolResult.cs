@@ -23,7 +23,6 @@ public static class ToolError
     public const string WireCut = "wire_cut";
     public const string Carded = "carded";
     public const string Dead = "dead";
-    public const string Busy = "busy";
     public const string Timeout = "timeout";
     public const string ReviewMode = "review_mode";
     public const string TurnBudget = "turn_budget";

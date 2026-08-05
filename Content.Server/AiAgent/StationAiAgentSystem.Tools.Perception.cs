@@ -291,6 +291,52 @@ public sealed partial class StationAiAgentSystem
             : "неизвестно";
     }
 
+    /// <summary>
+    /// Every named place on the eye's grid, in map coordinates, snapshotted once.
+    ///
+    /// <c>NavMapSystem.TryGetNearestBeacon</c> walks every beacon on the station per call, so asking
+    /// it once per crew member turns a fifty-strong shift into thousands of transform resolutions
+    /// inside a single marshalled delegate — against a five-millisecond budget. One pass, then a
+    /// linear scan per person over a list of at most a couple of hundred entries.
+    /// </summary>
+    private List<(Vector2 Pos, string Text)> SnapshotPlaces(EntityUid eye)
+    {
+        var places = new List<(Vector2, string)>();
+        var gridUid = Transform(eye).GridUid;
+
+        if (gridUid == null || !TryComp<NavMapComponent>(gridUid, out var navMap))
+            return places;
+
+        foreach (var beacon in navMap.Beacons.Values)
+        {
+            if (string.IsNullOrWhiteSpace(beacon.Text))
+                continue;
+
+            var pos = _xform.ToMapCoordinates(new EntityCoordinates(gridUid.Value, beacon.Position)).Position;
+            places.Add((pos, beacon.Text!));
+        }
+
+        return places;
+    }
+
+    private static string NearestPlace(List<(Vector2 Pos, string Text)> places, Vector2 at)
+    {
+        var best = "неизвестно";
+        var bestDist = float.MaxValue;
+
+        foreach (var (pos, text) in places)
+        {
+            var dist = (pos - at).LengthSquared();
+            if (dist >= bestDist)
+                continue;
+
+            bestDist = dist;
+            best = text;
+        }
+
+        return best;
+    }
+
     /// <summary>One-line state for the look listing; the full picture is what inspect is for.</summary>
     private string ShortState(EntityUid uid)
     {
@@ -570,6 +616,11 @@ public sealed partial class StationAiAgentSystem
 
             var rows = new List<string>();
 
+            // One pass over the station's labels, reused for everyone below.
+            var places = _stationAi.TryGetCore(s.Brain, out var core) && core.Comp?.RemoteEntity != null
+                ? SnapshotPlaces(core.Comp.RemoteEntity.Value)
+                : new List<(Vector2 Pos, string Text)>();
+
             foreach (var sensor in monitor.ConnectedSensors.Values)
             {
                 if (!string.IsNullOrWhiteSpace(filter)
@@ -598,7 +649,7 @@ public sealed partial class StationAiAgentSystem
                     // nearest its own camera and told a crewman he was standing in the AI core,
                     // seventy tiles from where he actually was.
                     where = string.Create(CultureInfo.InvariantCulture,
-                        $" | ({map.X:F0},{map.Y:F0}) | у {PlaceNear(map)}");
+                        $" | ({map.X:F0},{map.Y:F0}) | у {NearestPlace(places, map.Position)}");
                 }
 
                 rows.Add($"{sensor.Name} | {sensor.Job} | {dept} | {alive}{dmg}{where}");

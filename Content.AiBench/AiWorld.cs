@@ -60,6 +60,17 @@ public sealed class AiWorld : IAsyncDisposable
         Build(llm ?? new ScriptedLlmClient(), radius, gridOffset);
 
     /// <summary>
+    /// A world driven by an arbitrary model stand-in rather than the scripted one.
+    ///
+    /// For tests about <em>timing</em> rather than about content — a client that blocks until the
+    /// test says so is the only way to catch the loop mid-call, which is the moment teardown bugs
+    /// live in.
+    /// </summary>
+    public static Task<AiWorld> CreateWith(Content.Server.AiAgent.Llm.ILlmClient llm, int radius = 6,
+        float gridOffset = 0f) =>
+        Build(llm, radius, gridOffset);
+
+    /// <summary>
     /// A world driven by the REAL model, for behavioural benchmarks.
     ///
     /// Leaves <c>AiTestHooks.LlmFactory</c> null so the system builds its own
@@ -69,13 +80,13 @@ public sealed class AiWorld : IAsyncDisposable
     /// </summary>
     public static Task<AiWorld> CreateLive() => Build(null, 6, 0f);
 
-    private static async Task<AiWorld> Build(ScriptedLlmClient llm, int radius, float gridOffset)
+    private static async Task<AiWorld> Build(Content.Server.AiAgent.Llm.ILlmClient llm, int radius, float gridOffset)
     {
-        var world = new AiWorld { Llm = llm };
+        var world = new AiWorld { Llm = llm as ScriptedLlmClient };
 
         // The factory is a settable static rather than an IoC registration: registering would mean
         // patching an upstream file, and the whole layout of this fork depends on not doing that.
-        AiTestHooks.LlmFactory = llm == null ? null : () => world.Llm;
+        AiTestHooks.LlmFactory = llm == null ? null : () => llm;
 
         world.Pair = await PoolManager.GetServerClient(new PoolSettings
         {

@@ -257,11 +257,9 @@ public sealed partial class StationAiAgentSystem
     // ---------------------------------------------------------------- observation
 
     /// <summary>Drain perception on the main thread and format the one user message for this turn.</summary>
-    private async Task<string?> BuildObservationAsync(EntityUid brain, bool force, CancellationToken ct)
+    private async Task<string?> BuildObservationAsync(AgentSession session, bool force, CancellationToken ct)
     {
-        if (!_sessions.TryGetValue(brain, out var session))
-            return null;
-
+        var brain = session.Brain;
         var generation = session.Generation;
 
         return await _dispatcher.RunAsync(() =>

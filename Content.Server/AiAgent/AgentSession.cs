@@ -20,8 +20,6 @@ public enum AgentMode : byte
 
     /// <summary>The curator is reviewing; game-acting tools refuse with review_mode.</summary>
     Review,
-
-    Paused,
 }
 
 /// <summary>Knobs the loop reads each turn, so a live <c>cvar</c> change takes effect without a restart.</summary>
@@ -67,6 +65,18 @@ public sealed class AgentSession : IDisposable
     /// <summary>Prefix-cache watchdog. A broken cache is silent; this is what makes it loud.</summary>
     public CacheMetrics Cache { get; }
 
+    /// <summary>Machine-readable event log for the acceptance run. <see cref="Journal.Disabled"/> when off.</summary>
+    public Journal Journal { get; init; } = Journal.Disabled;
+
+    /// <summary>
+    /// The model server's real context window, asked for once when the loop starts.
+    ///
+    /// Zero until it answers, or if it cannot. Compaction thresholds are clamped against it, so a
+    /// server reconfigured to a smaller window does not let the agent sail past it into bare HTTP
+    /// errors with nothing to say why.
+    /// </summary>
+    public int ContextLimit { get; private set; }
+
     public EntityUid Brain { get; }
     public ConversationState Conv { get; } = new();
     /// <summary>The live tool registry — benchmarks invoke through it, never around it.</summary>
@@ -89,6 +99,15 @@ public sealed class AgentSession : IDisposable
 
     /// <summary>Turns that ended in prose and had to be delivered mechanically. Should stay near zero.</summary>
     public int UntooledReplies { get; private set; }
+
+    /// <summary>
+    /// Somebody asked for a review out of band (the <c>aiagent curate</c> console command).
+    ///
+    /// A flag the loop picks up at a turn boundary, never a second thread. The curator walks the
+    /// same message list the loop appends to, so there can only ever be one owner of it, and that
+    /// owner is the loop.
+    /// </summary>
+    public volatile bool CurateRequested;
     public CancellationTokenSource Cts { get; } = new();
     public Task Loop { get; private set; } = Task.CompletedTask;
 
@@ -152,6 +171,9 @@ public sealed class AgentSession : IDisposable
     private async Task RunAsync(CancellationToken ct)
     {
         _sawmill.Info($"agent loop started for brain {Brain}");
+
+        await DiscoverContextLimitAsync(ct).ConfigureAwait(false);
+
         var idleStreak = 0;
 
         while (!ct.IsCancellationRequested)
@@ -221,6 +243,34 @@ public sealed class AgentSession : IDisposable
         _sawmill.Info($"agent loop ended for brain {Brain} after {Turns} turns (reason: {LastError ?? "cancelled"})");
     }
 
+    /// <summary>
+    /// Ask the model server how big its context actually is.
+    ///
+    /// Until this ran, <c>ai.compact_high</c> was a guessed constant checked against nothing:
+    /// reconfigure llama-server to a smaller window and the agent would grow happily past it and
+    /// start collecting bare HTTP errors with no hint of the cause anywhere.
+    /// </summary>
+    private async Task DiscoverContextLimitAsync(CancellationToken ct)
+    {
+        try
+        {
+            ContextLimit = await _llm.GetContextSizeAsync(ct).ConfigureAwait(false) ?? 0;
+
+            if (ContextLimit > 0)
+                _sawmill.Info($"окно контекста модели: {ContextLimit}т");
+            else
+                _sawmill.Warning("сервер модели не сообщил n_ctx — пороги компакции сверять не с чем");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            _sawmill.Warning($"не удалось прочитать n_ctx: {e.GetType().Name}: {e.Message}");
+        }
+    }
+
     private async Task RunTurnAsync(string observation, CancellationToken ct)
     {
         Conv.AppendUser(observation);
@@ -231,8 +281,76 @@ public sealed class AgentSession : IDisposable
         // now the only copy of it lived inside the request nobody could see.
         _sawmill.Debug($"turn {Turns} <- {Trim(observation, 400)}");
 
-        var maxSteps = _options.MaxToolCallsPerTurn();
+        // The turn closes on the way out, whatever the way out is.
+        //
+        // CloseTurn used to sit on the happy path only, so a cancellation inside the tool-result
+        // loop — shutdown, carding, death, any of which arrive mid-turn — left the body ending in
+        // `assistant{tool_calls:[1,2,3]}, tool(1)`. That is a protocol error the server rejects
+        // wholesale, not per message. It survived only because Release → Save → Repair-on-load
+        // happened to paper over it on the one path that was taken; nothing made it true.
+        try
+        {
+            await RunStepsAsync(_options.MaxToolCallsPerTurn(), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Any call left dangling — by the step budget or by an exception — gets a synthetic
+            // result, or the next request is rejected for having an assistant tool_calls with no
+            // matching tool message.
+            Conv.CloseTurn();
+        }
 
+        // Compaction sits here, at a turn boundary, precisely because that is the only place the
+        // body may be cut without orphaning a tool result from its parent call.
+        var compacted = false;
+
+        if (Compactor.ShouldCompact(Conv))
+        {
+            Mode = AgentMode.Review;
+            try
+            {
+                compacted = await Compactor
+                    .CompactAsync(Conv, _registry.WireSchemas(), _curate, _announce, _rebuildPrefix, ct)
+                    .ConfigureAwait(false);
+
+                if (compacted)
+                {
+                    Cache.SetExpectedPrefix(Conv.PrefixHash);
+                    Cache.ExpectMiss = true;
+
+                    Journal.Write("compaction", new Dictionary<string, object?>
+                    {
+                        ["turn"] = Turns,
+                        ["n"] = Compactor.Compactions,
+                        ["messages_after"] = Conv.Body.Count,
+                        ["prefix_hash"] = Conv.PrefixHash,
+                        ["summary_chars"] = Compactor.LastSummary?.Length ?? 0,
+                    });
+                }
+            }
+            finally
+            {
+                Mode = _modeBeforeReview;
+            }
+        }
+
+        // A review asked for from the console, honoured here rather than on its own thread. Skipped
+        // when the ritual just ran one anyway — step 1 of a compaction IS the review.
+        if (CurateRequested)
+        {
+            CurateRequested = false;
+
+            if (!compacted)
+                await RunReviewAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The model-facing part of one turn: call, dispatch, repeat until it stops or the budget runs
+    /// out, then deliver anything the crew was owed and never heard.
+    /// </summary>
+    private async Task RunStepsAsync(int maxSteps, CancellationToken ct)
+    {
         // A turn that heard nobody is the agent musing to itself; a turn that was addressed owes
         // an answer. The distinction is what keeps the recovery below from broadcasting idle
         // thoughts over the radio every eight seconds.
@@ -265,6 +383,18 @@ public sealed class AgentSession : IDisposable
                           Cache.Format(response.PromptTokens, response.CachedTokens,
                               response.CompletionTokens, response.DurationSeconds,
                               response.ToolCalls.Count, Mode.ToString()));
+
+            Journal.Write("step", new Dictionary<string, object?>
+            {
+                ["turn"] = Turns,
+                ["step"] = step,
+                ["prompt_tokens"] = response.PromptTokens,
+                ["cached_tokens"] = response.CachedTokens,
+                ["completion_tokens"] = response.CompletionTokens,
+                ["seconds"] = Math.Round(response.DurationSeconds, 2),
+                ["tools"] = response.ToolCalls.Count,
+                ["mode"] = Mode.ToString(),
+            });
 
             if (!string.IsNullOrWhiteSpace(response.Content))
                 _sawmill.Debug($"thought: {response.Content!.Trim()}");
@@ -314,6 +444,16 @@ public sealed class AgentSession : IDisposable
                     $"  {call.Function.Name}({Trim(call.Function.Arguments)}) -> " +
                     (result.Ok ? "ok " + Trim(result.EffectJson(), 1200) : $"{result.Error}: {result.Detail}"));
 
+                Journal.Write("tool", new Dictionary<string, object?>
+                {
+                    ["turn"] = Turns,
+                    ["name"] = call.Function.Name,
+                    ["args"] = Trim(call.Function.Arguments, 400),
+                    ["ok"] = result.Ok,
+                    ["error"] = result.Error,
+                    ["detail"] = result.Ok ? null : Trim(result.Detail, 200),
+                });
+
                 if (result.Ok && SpeechTools.Contains(call.Function.Name))
                 {
                     spoke = true;
@@ -345,29 +485,46 @@ public sealed class AgentSession : IDisposable
                   $"вручную ({(HeardOnChannel is { } ch ? "radio " + ch : "say")}): {undelivered}"
                 : $"модель ответила текстом без say/radio даже после напоминания; доставка выключена, " +
                   $"экипаж этого не услышал: {undelivered}");
+
+            Journal.Write("untooled", new Dictionary<string, object?>
+            {
+                ["turn"] = Turns,
+                ["channel"] = HeardOnChannel,
+                ["delivered"] = delivered,
+                ["text"] = Trim(undelivered, 400),
+            });
         }
+    }
 
-        // Any call left dangling by the step budget gets a synthetic result, or the next request
-        // is rejected wholesale for having an assistant tool_calls with no matching tool message.
-        Conv.CloseTurn();
+    /// <summary>
+    /// Run the curator over the live conversation, on the loop's own thread.
+    ///
+    /// The mode is restored to <see cref="_modeBeforeReview"/> rather than to
+    /// <see cref="AgentMode.Core"/>: an AI carded while the review was running must come back
+    /// carded, or the device gate silently hands the station's equipment to an agent sitting in
+    /// somebody's pocket.
+    /// </summary>
+    private async Task RunReviewAsync(CancellationToken ct)
+    {
+        if (_curate == null)
+            return;
 
-        // Compaction sits here, at a turn boundary, precisely because that is the only place the
-        // body may be cut without orphaning a tool result from its parent call.
-        if (Compactor.ShouldCompact(Conv))
+        Mode = AgentMode.Review;
+        try
         {
-            Mode = AgentMode.Review;
-            try
-            {
-                if (await Compactor.CompactAsync(Conv, _registry.WireSchemas(), _curate, _announce, _rebuildPrefix, ct).ConfigureAwait(false))
-                {
-                    Cache.SetExpectedPrefix(Conv.PrefixHash);
-                    Cache.ExpectMiss = true;
-                }
-            }
-            finally
-            {
-                Mode = _modeBeforeReview;
-            }
+            await _curate().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception e)
+        {
+            _sawmill.Error($"ревью по запросу не отработало: {e.GetType().Name}: {e.Message}");
+        }
+        finally
+        {
+            Mode = _modeBeforeReview;
         }
     }
 

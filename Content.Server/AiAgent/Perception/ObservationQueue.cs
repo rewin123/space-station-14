@@ -82,6 +82,35 @@ public sealed class ObservationQueue
         }
     }
 
+    /// <summary>
+    /// Has this exact line already been buffered as radio, moments ago?
+    ///
+    /// Speech and radio arrive from two different upstream events for the same utterance, and the
+    /// radio one always lands first — <c>RadioSystem</c> and <c>HeadsetSystem</c> handle
+    /// <c>EntitySpokeEvent</c> as <em>directed</em> subscriptions, which RobustToolbox dispatches
+    /// before any broadcast one. So by the time a broadcast handler sees a transmitted line, the
+    /// radio copy is already in here, and this is how it recognises it.
+    /// </summary>
+    public bool AlreadyHeardOnRadio(string speaker, string text, TimeSpan now, double withinSeconds = 1.0)
+    {
+        lock (_lock)
+        {
+            foreach (var item in _items)
+            {
+                if (item.Kind != ObsKind.Radio)
+                    continue;
+
+                if ((now - item.RoundTime).Duration().TotalSeconds > withinSeconds)
+                    continue;
+
+                if (item.Speaker == speaker && item.Text == text)
+                    return true;
+            }
+
+            return false;
+        }
+    }
+
     public void Clear()
     {
         lock (_lock)
