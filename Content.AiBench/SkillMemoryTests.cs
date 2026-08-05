@@ -288,8 +288,8 @@ public sealed class SkillMemoryTests
             .Then("Записал скилл про болты.");
 
         var curator = new Curator(llm, Sawmill);
-        var verdict = await curator.ReviewAsync(conv, System.Array.Empty<ToolDto>(), registry,
-            skills.RenderIndex(), maxSteps: 4, CancellationToken.None);
+        var verdict = await curator.ReviewAsync(conv, System.Array.Empty<ToolDto>(),
+            new ToolDispatcher(registry, Sawmill), skills.RenderIndex(), maxSteps: 4, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -313,10 +313,53 @@ public sealed class SkillMemoryTests
         var tools = new[] { new ToolDto { Function = new ToolFunctionDto { Name = "look" } } };
 
         await new Curator(llm, Sawmill)
-            .ReviewAsync(conv, tools, new AiToolRegistry(), "", 2, CancellationToken.None);
+            .ReviewAsync(conv, tools, new ToolDispatcher(new AiToolRegistry(), Sawmill), "", 2,
+                CancellationToken.None);
 
         Assert.That(llm.LastTools, Is.Not.Null);
         Assert.That(llm.LastTools!.Single().Function.Name, Is.EqualTo("look"));
+    }
+
+    [Test]
+    public async Task Curator_RefusesGameActions()
+    {
+        // The whole point of AgentMode.Review, and the one path it never covered. The gate lived
+        // only in the agent loop's private dispatcher; the curator had its own copy that called the
+        // handler directly, so a review that decided to announce simply announced — mid-round, on a
+        // path with no repeat suppression and no counter. Both class comments claimed otherwise.
+        var acted = false;
+
+        var registry = new AiToolRegistry();
+        registry.Register(new AiTool
+        {
+            Name = "announce",
+            Description = "тест",
+            SchemaJson = "{\"type\":\"object\"}",
+            GameAction = true,
+            Handler = (_, _) =>
+            {
+                acted = true;
+                return Task.FromResult(ToolResult.Success());
+            },
+        });
+
+        var conv = new ConversationState();
+        conv.SetPrefix("ПРОМПТ", "[]");
+        conv.AppendUser("наблюдение");
+
+        var llm = new ScriptedLlmClient()
+            .ThenCall("announce", """{"text":"внимание"}""")
+            .Then("готово");
+
+        await new Curator(llm, Sawmill).ReviewAsync(conv, System.Array.Empty<ToolDto>(),
+            new ToolDispatcher(registry, Sawmill), "", 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(acted, Is.False, "игровой инструмент не должен был отработать во время ревью");
+            Assert.That(llm.SeenPrompts.Last().Any(m => m.Content?.Contains("review_mode") == true),
+                Is.True, "и модель обязана увидеть именно review_mode, а не молчаливый успех");
+        });
     }
 
     [Test]
@@ -327,7 +370,8 @@ public sealed class SkillMemoryTests
         conv.AppendUser("наблюдение");
 
         var verdict = await new Curator(new ThrowingLlmClient(), Sawmill)
-            .ReviewAsync(conv, System.Array.Empty<ToolDto>(), new AiToolRegistry(), "", 2, CancellationToken.None);
+            .ReviewAsync(conv, System.Array.Empty<ToolDto>(),
+                new ToolDispatcher(new AiToolRegistry(), Sawmill), "", 2, CancellationToken.None);
 
         Assert.That(verdict, Is.Null, "падение модели не должно ронять ритуал компакции");
     }

@@ -47,7 +47,7 @@ public sealed class Curator
     public async Task<string?> ReviewAsync(
         ConversationState conv,
         IReadOnlyList<ToolDto>? tools,
-        AiToolRegistry registry,
+        ToolDispatcher dispatcher,
         string skillIndex,
         int maxSteps,
         CancellationToken ct)
@@ -90,33 +90,18 @@ public sealed class Curator
 
             foreach (var call in response.ToolCalls)
             {
-                var result = await InvokeAsync(registry, call, ct).ConfigureAwait(false);
-                messages.Add(ChatMessageDto.Tool(call.Id, result.ToJson()));
+                // NoGameActions unconditionally, and not because the caller remembered to set the
+                // session's mode first. The gate used to live only in the agent loop's private
+                // dispatcher, so this — the one path it existed for — bypassed it entirely and a
+                // curator that decided to call announce simply announced, mid-round.
+                var inv = await dispatcher.InvokeAsync(call, DispatchGate.NoGameActions, ct).ConfigureAwait(false);
+                messages.Add(ChatMessageDto.Tool(call.Id, inv.Result.ToJson()));
             }
         }
 
         LastVerdict = verdict;
         _sawmill.Info($"куратор #{Runs}: {Truncate(verdict, 300)}");
         return verdict;
-    }
-
-    private static async Task<ToolResult> InvokeAsync(AiToolRegistry registry, ToolCallDto call, CancellationToken ct)
-    {
-        if (!registry.TryGet(call.Function.Name, out var tool))
-            return ToolResult.Fail(ToolError.UnknownTool, $"нет инструмента '{call.Function.Name}'",
-                alternatives: registry.Nearest(call.Function.Name));
-
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(
-                string.IsNullOrWhiteSpace(call.Function.Arguments) ? "{}" : call.Function.Arguments);
-
-            return await tool.Handler(doc.RootElement.Clone(), ct).ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            return ToolResult.FromException(call.Function.Name, e);
-        }
     }
 
     /// <summary>

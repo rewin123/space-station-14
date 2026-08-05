@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Tools;
 
 namespace Content.Server.AiAgent;
@@ -40,14 +41,19 @@ public sealed partial class StationAiAgentSystem
         CancellationToken ct = default)
     {
         if (!_sessions.TryGetValue(brain, out var session))
-            return ToolResult.Fail(ToolError.Dead, "нет сессии агента для этой сущности");
+            return ToolResult.Fail(ToolError.Dead, "нет сессии агента для этой сущности", retry: "none");
 
-        if (!session.Registry.TryGet(tool, out var entry))
-            return ToolResult.Fail(ToolError.UnknownTool, $"нет инструмента '{tool}'",
-                alternatives: session.Registry.Nearest(tool));
+        // Through the real dispatcher, not around it. Calling the handler directly meant every
+        // benchmark skipped the gate and the exception mapping, so a test could pass against a
+        // dispatch path that was broken.
+        var call = new ToolCallDto
+        {
+            Id = "call_test",
+            Function = new FunctionCallDto { Name = tool, Arguments = argsJson },
+        };
 
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
-        return await entry.Handler(doc.RootElement.Clone(), ct).ConfigureAwait(false);
+        var gate = session.Mode == AgentMode.Review ? DispatchGate.NoGameActions : DispatchGate.None;
+        return (await session.Dispatcher.InvokeAsync(call, gate, ct).ConfigureAwait(false)).Result;
     }
 
     /// <summary>

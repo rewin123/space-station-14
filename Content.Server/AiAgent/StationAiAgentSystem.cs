@@ -798,7 +798,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         await _curator.ReviewAsync(
             session.Conv,
             registry.WireSchemas(),
-            registry,
+            session.Dispatcher,
             Skills.RenderIndex(),
             maxSteps: _cfg.GetCVar(AiCVars.MaxToolCallsPerTurn),
             session.Cts.Token).ConfigureAwait(false);

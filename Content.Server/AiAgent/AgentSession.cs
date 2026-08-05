@@ -82,6 +82,11 @@ public sealed class AgentSession : IDisposable
     /// <summary>The live tool registry — benchmarks invoke through it, never around it.</summary>
     public AiToolRegistry Registry => _registry;
 
+    /// <summary>
+    /// The one door every tool call goes through: the loop's, the curator's and the test harness's.
+    /// </summary>
+    public ToolDispatcher Dispatcher { get; }
+
     public ObservationQueue Queue { get; }
 
     /// <summary>Handle registry — per session, so names never leak between rounds.</summary>
@@ -172,6 +177,7 @@ public sealed class AgentSession : IDisposable
 
         Cache = new CacheMetrics(sawmill);
         Compactor = new Compactor(llm, compaction, sawmill);
+        Dispatcher = new ToolDispatcher(registry, sawmill);
     }
 
     public void Start()
@@ -440,7 +446,9 @@ public sealed class AgentSession : IDisposable
             foreach (var call in response.ToolCalls)
             {
                 ct.ThrowIfCancellationRequested();
-                var result = await InvokeAsync(call, ct).ConfigureAwait(false);
+
+                var gate = Mode == AgentMode.Review ? DispatchGate.NoGameActions : DispatchGate.None;
+                var result = (await Dispatcher.InvokeAsync(call, gate, ct).ConfigureAwait(false)).Result;
 
                 // Every result carries whatever arrived while the model was mid-turn. Reporting a
                 // bare count is not enough: a bot that answers a question it never heard reads as
@@ -617,65 +625,6 @@ public sealed class AgentSession : IDisposable
         catch (JsonException)
         {
             return null;
-        }
-    }
-
-    private async Task<ToolResult> InvokeAsync(ToolCallDto call, CancellationToken ct)
-    {
-        var name = call.Function.Name;
-
-        if (!_registry.TryGet(name, out var tool))
-        {
-            return ToolResult.Fail(
-                ToolError.UnknownTool,
-                $"нет инструмента '{name}'",
-                retry: "other_target",
-                alternatives: _registry.Nearest(name));
-        }
-
-        if (Mode == AgentMode.Review && tool.GameAction)
-            return ToolResult.Fail(ToolError.ReviewMode,
-                "сейчас идёт разбор прошедшего отрезка — действовать на станции нельзя", retry: "later");
-
-        JsonElement args;
-        try
-        {
-            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.Function.Arguments)
-                ? "{}"
-                : call.Function.Arguments);
-            args = doc.RootElement.Clone();
-        }
-        catch (JsonException e)
-        {
-            return ToolResult.Fail(ToolError.BadArgs,
-                $"{name}: аргументы не разобрались как JSON ({e.Message})", retry: "other_target");
-        }
-
-        try
-        {
-            return await tool.Handler(args, ct).ConfigureAwait(false);
-        }
-        catch (StaleGenerationException)
-        {
-            return ToolResult.Fail(ToolError.Dead, "ты больше не в игре", retry: "none");
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (TimeoutException)
-        {
-            // retry:"none", not "later". The timed-out delegate is still queued for the main thread
-            // and will run when the tick gets to it, so the action may well have happened; telling
-            // the model to repeat it is how a door ends up bolted twice.
-            return ToolResult.Fail(ToolError.Timeout,
-                $"{name} не успел ответить. Действие могло всё-таки пройти — проверь состояние, " +
-                "прежде чем повторять", retry: "none");
-        }
-        catch (Exception e)
-        {
-            _sawmill.Error($"tool {name} threw: {e}");
-            return ToolResult.FromException(name, e);
         }
     }
 
