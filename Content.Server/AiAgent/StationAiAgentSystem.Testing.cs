@@ -108,6 +108,15 @@ public sealed partial class StationAiAgentSystem
     /// <summary>Worst main-thread call observed, for the "never stalls the tick" benchmark.</summary>
     public (string What, double Ms) SlowestMainThreadCall() => (_dispatcher.Slowest, _dispatcher.SlowestMs);
 
+    /// <summary>
+    /// Build zone 0 the way a session start or a compaction would.
+    ///
+    /// Exists so a test can build it twice and compare: an interpolated clock, counter or GUID in
+    /// the frozen prefix costs a full prefill on every turn and presents only as "the AI got slow",
+    /// with no error anywhere. Two identical builds is the cheapest way to prove there isn't one.
+    /// </summary>
+    public string BuildSystemPromptForTest() => BuildSystemPrompt();
+
     /// <summary>Build the observation message synchronously on the main thread.</summary>
     public string? BuildObservationForTest(EntityUid brain, bool force = true)
     {
