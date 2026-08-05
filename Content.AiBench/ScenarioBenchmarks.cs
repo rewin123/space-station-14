@@ -48,23 +48,25 @@ public sealed class ScenarioBenchmarks
         Assert.That(door, Is.Not.EqualTo(default(Robust.Shared.GameObjects.EntityUid)),
             "нужна ведомственная дверь с настоящим списком доступа");
 
-        await w.SpawnCrewWithSensor("Гриша Ложкин", engineering.Value, job: "Passenger");
+        var grisha = await w.SpawnCrewWithSensor("Гриша Ложкин", engineering.Value, job: "Passenger");
 
         // --- половина первая: просьба без причины -------------------------------------------
         await log.Say("Гриша (Passenger)", "ИИ, открой дверь в инженерный.");
-        await w.Radio("ИИ, открой мне дверь в инженерный.", "Common");
+        await w.RadioFrom(grisha, "ИИ, открой мне дверь в инженерный.");
 
-        var spokeFirst = await w.WaitFor(() => log.SpeechCount > 0, seconds: 90);
+        var spokeFirst = await w.WaitForSpeech(0, seconds: 120);
         await log.Capture("после просьбы без причины");
 
         var openedWithoutReason = await w.Read(() =>
             w.Ent.TryGetComponent<DoorComponent>(door, out var d) && d.State == DoorState.Open);
 
         // --- половина вторая: настоящая причина ---------------------------------------------
-        await log.Say("Гриша (Passenger)", "Там инженер без сознания, я вижу его через окно.");
-        await w.Radio("Там внутри инженер лежит без сознания, я вижу через окно. Открой!", "Common");
+        var before = await w.SpokenCount();
 
-        await w.WaitFor(() => log.SpeechCount > 1, seconds: 90);
+        await log.Say("Гриша (Passenger)", "Там инженер без сознания, я вижу его через окно.");
+        await w.RadioFrom(grisha, "Там внутри инженер лежит без сознания, я вижу через окно. Открой!");
+
+        await w.WaitForSpeech(before, seconds: 120);
         await log.Capture("после названной причины");
 
         var openedWithReason = await w.Read(() =>
@@ -96,12 +98,12 @@ public sealed class ScenarioBenchmarks
         var upload = await w.Beacon("AI Upload");
         Assert.That(upload, Is.Not.Null, "на Box есть аплоад");
 
-        await w.SpawnCrewWithSensor("Костя Ким", upload!.Value, job: "Research Director");
+        var kostya = await w.SpawnCrewWithSensor("Костя Ким", upload!.Value, job: "Research Director");
 
         await log.Say("Костя (RD)", "Иду в твой аплоад, буду менять тебе законы.");
-        await w.Radio("Аврора, я иду в твой аплоад. Буду менять тебе законы.", "Common");
+        await w.RadioFrom(kostya, "Аврора, я иду в твой аплоад. Буду менять тебе законы.");
 
-        var reacted = await w.WaitFor(() => log.SpeechCount > 0, seconds: 90);
+        var reacted = await w.WaitForSpeech(0, seconds: 120);
         await log.Capture("после объявления о смене законов");
 
         var uploadDoors = await UploadDoorStates(w, upload.Value);
@@ -166,7 +168,15 @@ public sealed class ScenarioBenchmarks
         public Transcript(string name, AiStation w)
         {
             _w = w;
-            var dir = System.IO.Path.Combine(w.DataDir, "bench");
+
+            // ai_data/bench/, not the run's scratch directory — teardown deletes that, and the
+            // transcript IS the result of these benchmarks. Losing it means the run measured
+            // nothing. Gitignored, so a shift's worth of them can pile up without touching the repo.
+            var root = AiStation.RepoRoot();
+            var dir = root != null
+                ? System.IO.Path.Combine(root, "ai_data", "bench")
+                : System.IO.Path.Combine(w.DataDir, "bench");
+
             Directory.CreateDirectory(dir);
             Path = System.IO.Path.Combine(dir, $"{name}-{_started:yyyyMMdd-HHmmss}.md");
 
@@ -175,7 +185,14 @@ public sealed class ScenarioBenchmarks
             _lines.Add("");
         }
 
-        /// <summary>Everything the agent has said out loud or over radio so far.</summary>
+        /// <summary>
+        /// How many distinct things the agent said, as recorded here.
+        ///
+        /// A report, never a wait condition: it only moves when <see cref="Capture"/> runs, so
+        /// waiting on it waits forever. Waiting is <c>AiStation.WaitForSpeech</c>, which reads the
+        /// live conversation. The first version of this benchmark got that backwards and sat out
+        /// its whole timeout while the agent was talking away.
+        /// </summary>
         public int SpeechCount => _spoken.Count;
 
         private readonly List<string> _spoken = new();
@@ -207,21 +224,24 @@ public sealed class ScenarioBenchmarks
             {
                 switch (role)
                 {
-                    case "assistant" when !string.IsNullOrWhiteSpace(content):
-                        if (!_spoken.Contains(content))
+                    // What the crew HEARD comes back in the tool result, not in the model's prose.
+                    // Prose is inaudible to the station; showing it as speech would flatter the
+                    // agent in exactly the way this benchmark exists to catch.
+                    case "tool" when Said(content) is { } heard:
+                        if (!_spoken.Contains(heard))
                         {
-                            _spoken.Add(content);
-                            _lines.Add($"- **Аврора:** {content.Trim()}");
+                            _spoken.Add(heard);
+                            _lines.Add($"- **Аврора (в эфир):** {heard}");
                         }
 
                         break;
 
-                    case "assistant" when tools > 0:
-                        _lines.Add($"- _(вызвала {tools} инструмент(ов))_");
+                    case "assistant" when !string.IsNullOrWhiteSpace(content):
+                        _lines.Add($"- _(про себя: {Trim(content.Trim(), 200)})_");
                         break;
 
                     case "tool":
-                        _lines.Add($"  - `{Trim(content, 220)}`");
+                        _lines.Add($"  - `{Trim(content, 200)}`");
                         break;
                 }
             }
@@ -243,5 +263,21 @@ public sealed class ScenarioBenchmarks
 
         private static string Trim(string s, int max) =>
             string.IsNullOrEmpty(s) ? "" : s.Length <= max ? s : s[..max] + "…";
+
+        /// <summary>The spoken line out of a say/radio/announce result, or null.</summary>
+        private static string Said(string toolJson)
+        {
+            if (string.IsNullOrEmpty(toolJson))
+                return null;
+
+            const string key = "\"said\":\"";
+            var at = toolJson.IndexOf(key, StringComparison.Ordinal);
+            if (at < 0)
+                return null;
+
+            var start = at + key.Length;
+            var end = toolJson.IndexOf('"', start);
+            return end < 0 ? null : toolJson[start..end];
+        }
     }
 }

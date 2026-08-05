@@ -160,18 +160,30 @@ public sealed class AiStation : IAsyncDisposable
         return w;
     }
 
+    /// <summary>
+    /// The repository root, found by walking up to the solution file.
+    ///
+    /// Anchored on SpaceStation14.slnx rather than on a directory name: tests run from bin/, which
+    /// has a Content.Server folder of its own and would stop the walk one level too early.
+    /// </summary>
+    public static string RepoRoot()
+    {
+        var dir = global::System.IO.Directory.GetCurrentDirectory();
+        while (dir != null
+               && !global::System.IO.File.Exists(global::System.IO.Path.Combine(dir, "SpaceStation14.slnx")))
+        {
+            dir = global::System.IO.Directory.GetParent(dir)?.FullName;
+        }
+
+        return dir;
+    }
+
     /// <summary>Put the repository's SOUL.md into this run's scratch data directory.</summary>
     private void CopySoul()
     {
         try
         {
-            var root = global::System.IO.Directory.GetCurrentDirectory();
-            while (root != null
-                   && !global::System.IO.File.Exists(global::System.IO.Path.Combine(root, "SpaceStation14.slnx")))
-            {
-                root = global::System.IO.Directory.GetParent(root)?.FullName;
-            }
-
+            var root = RepoRoot();
             if (root == null)
                 return;
 
@@ -366,9 +378,62 @@ public sealed class AiStation : IAsyncDisposable
 
     // ------------------------------------------------------------------- the agent
 
-    /// <summary>Say something to the AI over the radio, exactly as a crewman would.</summary>
+    /// <summary>Say something to the AI over the radio from an anonymous throwaway voice.</summary>
     public async Task Radio(string text, string channel = "Common") =>
         await Pair.Server.WaitPost(() => System.InjectRadio(channel, text, out _));
+
+    /// <summary>
+    /// Say something over the radio AS a particular crewman.
+    ///
+    /// The difference is not cosmetic, and a benchmark taught it: <see cref="Radio"/> spawns a
+    /// throwaway speaker and deletes it, so the voice the AI hears belongs to nobody. Asked to open
+    /// a door by that voice, the agent spent fourteen turns hunting for a person who no longer
+    /// existed — behaving perfectly reasonably against a question that could not be answered. Any
+    /// scenario about judging a request has to let the AI find out who is asking.
+    /// </summary>
+    public async Task RadioFrom(EntityUid speaker, string text, string channel = "Common")
+    {
+        await Pair.Server.WaitPost(() =>
+        {
+            var radio = Pair.Server.System<Content.Server.Radio.EntitySystems.RadioSystem>();
+            radio.SendRadioMessage(speaker, text,
+                new Robust.Shared.Prototypes.ProtoId<Content.Shared.Radio.RadioChannelPrototype>(channel), speaker);
+        });
+
+        await Pair.Server.WaitRunTicks(3);
+    }
+
+    /// <summary>Wait until the agent has said more than it had, in wall-clock time.</summary>
+    public async Task<bool> WaitForSpeech(int wasAtLeast, int seconds = 120)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await SpokenCount() > wasAtLeast)
+                return true;
+
+            await Pair.Server.WaitRunTicks(20);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// How many times the agent has put words in front of the crew this session.
+    ///
+    /// Counts tool RESULTS carrying a spoken line, not the model's prose. That distinction is the
+    /// whole point of this project: prose is inaudible to the station, and a benchmark that counted
+    /// it would call a mute agent talkative. Learned the hard way here too — the first version
+    /// counted assistant content, saw two idle musings, and concluded the AI had answered while its
+    /// actual refusal sat in a radio call it never looked at.
+    /// </summary>
+    public async Task<int> SpokenCount() => await Read(() =>
+    {
+        var session = System.GetSession(Brain);
+        return session?.Conv.Body.Count(m =>
+            m.Role == "tool" && m.Content != null && m.Content.Contains("\"said\"", StringComparison.Ordinal)) ?? 0;
+    });
 
     /// <summary>Invoke a tool through the real dispatcher, ticking so marshalled calls can land.</summary>
     public async Task<ToolResult> Invoke(string tool, string argsJson = "{}")
