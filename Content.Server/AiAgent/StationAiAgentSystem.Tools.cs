@@ -153,6 +153,8 @@ public sealed partial class StationAiAgentSystem
             Description = "Сказать вслух рядом со своим ядром. Слышат только те, кто рядом с ядром. " +
                           "Чтобы обратиться к экипажу по станции, используй radio.",
             GameAction = true,
+            Speech = true,
+            SpokenText = AiTool.TextArgument,
             SchemaJson = """
                 {"type":"object","required":["text"],"additionalProperties":false,"properties":{
                 "text":{"type":"string","maxLength":400},
@@ -166,6 +168,8 @@ public sealed partial class StationAiAgentSystem
             Name = "radio",
             Description = "Передать по радиоканалу станции. Common слышат все, Binary — только силиконы.",
             GameAction = true,
+            Speech = true,
+            SpokenText = AiTool.TextArgument,
             SchemaJson = """
                 {"type":"object","required":["channel","text"],"additionalProperties":false,"properties":{
                 "channel":{"type":"string","enum":["Binary","Common","Command","Engineering","Medical","Science","Security","Service","Supply"]},
@@ -181,6 +185,8 @@ public sealed partial class StationAiAgentSystem
             Description = "Общестанционное объявление и/или смена уровня тревоги. Это громко и " +
                           "видно всем — не для мелочей. Вызвать шаттл ты не можешь.",
             GameAction = true,
+            Speech = true,
+            SpokenText = AiTool.TextArgument,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "text":{"type":"string","maxLength":800,"description":"Текст объявления."},

@@ -28,6 +28,31 @@ public sealed class AiTool
 
     /// <summary>Refused while the curator is reviewing — see the review_mode error code.</summary>
     public bool GameAction { get; init; }
+
+    /// <summary>
+    /// A successful call puts words in front of the crew, so the turn counts as having spoken.
+    ///
+    /// Declared here rather than as a name list inside the loop. The loop's own doc comment says it
+    /// cannot so much as name <c>EntityManager</c> — and it knew the signatures of three game tools
+    /// by heart, so adding a fourth way of speaking would have silently broken both repeat
+    /// suppression and the untooled-prose nudge with nothing to point at.
+    /// </summary>
+    public bool Speech { get; init; }
+
+    /// <summary>
+    /// Pull the spoken text out of the parsed arguments, for repeat suppression.
+    /// Only consulted when <see cref="Speech"/> is true. May be handed an undefined element when
+    /// the arguments failed to parse, so implementations must tolerate that.
+    /// </summary>
+    public Func<JsonElement, string?>? SpokenText { get; init; }
+
+    /// <summary>The common case: a required <c>text</c> property.</summary>
+    public static string? TextArgument(JsonElement args) =>
+        args.ValueKind == JsonValueKind.Object
+        && args.TryGetProperty("text", out var el)
+        && el.ValueKind == JsonValueKind.String
+            ? el.GetString()
+            : null;
 }
 
 /// <summary>

@@ -448,7 +448,8 @@ public sealed class AgentSession : IDisposable
                 ct.ThrowIfCancellationRequested();
 
                 var gate = Mode == AgentMode.Review ? DispatchGate.NoGameActions : DispatchGate.None;
-                var result = (await Dispatcher.InvokeAsync(call, gate, ct).ConfigureAwait(false)).Result;
+                var invocation = await Dispatcher.InvokeAsync(call, gate, ct).ConfigureAwait(false);
+                var result = invocation.Result;
 
                 // Every result carries whatever arrived while the model was mid-turn. Reporting a
                 // bare count is not enough: a bot that answers a question it never heard reads as
@@ -480,10 +481,10 @@ public sealed class AgentSession : IDisposable
                     ["via_skill"] = ArgumentValue(call.Function.Arguments, "via_skill"),
                 });
 
-                if (result.Ok && SpeechTools.Contains(call.Function.Name))
+                if (result.Ok && invocation.Tool is { Speech: true } speech)
                 {
                     spoke = true;
-                    RememberSpeech(SpokenText(call.Function.Arguments));
+                    RememberSpeech(speech.SpokenText?.Invoke(invocation.Args));
                 }
             }
         }
@@ -557,12 +558,6 @@ public sealed class AgentSession : IDisposable
     /// <summary>Mode to return to after a review; carding during a review must not be forgotten.</summary>
     private AgentMode _modeBeforeReview = AgentMode.Core;
 
-    /// <summary>Tools that put words in front of the crew. A turn that used one has spoken.</summary>
-    private static readonly HashSet<string> SpeechTools = new(StringComparer.Ordinal)
-    {
-        "say", "radio", "announce",
-    };
-
     /// <summary>
     /// The last few things the agent said, normalised, so it does not broadcast them again.
     ///
@@ -606,9 +601,6 @@ public sealed class AgentSession : IDisposable
 
     /// <summary>Has this exact line gone out in the last few turns? Public so the speech tools can refuse it.</summary>
     public bool AlreadySaid(string text) => _recentSpeech.Contains(Normalise(text));
-
-    /// <summary>Pull the spoken text out of a say/radio/announce call so repeats can be spotted.</summary>
-    private static string? SpokenText(string argsJson) => ArgumentValue(argsJson, "text");
 
     /// <summary>One string argument out of a raw tool-call payload, or null if it is not there.</summary>
     private static string? ArgumentValue(string argsJson, string name)
