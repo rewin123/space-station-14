@@ -110,6 +110,15 @@ public sealed class AiStation : IAsyncDisposable
             cfg.SetCVar(AiCVars.CuratorEnabled, false);
         });
 
+        // Bring the real SOUL.md along.
+        //
+        // The agent's data directory points at a scratch folder so a run cannot write into the live
+        // agent's memory — but a behavioural benchmark is asking whether the AI behaves the way its
+        // soul says it should, and against an empty directory it would be grading the base prompt
+        // instead. Memory and skills are deliberately NOT copied: those accumulate, and a benchmark
+        // that inherits them is measuring history rather than policy.
+        w.CopySoul();
+
         w.System = server.System<StationAiAgentSystem>();
 
         await server.WaitPost(() =>
@@ -149,6 +158,35 @@ public sealed class AiStation : IAsyncDisposable
 
         await server.WaitRunTicks(10);
         return w;
+    }
+
+    /// <summary>Put the repository's SOUL.md into this run's scratch data directory.</summary>
+    private void CopySoul()
+    {
+        try
+        {
+            var root = global::System.IO.Directory.GetCurrentDirectory();
+            while (root != null
+                   && !global::System.IO.File.Exists(global::System.IO.Path.Combine(root, "SpaceStation14.slnx")))
+            {
+                root = global::System.IO.Directory.GetParent(root)?.FullName;
+            }
+
+            if (root == null)
+                return;
+
+            var source = global::System.IO.Path.Combine(root, "ai_data", "SOUL.md");
+            if (!global::System.IO.File.Exists(source))
+                return;
+
+            global::System.IO.Directory.CreateDirectory(DataDir);
+            global::System.IO.File.Copy(source, global::System.IO.Path.Combine(DataDir, "SOUL.md"), true);
+        }
+        catch
+        {
+            // A missing soul means the benchmark grades the base prompt, which is worth knowing but
+            // not worth failing the run over.
+        }
     }
 
     // ------------------------------------------------------------------ the station
