@@ -74,6 +74,8 @@ public sealed partial class StationAiAgentSystem
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "query":{"type":"string","description":"Подстрока названия места, например 'engine' или 'мост'. Без неё — вся карта."},
+                "x":{"type":"number","description":"Считать расстояния не от своего глаза, а от этой точки — например от координат человека из crew_status."},
+                "y":{"type":"number","description":"Задаётся вместе с x."},
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => MapAsync(s, a, ct),

@@ -123,4 +123,27 @@ public sealed class MapTests
         Assert.That(observation, Does.Contain("место="),
             "в SELF должно быть ближайшее место: " + observation);
     }
+
+    [Test]
+    public async Task Map_CanMeasureFromSomeoneElsesPosition()
+    {
+        // The failure this prevents, observed live: handed a crewman's coordinates and a list of
+        // places measured from its own camera, the model reported the two as the same place and
+        // told a man standing seventy tiles away that he was in the AI core. The server measures
+        // from whatever point the question is about, so the model never has to.
+        await using var w = await AiWorld.Create(radius: 12);
+        await WithNavMap(w);
+        await Beacon(w, "DefaultStationBeaconBridge", 8, 0);
+
+        var far = await w.Invoke("map", """{"x":100,"y":100}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(far.Ok, Is.True, far.ToJson());
+            Assert.That(far.ToJson(), Does.Contain("отсчитаны от точки"),
+                "ответ обязан сказать, от чего мерили: " + far.ToJson());
+            Assert.That(far.ToJson(), Does.Not.Contain("восток 8"),
+                "расстояние должно быть от заданной точки, а не от глаза: " + far.ToJson());
+        });
+    }
 }

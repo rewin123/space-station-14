@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -211,7 +212,17 @@ public sealed partial class StationAiAgentSystem
             if (gridUid == null || !TryComp<NavMapComponent>(gridUid, out var navMap))
                 return ToolResult.Fail(ToolError.NotVisible, "карта этой станции недоступна");
 
-            var origin = _xform.GetMapCoordinates(eye).Position;
+            // Centring on a given point matters because the model does not do geometry: handed a
+            // crewman's coordinates and a list of places measured from its own camera, it will
+            // happily report the two as if they were the same neighbourhood. Let the server measure
+            // from whatever point the question is actually about.
+            var haveX = TryGetFloat(args, "x", out var cx);
+            var haveY = TryGetFloat(args, "y", out var cy);
+
+            var origin = haveX && haveY
+                ? new Vector2(cx, cy)
+                : _xform.GetMapCoordinates(eye).Position;
+
             var rows = new List<(float Dist, string Text)>();
 
             foreach (var beacon in navMap.Beacons.Values)
@@ -234,7 +245,12 @@ public sealed partial class StationAiAgentSystem
             {
                 ["count"] = rows.Count,
                 ["places"] = rows.Select(r => r.Text).Take(80).ToList(),
-                ["note"] = "координаты можно передать в move_camera {x,y}; направления и расстояния — от твоего глаза",
+                ["note"] = haveX && haveY
+                    ? string.Create(CultureInfo.InvariantCulture,
+                        $"направления и расстояния отсчитаны от точки ({cx:F0},{cy:F0}); координаты идут в move_camera {{x,y}}")
+                    : "направления и расстояния — от ТВОЕГО глаза, не от собеседника. Чтобы узнать, " +
+                      "что рядом с человеком, передай сюда его координаты: map {\"x\":…,\"y\":…}. " +
+                      "Координаты идут в move_camera {x,y}",
             };
 
             if (rows.Count == 0 && !string.IsNullOrWhiteSpace(query))
@@ -244,10 +260,18 @@ public sealed partial class StationAiAgentSystem
         }, ct);
     }
 
-    /// <summary>Nearest named place to a point, for the SELF line and for announcements.</summary>
+    /// <summary>Nearest named place to an entity, for the SELF line.</summary>
     private string PlaceAt(EntityUid uid)
     {
         return _navMap.TryGetNearestBeacon(uid, out var beacon, out _) && beacon != null
+            ? beacon.Value.Comp.Text ?? Name(beacon.Value.Owner)
+            : "неизвестно";
+    }
+
+    /// <summary>Nearest named place to a bare position — for people the AI locates by coordinates.</summary>
+    private string PlaceNear(MapCoordinates coords)
+    {
+        return _navMap.TryGetNearestBeacon(coords, out var beacon, out _) && beacon != null
             ? beacon.Value.Comp.Text ?? Name(beacon.Value.Owner)
             : "неизвестно";
     }
@@ -521,7 +545,13 @@ public sealed partial class StationAiAgentSystem
                 if (sensor.Coordinates != null)
                 {
                     var map = _xform.ToMapCoordinates(GetCoordinates(sensor.Coordinates.Value));
-                    where = string.Create(CultureInfo.InvariantCulture, $" | ({map.X:F0},{map.Y:F0})");
+
+                    // The nearest landmark to THEM, not to the eye. Without it the model does the
+                    // geometry itself and gets it wrong: on the first live round it read the places
+                    // nearest its own camera and told a crewman he was standing in the AI core,
+                    // seventy tiles from where he actually was.
+                    where = string.Create(CultureInfo.InvariantCulture,
+                        $" | ({map.X:F0},{map.Y:F0}) | у {PlaceNear(map)}");
                 }
 
                 rows.Add($"{sensor.Name} | {sensor.Job} | {dept} | {alive}{dmg}{where}");
