@@ -63,6 +63,9 @@ public sealed class AgentSession : IDisposable
 
     private readonly TurnRunner _turn;
 
+    /// <summary>The debug bus, or null when it is off. The loop uses it only for the stats sample.</summary>
+    private readonly IAgentEventSink? _sink;
+
     /// <summary>How the last turn ended, for diagnostics and for tests that assert on the shape.</summary>
     public TurnContext? LastTurn { get; private set; }
 
@@ -187,6 +190,7 @@ public sealed class AgentSession : IDisposable
         // constructor body runs (AgentState's field initializer builds it), so it cannot take the
         // sink as a constructor parameter the way every other collaborator here does. Attaching
         // before Start() means the loop's very first append is already reported.
+        _sink = sink;
         if (sink != null)
             Conv.AttachSink(sink);
     }
@@ -330,6 +334,12 @@ public sealed class AgentSession : IDisposable
             // result, or the next request is rejected for having an assistant tool_calls with no
             // matching tool message.
             Conv.CloseTurn();
+
+            // One statistics sample per turn, from the one place a turn always passes through
+            // however it ended. Counters are not diffed individually: they are `++` on
+            // auto-properties across four files, and six publishing setters would be six new
+            // chances to forget, feeding a stream nobody reads as a delta.
+            _sink?.Stats(AgentDebugState.Stats(this));
         }
 
         // Zone 2 is consumed by the turn that sent it.

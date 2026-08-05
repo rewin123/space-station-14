@@ -256,6 +256,11 @@ public sealed class AgentEventBus
                 body = skill.Body,
             }, LlmJson.Options));
         }
+
+        public void Stats(AgentStatsDto stats)
+        {
+            bus.Publish(AgentEventKind.Stats, sessionId, JsonSerializer.Serialize(stats, LlmJson.Options));
+        }
     }
 }
 

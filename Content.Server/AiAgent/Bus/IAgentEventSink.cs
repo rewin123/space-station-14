@@ -32,6 +32,14 @@ public interface IAgentEventSink
 
     /// <summary>One skill written or edited.</summary>
     void SkillUpdated(Skill skill);
+
+    /// <summary>
+    /// The whole statistics record, sampled at a turn boundary.
+    ///
+    /// Unlike the others this is not raised by the owner of the data — the counters live across
+    /// four files — but by the loop, once per turn, from the one place every turn passes through.
+    /// </summary>
+    void Stats(AgentStatsDto stats);
 }
 
 /// <summary>
@@ -53,4 +61,5 @@ public sealed class NullAgentEventSink : IAgentEventSink
     public void PrefixReplaced(string prefixHash, string systemPrompt, string toolsJson) { }
     public void MemoryUpdated(MemoryTarget target, IReadOnlyList<string> entries) { }
     public void SkillUpdated(Skill skill) { }
+    public void Stats(AgentStatsDto stats) { }
 }

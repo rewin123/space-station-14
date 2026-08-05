@@ -5,6 +5,78 @@ using Content.Server.AiAgent.Llm;
 namespace Content.Server.AiAgent.Bus;
 
 /// <summary>
+/// Everything the debugger needs, in one answer.
+///
+/// <paramref name="Seq"/> is what makes this composable with the event stream: the snapshot is the
+/// state as of that sequence number, and applying every event after it reproduces the present
+/// exactly. That is why <see cref="AgentDebugState.Capture"/> takes the bus lock along with the
+/// data locks — the pairing has to be atomic or a client silently double-applies one change.
+///
+/// <paramref name="Session"/> is null when no agent holds a core: between rounds, or on a station
+/// where nobody claimed one. That is a normal answer, not an error.
+/// </summary>
+public sealed record AgentStateSnapshot(
+    [property: JsonPropertyName("instance")] string Instance,
+    [property: JsonPropertyName("seq")] long Seq,
+    [property: JsonPropertyName("session")] AgentSessionDto? Session,
+    [property: JsonPropertyName("memory")] AgentMemoryDto Memory,
+    [property: JsonPropertyName("skills")] IReadOnlyList<AgentSkillDto> Skills);
+
+/// <summary>
+/// Live memory entries and the frozen zone-0 text, side by side and labelled.
+///
+/// They diverge by design — a write lands on disk immediately but only reaches the system prompt at
+/// the next prefix rebuild — and that divergence is the single most confusing property of this
+/// system. An operator who edits memory, watches the agent behave identically, and has no way to
+/// see why concludes the endpoint is broken. Showing both is most of the debugging value here.
+/// </summary>
+public sealed record AgentMemoryDto(
+    [property: JsonPropertyName("memory_live")] IReadOnlyList<string> MemoryLive,
+    [property: JsonPropertyName("memory_frozen")] string MemoryFrozen,
+    [property: JsonPropertyName("crew_live")] IReadOnlyList<string> CrewLive,
+    [property: JsonPropertyName("crew_frozen")] string CrewFrozen);
+
+public sealed record AgentSkillDto(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("when")] string When,
+    [property: JsonPropertyName("body")] string Body);
+
+public sealed record AgentSessionDto(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("brain")] int Brain,
+    [property: JsonPropertyName("prefix_hash")] string PrefixHash,
+    [property: JsonPropertyName("system_prompt")] string SystemPrompt,
+    [property: JsonPropertyName("tools_json")] string ToolsJson,
+    [property: JsonPropertyName("body_epoch")] int BodyEpoch,
+    [property: JsonPropertyName("messages")] IReadOnlyList<AgentMessageDto> Messages,
+    [property: JsonPropertyName("stats")] AgentStatsDto Stats,
+    [property: JsonPropertyName("last_turn")] AgentTurnDto? LastTurn);
+
+/// <summary>
+/// The shape of the last turn.
+///
+/// This already existed in full — <c>TurnContext</c> names every phase, exit and delivery form the
+/// loop has — and was surfaced absolutely nowhere. It is the most informative thing the agent
+/// produces: "the model stopped, owing an answer, and delivery was declined" is a diagnosis, where
+/// "turn 41" is not.
+/// </summary>
+public sealed record AgentTurnDto(
+    [property: JsonPropertyName("index")] int Index,
+    [property: JsonPropertyName("phase")] string Phase,
+    [property: JsonPropertyName("step")] int Step,
+    [property: JsonPropertyName("tool_calls")] int ToolCalls,
+    [property: JsonPropertyName("spoke")] bool Spoke,
+    [property: JsonPropertyName("nudged")] bool Nudged,
+    [property: JsonPropertyName("promised")] string? Promised,
+    [property: JsonPropertyName("exit")] string Exit,
+    [property: JsonPropertyName("delivery")] string Delivery,
+    [property: JsonPropertyName("cache_ratio")] double CacheRatio,
+    [property: JsonPropertyName("radio_channel")] string? RadioChannel,
+    [property: JsonPropertyName("addressed")] bool Addressed,
+    [property: JsonPropertyName("forced")] bool Forced,
+    [property: JsonPropertyName("perception")] string Perception);
+
+/// <summary>
 /// One message, as the debugger sees it.
 ///
 /// A separate type from <see cref="ChatMessageDto"/> on purpose. That one is the wire DTO: its
