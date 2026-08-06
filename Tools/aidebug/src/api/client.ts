@@ -69,19 +69,32 @@ async function request<T>(
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },
-      // НИКОГДА не 'include': Allow-Credentials несовместим с `*` в Allow-Origin, который ставит
-      // сервер, и каждый запрос упадёт с невнятной ошибкой про wildcard.
-      credentials: 'omit',
+      // 'same-origin' — и ровно оно, не 'omit' и не 'include'.
+      //
+      // 'include' сломал бы разработку: Allow-Credentials несовместим с `*` в Allow-Origin,
+      // который ставит отладочный сервер, и каждый кросс-ориджинный запрос упал бы с невнятной
+      // ошибкой про wildcard.
+      //
+      // 'omit' ломает прод, и это было здесь написано. За обратным прокси страница и API лежат
+      // на одном origin, а доступ закрыт basic-auth; браузер приложил бы креды сам, но 'omit'
+      // их срезает — и до игрового сервера запрос не доходит вовсе. Наружу это выглядит как
+      // «неверный токен», хотя 401 отдал прокси.
+      //
+      // 'same-origin' даёт оба поведения разом: свой origin получает креды, чужой — нет.
+      credentials: 'same-origin',
     })
 
     const text = await response.text()
 
     if (!response.ok) {
-      let detail = text
+      let detail: string
       try {
         detail = (JSON.parse(text) as { error?: string }).error ?? text
       } catch {
-        // Не JSON — отдаём как есть.
+        // Не JSON — значит отвечал не наш сервер, а что-то по дороге (обратный прокси, шлюз).
+        // Вываливать его HTML-страницу в интерфейс бессмысленно: там сотня строк разметки и
+        // ни одного слова о причине. Говорим, КТО отказал, — это и есть полезная часть.
+        detail = `${response.statusText || 'ошибка'} — ответил не отладочный сервер, а посредник`
       }
       throw new ApiError(response.status, detail || response.statusText)
     }
