@@ -1,0 +1,26 @@
+{
+  "name": "aidebug",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Отладчик LLM-агента Station AI: читает шину событий игрового сервера",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "pinia": "^3.0.3",
+    "vue": "^3.5.22",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7",
+    "vue-tsc": "^3.1.1",
+    "vitest": "^3.2.4"
+  }
+}

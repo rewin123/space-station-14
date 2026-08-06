@@ -1,0 +1,72 @@
+/* Тёмная тема без вариантов: это инструмент, который смотрят рядом с логом сервера. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-2: #1c2230;
+  --line: #2a3242;
+  --text: #d7dde7;
+  --dim: #8b94a5;
+
+  --user: #4a7cb8;
+  --assistant: #4ba36b;
+  --tool: #b8894a;
+  --system: #6a7285;
+  --bad: #c05a5a;
+
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+code,
+pre,
+.mono {
+  font-family: ui-monospace, 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12.5px;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: #3d4a60;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+input:focus,
+textarea:focus {
+  outline: 1px solid #3d5a80;
+}

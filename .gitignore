@@ -322,3 +322,7 @@ error.glsl
 
 # LLM Station AI agent data (memory, skills, transcripts)
 ai_data/
+
+# Сборка отладчика агента (node_modules уже покрыт правилом выше)
+Tools/aidebug/dist/
+*.tsbuildinfo
