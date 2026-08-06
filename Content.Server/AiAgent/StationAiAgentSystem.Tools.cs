@@ -279,6 +279,33 @@ public sealed partial class StationAiAgentSystem
         {
             _dispatcher.AssertMainThread("observation");
 
+            // Выключенный агент не делает ходов, и это работает на ЖИВОЙ сессии.
+            //
+            // Раньше `ai.enabled` читался ровно в двух местах — при захвате ядра на старте раунда
+            // и при создании клиента, — а петля его не смотрела вовсе. Админ, выставивший
+            // `ai.enabled false` посреди раунда, не останавливал ни одного хода, хотя это первое,
+            // что он попробует. Настоящим выключателем был `aiagent dryrun on`, который так не
+            // называется и стоит в справке последним.
+            //
+            // Проверка здесь, а не в петле: наблюдение — единственная дверь, через которую ход
+            // начинается, и она уже умеет отвечать «нечего делать».
+            if (!_cfg.GetCVar(AiCVars.Enabled))
+            {
+                if (!_notedDisabled)
+                {
+                    _notedDisabled = true;
+                    _sawmill.Info("ai.enabled выключен — агент остановлен, ходы не тратятся");
+                }
+
+                return null;
+            }
+
+            if (_notedDisabled)
+            {
+                _notedDisabled = false;
+                _sawmill.Info("ai.enabled включён — агент продолжает");
+            }
+
             // A paused world produces no turn, however long the agent has been idling.
             //
             // `game.auto_pause_empty` defaults to true, so a server with nobody connected freezes

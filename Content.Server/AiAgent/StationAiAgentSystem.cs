@@ -24,6 +24,7 @@ using Content.Shared.Power.EntitySystems;
 using Content.Server.Atmos.Monitor.Systems;
 using Content.Server.Power.EntitySystems;
 using Content.Server.Silicons.Laws;
+using Content.Server.Station.Events;
 using Content.Shared.Doors.Systems;
 using Content.Shared.IdentityManagement;
 using Content.Shared.Station;
@@ -70,6 +71,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private StationRecordsSystem _records = default!;
     [Dependency] private SiliconLawSystem _laws = default!;
     [Dependency] private SharedStationSystem _station = default!;
+    [Dependency] private Content.Server.Station.Systems.StationJobsSystem _jobs = default!;
     [Dependency] private Content.Server.Pinpointer.NavMapSystem _navMap = default!;
     [Dependency] private Content.Shared.Power.EntitySystems.SharedBatterySystem _battery = default!;
     [Dependency] private SharedContainerSystem _container = default!;
@@ -81,6 +83,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
     /// <summary>Логировать паузу один раз на переход, а не каждый тик.</summary>
     private bool _notedPause;
+
+    /// <summary>То же для выключенного ai.enabled.</summary>
+    private bool _notedDisabled;
 
     private readonly Dictionary<EntityUid, AgentSession> _sessions = new();
     private ILlmClient? _llm;
@@ -103,6 +108,17 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Eagerly, so no first touch from the agent thread can race one from the main thread and
         // build a second store that silently swallows whatever the loser wrote.
         ReloadAgentFiles();
+
+        // Роль Station AI закрывается для людей ДО того, как кто-либо заспавнится.
+        //
+        // Иначе форк проигрывает гонку: GameTicker спавнит игроков раньше, чем меняет рун-левел,
+        // за который мы цепляемся. Игрок с наигранными часами занимал ядро, нейросеть молча не
+        // стартовала на весь раунд — на сервере, который называется «станцией управляет
+        // нейросеть», — и единственным следом была строка в логе.
+        //
+        // Обратный случай не лучше: при занятом нами ядре игрок, выбравший эту роль, не влезал в
+        // контейнер и появлялся невидимым неподвижным мозгом на полу прибытия.
+        SubscribeLocalEvent<StationPostInitEvent>(OnStationPostInit);
 
         SubscribeLocalEvent<GameRunLevelChangedEvent>(OnRunLevelChanged);
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundCleanup);
@@ -150,6 +166,22 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     }
 
     // ------------------------------------------------------------------ lifecycle
+
+    /// <summary>Идентификатор ванильной должности, которую занимает наш агент.</summary>
+    private const string StationAiJob = "StationAi";
+
+    private void OnStationPostInit(ref StationPostInitEvent ev)
+    {
+        // Только если агент действительно собирается занять ядро. Выключенный агент не должен
+        // отбирать у людей роль, которую сам не займёт.
+        if (!_cfg.GetCVar(AiCVars.Enabled) || !_cfg.GetCVar(AiCVars.AutoClaim))
+            return;
+
+        if (!_jobs.TrySetJobSlot(ev.Station, StationAiJob, 0))
+            return;
+
+        _sawmill.Info($"вакансия {StationAiJob} закрыта: ядро занимает нейросеть");
+    }
 
     private void OnRunLevelChanged(GameRunLevelChangedEvent ev)
     {
@@ -203,7 +235,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         var query = EntityQueryEnumerator<StationAiCoreComponent>();
         while (query.MoveNext(out var coreUid, out var core))
         {
-            if (_stationAi.TryGetHeld((coreUid, core), out _))
+            // Занятое ядро больше не пропускается вслепую: если там наш же мозг от прошлой
+            // сессии, TryClaimCore его переиспользует. Иначе агента было невозможно вернуть в
+            // раунд после `aiagent release` или смерти — ядро оставалось занято навсегда.
+            if (_stationAi.TryGetHeld((coreUid, core), out var held) && !CanReclaim(held.Value))
                 continue;
 
             if (TryClaimCore(coreUid, out reason))
@@ -214,15 +249,44 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         return false;
     }
 
+    /// <summary>
+    /// Мозг в ядре — наш и ничей больше: сессии на нём нет, значит его можно занять заново.
+    /// </summary>
+    private bool CanReclaim(EntityUid held) =>
+        HasComp<LlmStationAiComponent>(held) && !_sessions.ContainsKey(held);
+
     public bool TryClaimCore(EntityUid coreUid, out string reason)
     {
-        if (!TryComp<StationAiCoreComponent>(coreUid, out _))
+        if (!TryComp<StationAiCoreComponent>(coreUid, out var core))
         {
             reason = $"{ToPrettyString(coreUid)} is not an AI core";
             return false;
         }
 
-        var brain = SpawnInContainerOrDrop("StationAiBrain", coreUid, StationAiCoreComponent.Container);
+        EntityUid brain;
+        var reused = false;
+
+        if (_stationAi.TryGetHeld((coreUid, core), out var held))
+        {
+            // Ядро занято. Раньше здесь безусловно спавнился новый мозг, а
+            // `SpawnInContainerOrDrop` при полном слоте ронял его НА ПОЛ — сессия стартовала, но
+            // мозг вне контейнера не получает AiHeld, то есть оставался без камер и устройств.
+            // Снаружи это выглядело как «claim сработал, а ИИ ничего не может».
+            if (!CanReclaim(held.Value))
+            {
+                reason = _sessions.ContainsKey(held.Value)
+                    ? $"{ToPrettyString(coreUid)} уже занято работающим агентом"
+                    : $"{ToPrettyString(coreUid)} занято чужим разумом";
+                return false;
+            }
+
+            brain = held.Value;
+            reused = true;
+        }
+        else
+        {
+            brain = SpawnInContainerOrDrop("StationAiBrain", coreUid, StationAiCoreComponent.Container);
+        }
 
         // Stop a ghost from taking over the body the model is driving. The admin takeover verb is
         // left alone on purpose — that is an intentional override — but it is logged loudly.
@@ -233,11 +297,16 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         if (!StartSession(brain, out reason))
         {
-            QueueDel(brain);
+            // Переиспользованный мозг не удаляем: он был в ядре до нас и должен там остаться,
+            // иначе неудачная попытка захвата уничтожает то, что чинила.
+            if (!reused)
+                QueueDel(brain);
+
             return false;
         }
 
-        _sawmill.Info($"claimed AI core {ToPrettyString(coreUid)} with brain {ToPrettyString(brain)}");
+        _sawmill.Info($"claimed AI core {ToPrettyString(coreUid)} with brain {ToPrettyString(brain)}"
+                      + (reused ? " (переиспользован после прошлой сессии)" : ""));
         reason = $"claimed {ToPrettyString(coreUid)}";
         return true;
     }

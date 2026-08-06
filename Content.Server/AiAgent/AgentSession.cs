@@ -66,6 +66,12 @@ public sealed class AgentSession : IDisposable
     /// <summary>The debug bus, or null when it is off. The loop uses it only for the stats sample.</summary>
     private readonly IAgentEventSink? _sink;
 
+    /// <summary>Как часто пробовать после того, как отказы перешли порог.</summary>
+    private const int DegradedRetryMs = 60_000;
+
+    /// <summary>Сказать про разреженный режим один раз, а не на каждом отказе.</summary>
+    private bool _notedDegraded;
+
     /// <summary>How the last turn ended, for diagnostics and for tests that assert on the shape.</summary>
     public TurnContext? LastTurn { get; private set; }
 
@@ -261,6 +267,13 @@ public sealed class AgentSession : IDisposable
 
                 idleStreak = 0;
                 await RunTurnAsync(perception, ct).ConfigureAwait(false);
+
+                if (_notedDegraded)
+                {
+                    _notedDegraded = false;
+                    _sawmill.Info($"агент вернулся в строй после {ConsecutiveFailures} отказов");
+                }
+
                 State.ConsecutiveFailures = 0;
                 LastError = null;
             }
@@ -284,15 +297,30 @@ public sealed class AgentSession : IDisposable
                 LastError = $"{e.GetType().Name}: {e.Message}";
                 _sawmill.Error($"agent turn failed ({ConsecutiveFailures}): {LastError}");
 
-                if (ConsecutiveFailures >= _options.MaxConsecutiveFailures())
+                // Порог отказов больше НЕ убивает петлю.
+                //
+                // Раньше здесь стоял `break`, и это означало, что три-пять минут недоступности
+                // модели выключают ИИ до конца раунда. Вернуть его было нечем: watchdog'а нет, а
+                // ядро оставалось занято. В игре при этом не появлялось ни одного признака —
+                // экипаж читал молчание как «ИИ закардили» и шёл искать его к ядру.
+                //
+                // Теперь порог лишь переводит агента в разреженный режим: он продолжает
+                // пробовать раз в минуту и возвращается сам, когда провайдер оживёт. Спиннинга
+                // ядра, ради которого стоял `break`, при таком интервале нет.
+                var degraded = ConsecutiveFailures >= _options.MaxConsecutiveFailures();
+
+                if (degraded && !_notedDegraded)
                 {
+                    _notedDegraded = true;
                     _sawmill.Error(
-                        $"agent disabled after {ConsecutiveFailures} consecutive failures; last error: {LastError}");
-                    break;
+                        $"агент в разреженном режиме после {ConsecutiveFailures} отказов подряд, " +
+                        $"продолжит пробовать раз в {DegradedRetryMs / 1000}с; последняя ошибка: {LastError}");
                 }
 
                 // Exponential back-off, capped. A dead endpoint must not spin a core all round.
-                var backoff = Math.Min(30_000, 1000 * (int)Math.Pow(2, Math.Min(ConsecutiveFailures, 5)));
+                var backoff = degraded
+                    ? DegradedRetryMs
+                    : Math.Min(30_000, 1000 * (int)Math.Pow(2, Math.Min(ConsecutiveFailures, 5)));
                 try
                 {
                     await Task.Delay(backoff, ct).ConfigureAwait(false);
