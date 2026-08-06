@@ -177,6 +177,16 @@ public sealed class AiCVars
     public static readonly CVarDef<string> DataDir =
         CVarDef.Create("ai.data_dir", "", CVar.SERVERONLY);
 
+    /// <summary>
+    /// Имя станции. Пустое — как в ваниле: генератор карты, «TG Box Station 14-Alpha».
+    ///
+    /// Живёт в пространстве <c>ai.</c>, хотя про агента не про него. Форк владеет ровно одним
+    /// классом <c>[CVarDefs]</c>, и заводить второй ради одной строки — хуже, чем поставить её
+    /// сюда с этим объяснением: любой другой вариант означал бы новый файл в чужом дереве.
+    /// </summary>
+    public static readonly CVarDef<string> StationName =
+        CVarDef.Create("ai.station_name", "", CVar.SERVERONLY);
+
     // ----------------------------------------------------------------- отладка
 
     /// <summary>

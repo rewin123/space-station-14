@@ -884,9 +884,16 @@ public sealed partial class StationAiAgentSystem
             };
 
             var station = _station.GetOwningStation(s.Brain);
-            if (station != null && TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
+            if (station != null)
             {
-                d["alert_level"] = alert.CurrentAlertLevel;
+                // Как станция называется. Экипаж зовёт её по имени постоянно — в объявлениях, по
+                // рации, в позывных Центрального командования, — а узнать его агенту было неоткуда
+                // ни одним инструментом. Он мог отработать всю смену, ни разу не поняв, что «Аксиома»
+                // это то место, где он находится.
+                d["station"] = Name(station.Value);
+
+                if (TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
+                    d["alert_level"] = alert.CurrentAlertLevel;
             }
 
             if (_stationAi.TryGetCore(s.Brain, out var core) && core.Comp != null)
