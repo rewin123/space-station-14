@@ -59,6 +59,27 @@ public sealed class AgentState
     public string? LastSummary { get; set; }
 
     /// <summary>
+    /// Канал, в который уходит речь, когда ход не назвал канал явно.
+    ///
+    /// Это тумблер, а не память о последней реплике: живой игрок на этой роли выбирает канал в
+    /// интерфейсе и дальше просто говорит, а разовое обращение в другой канал делает префиксом,
+    /// не сбивая выбор. Здесь так же — <c>radio</c> с явным каналом тумблер не двигает.
+    ///
+    /// Скрытое состояние опасно для модели: она может забыть, куда настроена, и отправить
+    /// разговор о предателе в общий канал. Поэтому текущий канал печатается в строке SELF на
+    /// КАЖДОМ ходу — помнить его не требуется, достаточно прочитать.
+    /// </summary>
+    public string OutputChannel { get; set; } = DefaultChannel;
+
+    public const string DefaultChannel = "Common";
+
+    /// <summary>Куда вернуть тумблер, когда мозг вернут в ядро. Null — возвращать некуда.</summary>
+    public string? ChannelBeforeCarding { get; set; }
+
+    /// <summary>Единственный канал, который остаётся у закарденного — см. AiHeldIntellicard.</summary>
+    public const string CardedChannel = "Binary";
+
+    /// <summary>
     /// One-line rendering of the laws as of the last turn, for spotting a rewrite.
     ///
     /// Polled rather than subscribed because upstream raises nothing on the path that matters: the

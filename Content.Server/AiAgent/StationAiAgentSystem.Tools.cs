@@ -30,6 +30,21 @@ public sealed partial class StationAiAgentSystem
         "Science", "Security", "Service", "Supply",
     };
 
+    /// <summary>Что остаётся в интелликарте: AiHeldIntellicard передаёт ровно Binary.</summary>
+    private static readonly string[] CardedRadioChannels = { AgentState.CardedChannel };
+
+    /// <summary>
+    /// Каналы, доступные агенту прямо сейчас.
+    ///
+    /// Раньше <c>radio</c> валидировал канал по статическому списку и на режим не смотрел вовсе —
+    /// в отличие от <c>announce</c>, где проверка была. А <c>RadioSystem</c> не проверяет наличие
+    /// передатчика у источника, только каналы получателей. Значит закарденный ИИ продолжал вызывать
+    /// СБ по каналу Security из кармана того, кто его закардил, — то есть карденье, ради которого
+    /// половина этой механики и существует, ничего не меняло.
+    /// </summary>
+    private static string[] ChannelsFor(AgentMode mode) =>
+        mode == AgentMode.Carded ? CardedRadioChannels : AiRadioChannels;
+
     private void RegisterTools(AgentSession s, AiToolRegistry r)
     {
         // ---------------------------------------------------------------- perception
@@ -168,17 +183,34 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "radio",
-            Description = "Передать по радиоканалу станции. Common слышат все, Binary — только силиконы.",
+            Description = "Передать по радиоканалу станции. Без 'channel' уходит в текущий канал " +
+                          "(он всегда написан в строке SELF). Указанный здесь канал — разовый, " +
+                          "переключатель он не двигает. Common слышат все, Binary — только силиконы.",
             GameAction = true,
             Speech = true,
             SpokenText = AiTool.TextArgument,
             SchemaJson = """
-                {"type":"object","required":["channel","text"],"additionalProperties":false,"properties":{
+                {"type":"object","required":["text"],"additionalProperties":false,"properties":{
                 "channel":{"type":"string","enum":["Binary","Common","Command","Engineering","Medical","Science","Security","Service","Supply"]},
                 "text":{"type":"string","maxLength":400},
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => RadioAsync(s, a, ct),
+        });
+
+        r.Register(new AiTool
+        {
+            Name = "set_channel",
+            Description = "Переключить канал, в который уходит твоя речь по умолчанию. Как выбор " +
+                          "канала на пульте: выбрал один раз — дальше просто говоришь. Текущий " +
+                          "канал всегда виден в строке SELF, помнить его не нужно.",
+            GameAction = false,
+            SchemaJson = """
+                {"type":"object","required":["channel"],"additionalProperties":false,"properties":{
+                "channel":{"type":"string","enum":["Binary","Common","Command","Engineering","Medical","Science","Security","Service","Supply"]},
+                "via_skill":{"type":"string"}}}
+                """,
+            Handler = (a, ct) => SetChannelAsync(s, a, ct),
         });
 
         r.Register(new AiTool
@@ -426,6 +458,11 @@ public sealed partial class StationAiAgentSystem
         var station = _station.GetOwningStation(brain);
         if (station != null && TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
             sb.Append(" тревога=").Append(alert.CurrentAlertLevel);
+
+        // Положение тумблера печатается КАЖДЫЙ ход, и это обязательное условие того, чтобы он
+        // вообще был допустим. Иначе это скрытое состояние: модель забудет, куда настроена, и
+        // отправит разговор о предателе в общий канал. Читать дешевле, чем помнить.
+        sb.Append(" канал=").Append(session.State.OutputChannel);
 
         sb.Append(" turn=").Append(session.Turns.ToString(CultureInfo.InvariantCulture));
         return sb.ToString();

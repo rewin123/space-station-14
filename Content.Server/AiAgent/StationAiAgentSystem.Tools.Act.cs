@@ -75,14 +75,41 @@ public sealed partial class StationAiAgentSystem
         if (s.AlreadySaid(text!))
             return Task.FromResult(RepeatRefusal());
 
-        if (!TryGetString(args, "channel", out var channel) || string.IsNullOrWhiteSpace(channel))
-            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "radio: нужен 'channel'",
-                alternatives: AiRadioChannels));
+        var allowed = ChannelsFor(s.Mode);
 
-        var match = AiRadioChannels.FirstOrDefault(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase));
+        // Канал не назван — говорим в тот, на который настроен тумблер. Разовое обращение в другой
+        // канал тумблер НЕ двигает: это ровно та же механика, что префикс у живого игрока.
+        var explicitChannel = TryGetString(args, "channel", out var channel) && !string.IsNullOrWhiteSpace(channel);
+
+        if (!explicitChannel)
+        {
+            channel = s.State.OutputChannel;
+
+            // Тумблер может указывать на канал, недоступный в текущем режиме: карденье случается
+            // между ходами, а состояние живёт дольше хода. Отказывать здесь нельзя — модель
+            // получила бы отказ про канал, которого она не называла, и пошла бы искать в нём
+            // опечатку. Молча съезжаем на доступный и говорим об этом в ответе.
+            if (!allowed.Contains(channel, StringComparer.OrdinalIgnoreCase))
+            {
+                s.State.ChannelBeforeCarding ??= channel;
+                s.State.OutputChannel = allowed[0];
+                channel = allowed[0];
+            }
+        }
+
+        var match = allowed.FirstOrDefault(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase));
         if (match == null)
         {
-            var near = AiRadioChannels
+            // Канал существует, но не в этом режиме — это другой отказ, и говорить о нём надо
+            // иначе, иначе модель будет искать опечатку там, где её нет.
+            if (AiRadioChannels.Any(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Task.FromResult(ToolResult.Fail(ToolError.Carded,
+                    $"из интелликарты канал '{channel}' недоступен — передатчик остался в ядре",
+                    retry: "other_target", alternatives: allowed));
+            }
+
+            var near = allowed
                 .OrderBy(c => AiToolRegistry.Distance(c.ToLowerInvariant(), channel!.ToLowerInvariant()))
                 .Take(3).ToList();
 
@@ -101,6 +128,54 @@ public sealed partial class StationAiAgentSystem
             _sawmill.Info($"[LLM] radio {match}: {text}");
             return ToolResult.Effected("self", new Dictionary<string, object?> { ["channel"] = match, ["said"] = text });
         }, ct);
+    }
+
+    // ------------------------------------------------------------ переключатель
+
+    /// <summary>
+    /// Выбрать канал, в который уходит речь по умолчанию.
+    ///
+    /// Не трогает мир и потому не маршалится: это внутренняя настройка агента, как положение
+    /// тумблера на пульте. Ход, назвавший канал прямо в <c>radio</c>, тумблер не двигает.
+    /// </summary>
+    private Task<ToolResult> SetChannelAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    {
+        _ = ct;
+
+        var allowed = ChannelsFor(s.Mode);
+
+        if (!TryGetString(args, "channel", out var channel) || string.IsNullOrWhiteSpace(channel))
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "set_channel: нужен 'channel'",
+                retry: "other_target", alternatives: allowed));
+
+        var match = allowed.FirstOrDefault(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase));
+        if (match == null)
+        {
+            if (AiRadioChannels.Any(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Task.FromResult(ToolResult.Fail(ToolError.Carded,
+                    $"из интелликарты канал '{channel}' недоступен — передатчик остался в ядре",
+                    retry: "other_target", alternatives: allowed));
+            }
+
+            var near = allowed
+                .OrderBy(c => AiToolRegistry.Distance(c.ToLowerInvariant(), channel!.ToLowerInvariant()))
+                .Take(3).ToList();
+
+            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, $"нет канала '{channel}'",
+                retry: "other_target", alternatives: near));
+        }
+
+        var previous = s.State.OutputChannel;
+        s.State.OutputChannel = match;
+
+        _sawmill.Info($"[LLM] канал вывода: {previous} -> {match}");
+
+        return Task.FromResult(ToolResult.Effected("self", new Dictionary<string, object?>
+        {
+            ["канал_был"] = previous,
+            ["канал_стал"] = match,
+        }));
     }
 
     // ------------------------------------------------------------------- announce

@@ -170,6 +170,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// <summary>Идентификатор ванильной должности, которую занимает наш агент.</summary>
     private const string StationAiJob = "StationAi";
 
+    /// <summary>Как агент подписывается в эфире. Должно совпадать с тем, как его зовёт SOUL.md.</summary>
+    public const string AgentName = "Аврора";
+
     private void OnStationPostInit(ref StationPostInitEvent ev)
     {
         // Только если агент действительно собирается занять ядро. Выключенный агент не должен
@@ -200,6 +203,22 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     {
         ReleaseAll("round restart");
         ResetLlmClient();
+
+        // Знание о людях умирает вместе со сменой, знание о станции — нет.
+        //
+        // Каждый раунд SS14 — новая вселенная с теми же именами персонажей. Запись «Иван Петров —
+        // предатель», приехавшая из прошлой смены, даёт агенту то, чего он знать не может, и это
+        // метагейминг. MEMORY.md остаётся: там факты о станции и о собственных граблях, ради
+        // накопления которых память и существует.
+        var cleared = Memory.Clear(Content.Server.AiAgent.Skills.MemoryTarget.Crew);
+
+        // Промпт читает ЗАМОРОЖЕННЫЙ снимок, а не живые записи, поэтому без пересборки следующий
+        // раунд стартовал бы со старым экипажем в системном сообщении — то есть очистка была бы
+        // видна только в файле и нигде больше.
+        Memory.RefreshSnapshot();
+
+        if (cleared.Ok)
+            _sawmill.Info($"память об экипаже сброшена на разборе раунда: {cleared.Message}");
     }
 
     /// <summary>
@@ -294,6 +313,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         RemComp<ToggleableGhostRoleComponent>(brain);
 
         EnsureComp<LlmStationAiComponent>(brain);
+
+        // Имя из SOUL, а не NameIdentifier.
+        //
+        // Ванильный прототип выдаёт «AI-221», и в эфир уходило именно оно, а SOUL всю дорогу
+        // называет агента Авророй. На «AI-221, открой дверь» модель могла не понять, что
+        // обращаются к ней: этого имени нет в её промпте нигде. Обратное тоже ломалось — экипаж
+        // видел одно имя, слышал про другое.
+        _metaData.SetEntityName(brain, AgentName);
 
         if (!StartSession(brain, out reason))
         {
@@ -701,9 +728,43 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         var intoCore = args.Container.ID == StationAiCoreComponent.Container;
 
         session.Mode = intoCore ? AgentMode.Core : AgentMode.Carded;
+
+        var note = intoCore ? RestoreChannel(session) : ForceCardedChannel(session);
+
         session.Queue.Push(Observation.Event(
-            intoCore ? "вернулся в ядро — оборудование снова доступно" : "загружен в интелликарту",
+            (intoCore ? "вернулся в ядро — оборудование снова доступно" : "загружен в интелликарту") + note,
             RoundTime()));
+    }
+
+    /// <summary>
+    /// В интелликарте остаётся один передатчик, поэтому тумблер принудительно встаёт на Binary.
+    ///
+    /// Возвращает добавку к строке EVENT: агент обязан узнать об этом из наблюдения, а не
+    /// обнаружить отказом посреди попытки вызвать СБ.
+    /// </summary>
+    private static string ForceCardedChannel(AgentSession session)
+    {
+        var current = session.State.OutputChannel;
+        if (current == AgentState.CardedChannel)
+            return string.Empty;
+
+        session.State.ChannelBeforeCarding = current;
+        session.State.OutputChannel = AgentState.CardedChannel;
+
+        return $"; передатчик остался в ядре, канал переключён с {current} на {AgentState.CardedChannel}";
+    }
+
+    /// <summary>Вернуть тумблер туда, где он стоял до карденья.</summary>
+    private static string RestoreChannel(AgentSession session)
+    {
+        var restored = session.State.ChannelBeforeCarding;
+        if (restored == null || session.State.OutputChannel == restored)
+            return string.Empty;
+
+        session.State.OutputChannel = restored;
+        session.State.ChannelBeforeCarding = null;
+
+        return $"; канал вернулся на {restored}";
     }
 
     private void OnBrainRemoved(Entity<LlmStationAiComponent> ent, ref EntGotRemovedFromContainerMessage args)
@@ -716,7 +777,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // The loop keeps running: a carded AI still hears Binary and Common and can still speak.
         // Only the device tools refuse, via the mode gate.
         session.Mode = AgentMode.Carded;
-        session.Queue.Push(Observation.Event("извлечён из ядра — доступа к устройствам нет", RoundTime()));
+        var lost = ForceCardedChannel(session);
+
+        session.Queue.Push(Observation.Event(
+            "извлечён из ядра — доступа к устройствам нет" + lost, RoundTime()));
     }
 
     // -------------------------------------------------------------- persistence

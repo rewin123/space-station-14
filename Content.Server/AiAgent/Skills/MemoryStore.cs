@@ -345,6 +345,38 @@ public sealed class MemoryStore
         }
     }
 
+    /// <summary>
+    /// Очистить цель целиком — и на диске тоже.
+    ///
+    /// Нужна ровно для одного: <c>CREW.md</c> не должен переживать раунд. В SS14 каждая смена —
+    /// это новая вселенная с теми же именами персонажей, поэтому запись «Иван Петров — предатель»,
+    /// приехавшая из прошлого раунда, это метагейминг, наказуемый на любом публичном сервере.
+    ///
+    /// <c>MEMORY.md</c> при этом переживать раунды ДОЛЖЕН: там факты о станции и о самом себе
+    /// («APC ядра виден в look, но недоступен для move_camera»), и ради накопления этого знания
+    /// вся механика памяти и заводилась.
+    /// </summary>
+    public MemoryResult Clear(MemoryTarget target)
+    {
+        lock (_sync)
+        {
+            var entries = Live(target);
+            if (entries.Count == 0)
+                return new MemoryResult(true, "и так пусто");
+
+            var previous = new List<string>(entries);
+            entries.Clear();
+
+            if (!TrySave(target, out var error))
+            {
+                entries.AddRange(previous);
+                return NotWritten(target, error);
+            }
+
+            return Success(target, $"очищено записей: {previous.Count}");
+        }
+    }
+
     public MemoryResult Remove(MemoryTarget target, string oldText)
     {
         oldText = oldText.Trim();
