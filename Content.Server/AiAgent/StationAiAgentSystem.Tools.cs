@@ -14,7 +14,8 @@ namespace Content.Server.AiAgent;
 /// <summary>
 /// Tool registration and the shared plumbing every tool uses.
 ///
-/// Fourteen game-facing tools. Held down deliberately: the mcbot deployment on this box measured
+/// Sixteen game-facing tools, plus <c>noop</c> — the one that does nothing. Held down deliberately:
+/// the mcbot deployment on this box measured
 /// that 46 narrow commands drowned this exact model on this exact quant while ~13 worked. Breadth
 /// comes from consolidation, not from more entries — <c>inspect</c> absorbs what would otherwise
 /// be twenty readers, <c>device_action</c> fifteen verbs, and <c>device_ui</c> the long tail of
@@ -293,6 +294,28 @@ public sealed partial class StationAiAgentSystem
                 "via_skill":{"type":"string"}}}
                 """,
             Handler = (a, ct) => DeviceUiAsync(s, a, ct),
+        });
+
+        // ------------------------------------------------------------ ничего не делать
+
+        r.Register(new AiTool
+        {
+            Name = "noop",
+            Description = "Ничего не делать: ты прочитал наблюдение и вмешиваться не нужно. " +
+                          "Ход на этом заканчивается. Это нормальный ответ и правильный ответ на " +
+                          "чужой разговор по рации: смена идёт сама, и большую часть времени от " +
+                          "тебя ничего не требуется. Если обращались именно к тебе — сначала " +
+                          "ответь через say или radio, и только потом noop.",
+
+            // Не GameAction: ход должен закрываться и во время разбора, и из интелликарты.
+            // Единственный инструмент, который обязан работать всегда.
+            EndsTurn = true,
+            SchemaJson = """
+                {"type":"object","additionalProperties":false,"properties":{
+                "reason":{"type":"string","maxLength":200,"description":"Коротко для журнала, зачем ты решил не вмешиваться. Экипаж этого не увидит."},
+                "via_skill":{"type":"string"}}}
+                """,
+            Handler = (a, ct) => NoopAsync(s, a, ct),
         });
 
         // ------------------------------------------------- skills and memory

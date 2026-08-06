@@ -66,6 +66,8 @@ export interface AgentStats {
   turns: number
   conv_turns: number
   untooled_replies: number
+  /** Ходы, закрытые явным noop: молчание по решению, а не по поломке. */
+  idle_turns: number
   consecutive_failures: number
   broken_promises: number
   compactions: number

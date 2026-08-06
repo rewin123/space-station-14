@@ -110,6 +110,7 @@ public static class AgentDebugState
             session.Turns,
             conv.TurnCount,
             session.UntooledReplies,
+            session.State.IdleTurns,
             session.ConsecutiveFailures,
             session.State.BrokenPromises,
             session.State.Compactions,

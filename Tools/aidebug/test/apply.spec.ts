@@ -15,6 +15,7 @@ function stats(turn: number, extra: Partial<AgentStats> = {}): AgentStats {
     turns: turn,
     conv_turns: turn,
     untooled_replies: 0,
+    idle_turns: 0,
     consecutive_failures: 0,
     broken_promises: 0,
     compactions: 0,

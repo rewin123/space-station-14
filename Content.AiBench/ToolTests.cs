@@ -179,6 +179,32 @@ public sealed class ToolTests
         Assert.That(result.Ok, Is.True, result.ToJson());
     }
 
+    // ------------------------------------------------------------ ничего не делать
+
+    [Test]
+    public async Task Noop_WorksInEveryMode()
+    {
+        // Единственный инструмент без причин отказать, и это намеренно. Сказать «делать нечего»
+        // агент должен уметь всегда: и когда идёт разбор, и когда он лежит в чужом кармане. Отказ
+        // здесь означал бы «ты обязан что-то сделать», а обязан он ровно наоборот — не спамить.
+        await using var w = await AiWorld.Create();
+
+        var core = await w.Invoke("noop", """{"reason":"чужой разговор по рации"}""");
+        Assert.That(core.Ok, Is.True, core.ToJson());
+
+        await w.Post(() => w.System.GetSession(w.Brain)!.Mode = Content.Server.AiAgent.AgentMode.Carded);
+        var carded = await w.Invoke("noop", "{}");
+
+        await w.Post(() => w.System.GetSession(w.Brain)!.Mode = Content.Server.AiAgent.AgentMode.Review);
+        var review = await w.Invoke("noop", "{}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(carded.Ok, Is.True, $"из интелликарты закрыть ход нельзя: {carded.ToJson()}");
+            Assert.That(review.Ok, Is.True, $"во время разбора закрыть ход нельзя: {review.ToJson()}");
+        });
+    }
+
     // -------------------------------------------------------------------- movement
 
     [Test]

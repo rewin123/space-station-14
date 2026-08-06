@@ -268,6 +268,18 @@ public sealed class AgentSession : IDisposable
                 idleStreak = 0;
                 await RunTurnAsync(perception, ct).ConfigureAwait(false);
 
+                // Ход, закрытый noop, — тоже простой.
+                //
+                // Модель прямо сказала, что вмешиваться не нужно; продолжать опрашивать её в полном
+                // темпе значит платить за тот же ответ каждые несколько секунд. Считаем такой ход
+                // наравне с тиком, на котором вообще нечего было наблюдать, — после трёх подряд
+                // петля сама переходит на tick_seconds_idle.
+                //
+                // На force это не влияет вредно: пока экипаж говорит, наблюдение непустое и
+                // строится независимо от idleStreak.
+                if (LastTurn?.Exit == TurnExit.Idled)
+                    idleStreak++;
+
                 if (_notedDegraded)
                 {
                     _notedDegraded = false;

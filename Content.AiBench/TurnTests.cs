@@ -76,6 +76,21 @@ public sealed class TurnTests
             return this;
         }
 
+        /// <summary>Двойник noop: ничего не делает и закрывает ход.</summary>
+        public Harness WithNoopTool(string name = "noop")
+        {
+            Registry.Register(new AiTool
+            {
+                Name = name,
+                Description = "тест",
+                SchemaJson = "{\"type\":\"object\"}",
+                EndsTurn = true,
+                Handler = (_, _) => Task.FromResult(ToolResult.Success()),
+            });
+
+            return this;
+        }
+
         /// <summary>A game-acting tool that is not speech — the thing a promise is settled by.</summary>
         public Harness WithDeviceTool(string name = "device_action")
         {
@@ -345,6 +360,119 @@ public sealed class TurnTests
         Assert.That(h.State.BrokenPromises, Is.Zero);
     }
 
+    // ------------------------------------------------------------- ничего не делать
+
+    [Test]
+    public async Task Noop_EndsTheTurnOnTheSpot()
+    {
+        // Весь смысл инструмента. Если после noop петля сходит к модели ещё раз, он не экономит
+        // ничего — а ровно за этим он и заведён.
+        var h = new Harness().WithNoopTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("noop", """{"reason":"чужой разговор"}""")
+            .Then("а это уже лишний шаг");
+
+        var ctx = await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ctx.Exit, Is.EqualTo(TurnExit.Idled));
+            Assert.That(llm.Calls, Is.EqualTo(1), "после noop лишних запросов к модели быть не должно");
+            Assert.That(h.State.IdleTurns, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Noop_IsSilentWhereProseWouldHaveBeenNudged()
+    {
+        // Сравнение с ProseWithoutSpeaking_IsNudgedThenDelivered на ТОМ ЖЕ наблюдении.
+        //
+        // Addressed истинно от любой строки рации, не только обращённой к ИИ. Значит на оживлённом
+        // канале модель, которой нечего сказать, отвечала прозой и получала «этого никто не
+        // услышал» — подталкивание высказаться там, где правильный ответ молчание. Из этой самой
+        // петли растёт наблюдённая привычка ставить «Экипаж, Аврора на связи» в общий канал.
+        var h = new Harness().WithNoopTool();
+        var llm = new ScriptedLlmClient().ThenCall("noop", "{}");
+
+        var ctx = await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ctx.Nudged, Is.False, "молчание по решению напоминания не заслуживает");
+            Assert.That(h.Spoken, Is.Empty, "ничего не должно было уехать в эфир");
+            Assert.That(h.State.UntooledReplies, Is.Zero, "это не ответ прозой");
+            Assert.That(ctx.Delivery, Is.EqualTo(TurnDelivery.NothingOwed));
+        });
+    }
+
+    [Test]
+    public async Task NoopAfterAnUnkeptPromise_StillReminds()
+    {
+        // Иначе noop стал бы способом сказать «сейчас открою» и молча закрыть ход: экипаж стоит у
+        // двери, а агент уже спит. Проверка обещания старше noop и должна его переживать.
+        var h = new Harness().WithSpeechTool().WithNoopTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("radio", """{"channel":"Common","text":"Открою дверь, сейчас посмотрю."}""")
+            .ThenCall("noop", "{}")
+            .Then("ладно");
+
+        var ctx = await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.BrokenPromises, Is.EqualTo(1));
+            Assert.That(llm.SeenPrompts.Last().Any(m => m.Content?.Contains("ни одного действия") == true),
+                Is.True, "напоминание обязано было дойти до модели");
+            Assert.That(ctx.Exit, Is.Not.EqualTo(TurnExit.Idled),
+                "ход, закрытый вопреки обещанию, простоем не считается");
+            Assert.That(h.State.IdleTurns, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task NoopAfterKeepingThePromise_JustEnds()
+    {
+        // Обратная половина: сказал, сделал, закрыл ход. Упрекать не за что.
+        var h = new Harness().WithSpeechTool().WithDeviceTool().WithNoopTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("radio", """{"channel":"Common","text":"Открою дверь."}""")
+            .ThenCall("device_action", """{"handle":"door-1","action":"open"}""")
+            .ThenCall("noop", "{}");
+
+        var ctx = await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.BrokenPromises, Is.Zero);
+            Assert.That(ctx.Exit, Is.EqualTo(TurnExit.Idled));
+
+            // Exit и Delivery ортогональны: ход закончился по своей воле, а экипаж получил ответ
+            // инструментом. Одно про то, почему остановились, другое — про то, услышали ли.
+            Assert.That(ctx.Delivery, Is.EqualTo(TurnDelivery.SpokeByTool));
+        });
+    }
+
+    [Test]
+    public async Task NoopAlongsideAnswering_ClosesTheTurnToo()
+    {
+        // Ответить и тем же шагом закрыть ход — законно: «закрывает ход» ортогонально речи.
+        var h = new Harness().WithSpeechTool().WithNoopTool();
+        var llm = new ScriptedLlmClient()
+            .ThenCall("radio", """{"channel":"Binary","text":"Принято."}""")
+            .ThenCall("noop", "{}")
+            .Then("лишний шаг");
+
+        var ctx = await h.Build(llm).RunAsync(Addressed(), maxSteps: 4, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ctx.Exit, Is.EqualTo(TurnExit.Idled));
+            Assert.That(llm.Calls, Is.EqualTo(2));
+            Assert.That(h.State.Conv.HasOpenToolCalls, Is.False,
+                "ход закрыт досрочно — но все вызовы обязаны иметь ответ, иначе следующий запрос отвергнут целиком");
+        });
+    }
+
     private static string Trim(string s) =>
         string.IsNullOrEmpty(s) ? "" : s.Length <= 120 ? s : s[..120] + "…";
 
@@ -356,7 +484,7 @@ public sealed class TurnTests
         // simulating the method in your head.
         Assert.Multiple(() =>
         {
-            Assert.That(Enum.GetValues<TurnExit>(), Has.Length.EqualTo(4));
+            Assert.That(Enum.GetValues<TurnExit>(), Has.Length.EqualTo(5));
             Assert.That(Enum.GetValues<TurnDelivery>(), Has.Length.EqualTo(6));
         });
     }

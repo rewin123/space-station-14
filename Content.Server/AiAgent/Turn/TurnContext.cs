@@ -14,6 +14,16 @@ public enum TurnExit : byte
     /// <summary>The model answered without calling anything, so the turn is over.</summary>
     ModelStopped,
 
+    /// <summary>
+    /// Модель вызвала noop: прочитала наблюдение и решила не вмешиваться.
+    ///
+    /// Отдельно от <see cref="ModelStopped"/>, потому что это разные вещи. Там модель перестала
+    /// звать инструменты — может, потому что решила, а может, потому что растерялась. Здесь она
+    /// сказала «нечего делать» явно, и петля вправе на это опереться: сбавить темп опроса и не
+    /// считать ход неудачным.
+    /// </summary>
+    Idled,
+
     /// <summary>Ran out of steps while still calling tools.</summary>
     BudgetExhausted,
 
@@ -80,6 +90,20 @@ public sealed class TurnContext
     public bool Spoke { get; private set; }
 
     public bool Nudged { get; private set; }
+
+    /// <summary>Модель вызвала noop на этом шаге. Живёт ровно до следующей отправки инструментов.</summary>
+    public bool Idled { get; private set; }
+
+    public void MarkIdled() => Idled = true;
+
+    /// <summary>
+    /// Забыть noop прошлого шага.
+    ///
+    /// Нужно потому, что ход после noop может продолжиться: если модель успела пообещать экипажу
+    /// действие, ей даётся напоминание и ещё один шаг. Без сброса этот шаг закрылся бы сразу же
+    /// старым флагом, и напоминание превратилось бы в реплику, на которую нельзя ответить.
+    /// </summary>
+    public void ClearIdle() => Idled = false;
 
     /// <summary>The last thing it told the crew it was about to do, until it does it.</summary>
     public string? Promised { get; private set; }

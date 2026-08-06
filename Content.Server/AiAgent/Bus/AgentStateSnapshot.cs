@@ -151,6 +151,10 @@ public sealed record AgentStatsDto(
     [property: JsonPropertyName("turns")] int Turns,
     [property: JsonPropertyName("conv_turns")] int ConvTurns,
     [property: JsonPropertyName("untooled_replies")] int UntooledReplies,
+
+    /// <summary>Ходы, закрытые явным noop, — молчание по решению, а не по поломке.</summary>
+    [property: JsonPropertyName("idle_turns")] int IdleTurns,
+
     [property: JsonPropertyName("consecutive_failures")] int ConsecutiveFailures,
     [property: JsonPropertyName("broken_promises")] int BrokenPromises,
     [property: JsonPropertyName("compactions")] int Compactions,

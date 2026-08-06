@@ -138,6 +138,30 @@ public sealed class TurnRunner
             ctx.Enter(TurnPhase.Dispatch);
             await DispatchAsync(ctx, response, ct).ConfigureAwait(false);
 
+            // Модель сказала «делать нечего» — значит ход окончен, и следующий запрос не нужен.
+            //
+            // Это и есть весь смысл noop. Раньше единственным способом закрыть ход было перестать
+            // звать инструменты, то есть ответить прозой, а проза при любом радиотрафике поднимает
+            // owed и тянет за собой напоминание и лишний шаг. Модель, которой нечего сказать,
+            // получала подталкивание высказаться — ровно там, где правильный ответ молчание.
+            if (ctx.Idled)
+            {
+                // Обещание проверяется и здесь. Иначе noop стал бы способом сказать экипажу
+                // «сейчас открою» и молча закрыть ход: люди стоят у двери, а агент уже спит.
+                if (TryNudgePromise(ctx))
+                {
+                    if (ctx.TryAdvanceStep())
+                        continue;
+
+                    ctx.Finish(TurnExit.BudgetExhausted, TurnDelivery.NothingOwed);
+                    return;
+                }
+
+                _state.IdleTurns++;
+                ctx.Finish(TurnExit.Idled, TurnDelivery.NothingOwed);
+                return;
+            }
+
             if (ctx.TryAdvanceStep())
                 continue;
 
@@ -238,6 +262,7 @@ public sealed class TurnRunner
     private async Task DispatchAsync(TurnContext ctx, LlmResponse response, CancellationToken ct)
     {
         ctx.HoldProse(null);
+        ctx.ClearIdle();
 
         foreach (var call in response.ToolCalls)
         {
@@ -293,6 +318,11 @@ public sealed class TurnRunner
             {
                 ctx.MarkActed();
             }
+
+            // Отдельным условием, а не веткой цепочки выше: «закрывает ход» ортогонально и речи, и
+            // действию. Модель вправе ответить по рации и тем же ответом закрыть ход.
+            if (result.Ok && invocation.Tool is { EndsTurn: true })
+                ctx.MarkIdled();
         }
     }
 

@@ -20,6 +20,11 @@ const ROWS: { key: keyof NonNullable<typeof stats.value>; title: string; hint?: 
   { key: 'conv_turns', title: 'user-сообщений', hint: 'больше ходов — значит были подталкивания' },
   { key: 'compactions', title: 'свёрток' },
   { key: 'untooled_replies', title: 'ответов прозой', hint: 'должно оставаться около нуля' },
+  {
+    key: 'idle_turns',
+    title: 'ходов с noop',
+    hint: 'молчал по решению; ноль при молчащем ИИ — значит молчит не по своей воле',
+  },
   { key: 'broken_promises', title: 'обещал и не сделал' },
   { key: 'consecutive_failures', title: 'ошибок подряд' },
   { key: 'cache_alarms', title: 'тревог кэша' },

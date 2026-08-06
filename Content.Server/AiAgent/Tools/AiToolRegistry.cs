@@ -40,6 +40,14 @@ public sealed class AiTool
     public bool Speech { get; init; }
 
     /// <summary>
+    /// Успешный вызов закрывает ход на месте — модель сказала, что делать нечего.
+    ///
+    /// Объявлено флагом здесь, а не именем в петле, ровно по той же причине, что и
+    /// <see cref="Speech"/>: бегун хода не знает ни одного инструмента по имени, и знать не должен.
+    /// </summary>
+    public bool EndsTurn { get; init; }
+
+    /// <summary>
     /// Pull the spoken text out of the parsed arguments, for repeat suppression.
     /// Only consulted when <see cref="Speech"/> is true. May be handed an undefined element when
     /// the arguments failed to parse, so implementations must tolerate that.
