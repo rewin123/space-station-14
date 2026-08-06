@@ -10,7 +10,9 @@ const KEY = 'aidebug.endpoint'
  * голосом, и адресная строка — худшее место для такого (история, шаринг, логи прокси).
  */
 export const useSettings = defineStore('settings', () => {
-  const baseUrl = ref('http://127.0.0.1:9080')
+  // На dev-сервере Vite ходим напрямую в отладочный сервер (кросс-ориджин, как в проде);
+  // в собранном виде страница живёт за обратным прокси и API у неё на том же origin.
+  const baseUrl = ref(location.port === '5173' ? 'http://127.0.0.1:9080' : '/api')
   const token = ref('')
 
   try {

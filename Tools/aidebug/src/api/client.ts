@@ -62,7 +62,10 @@ async function request<T>(
       ...init,
       signal: signals,
       headers: {
-        Authorization: `Bearer ${endpoint.token}`,
+        // Пустой токен — не шлём заголовок совсем. За обратным прокси его подставляет сам
+        // прокси, и страница о нём не знает; посылать `Bearer ` пустой строкой было бы просто
+        // мусором в запросе.
+        ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },

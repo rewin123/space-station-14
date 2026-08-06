@@ -25,12 +25,9 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 const tab = ref<TabId>('conversation')
 
-// Автоподключение только если токен уже есть: иначе первый запрос словит 401, петля терминально
-// встанет, и будет непонятно, чего от тебя хотят.
-onMounted(() => {
-  if (settings.token)
-    agent.connect()
-})
+// Подключаемся сразу: за обратным прокси токен подставляет он сам, а при неверном токене петля
+// терминально встаёт и говорит об этом — молчать было бы хуже.
+onMounted(() => agent.connect())
 
 const STATUS_TEXT: Record<string, string> = {
   idle: 'не подключено',
