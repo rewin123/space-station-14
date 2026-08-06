@@ -146,3 +146,13 @@ tick_seconds = 8.0
 compact_high = 90000
 compact_low = 45000
 compact_keep_tail = 30000
+
+# ---- Где это всё живёт ----
+#
+# Сервер поднимает SS14.Watchdog как пользовательский systemd-юнит ss14-aurora.service.
+# Рабочий файл конфига теперь /home/rewin/ss14-watchdog/instances/aurora/config.toml,
+# база (вайтлист, баны, преференции) — там же в data/. Подробности и команды управления:
+# /home/rewin/ss14-watchdog/README.md
+#
+# Автообновление отключено намеренно: UpdateType не задан, провайдера обновлений нет вовсе.
+# Иначе вотчдог затёр бы сборку форка апстримом.
