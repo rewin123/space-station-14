@@ -279,6 +279,34 @@ public sealed partial class StationAiAgentSystem
         {
             _dispatcher.AssertMainThread("observation");
 
+            // A paused world produces no turn, however long the agent has been idling.
+            //
+            // `game.auto_pause_empty` defaults to true, so a server with nobody connected freezes
+            // the simulation entirely: CurTick stops, and with it every clock, timer and physics
+            // step. The agent loop does NOT stop — it runs on Task.Delay, i.e. real time — so
+            // without this it goes on observing, reasoning and paying a hosted model to describe a
+            // station where by construction nothing can change. It also starts saying things like
+            // "смена идёт", about a shift that has not advanced a single tick, and the round clock
+            // it quotes is a truthful T+0:00:00 that reads like a bug.
+            //
+            // Found from the debug page: every observation in the transcript carried T+0:00:00.
+            if (_gameTiming.Paused)
+            {
+                if (!_notedPause)
+                {
+                    _notedPause = true;
+                    _sawmill.Info("мир на паузе (нет игроков) — агент ждёт, ходы не тратятся");
+                }
+
+                return null;
+            }
+
+            if (_notedPause)
+            {
+                _notedPause = false;
+                _sawmill.Info("мир снялся с паузы — агент продолжает");
+            }
+
             // Before the drain, so a rewrite lands in the very turn that notices it.
             NoticeLawChange(session);
 

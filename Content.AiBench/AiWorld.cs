@@ -6,6 +6,7 @@ using Content.Server.AiAgent;
 using Content.Server.AiAgent.Tools;
 using Content.Shared.Silicons.StationAi;
 using NUnit.Framework;
+using Robust.Shared;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.UnitTesting.Pool;
@@ -103,6 +104,11 @@ public sealed class AiWorld : IAsyncDisposable
 
         await server.WaitPost(() =>
         {
+            // Мир не должен вставать на паузу: в пуле нет игроков, а `game.auto_pause_empty`
+            // по умолчанию замораживает симуляцию именно в этом случае — CurTick перестаёт расти,
+            // и агент, чья петля живёт на реальном времени, по уговору не делает ни одного хода.
+            // Тесты петли после этого просто не дожидаются вызова модели.
+            cfg.SetCVar(CVars.GameAutoPauseEmpty, false);
             cfg.SetCVar(AiCVars.Enabled, true);
             cfg.SetCVar(AiCVars.AutoClaim, false);   // tests claim explicitly, at a known moment
             cfg.SetCVar(AiCVars.DryRun, false);

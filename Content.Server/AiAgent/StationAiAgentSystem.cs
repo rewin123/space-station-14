@@ -34,6 +34,7 @@ using Robust.Shared.Asynchronous;
 using Robust.Shared.Configuration;
 using Robust.Shared.Containers;
 using Robust.Shared.Prototypes;
+using Robust.Shared.Timing;
 
 namespace Content.Server.AiAgent;
 
@@ -72,10 +73,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private Content.Server.Pinpointer.NavMapSystem _navMap = default!;
     [Dependency] private Content.Shared.Power.EntitySystems.SharedBatterySystem _battery = default!;
     [Dependency] private SharedContainerSystem _container = default!;
+    [Dependency] private IGameTiming _gameTiming = default!;
 
     private ISawmill _sawmill = default!;
     private MainThreadDispatcher _dispatcher = default!;
     private GameTicker? _ticker;
+
+    /// <summary>Логировать паузу один раз на переход, а не каждый тик.</summary>
+    private bool _notedPause;
 
     private readonly Dictionary<EntityUid, AgentSession> _sessions = new();
     private ILlmClient? _llm;

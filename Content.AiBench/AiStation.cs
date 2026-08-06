@@ -12,6 +12,7 @@ using Content.Shared.CCVar;
 using Content.Shared.Pinpointer;
 using Content.Shared.Silicons.StationAi;
 using NUnit.Framework;
+using Robust.Shared;
 using Robust.Shared.Configuration;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
@@ -93,6 +94,11 @@ public sealed class AiStation : IAsyncDisposable
             cfg.SetCVar(CCVars.GameMap, MapProto);
             cfg.SetCVar(CCVars.GameLobbyEnabled, false);
 
+            // Мир не должен вставать на паузу: в пуле нет игроков, а `game.auto_pause_empty`
+            // по умолчанию замораживает симуляцию именно в этом случае — CurTick перестаёт расти,
+            // и агент, чья петля живёт на реальном времени, по уговору не делает ни одного хода.
+            // Тесты петли после этого просто не дожидаются вызова модели.
+            cfg.SetCVar(CVars.GameAutoPauseEmpty, false);
             cfg.SetCVar(AiCVars.Enabled, true);
 
             // Auto-claim ON, deliberately. The live server claims a core through
