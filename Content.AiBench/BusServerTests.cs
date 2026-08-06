@@ -59,6 +59,7 @@ public sealed class BusServerTests
             () => null,
             () => memory,
             () => skills,
+            () => 7,
             _ => (false, "нет активного агента"),
             (t, _, _, c) => memory.Add(t, c),
             (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
@@ -148,7 +149,7 @@ public sealed class BusServerTests
             var skills = new SkillStore(dir, Sawmill);
 
             var router = new AgentDebugRouter(
-                bus, "", "current", () => null, () => memory, () => skills,
+                bus, "", "current", () => null, () => memory, () => skills, () => 7,
                 _ => (false, ""), (t, _, _, c) => memory.Add(t, c),
                 (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
 

@@ -33,6 +33,9 @@ public interface IAgentEventSink
     /// <summary>One skill written or edited.</summary>
     void SkillUpdated(Skill skill);
 
+    /// <summary>The library was re-read from disk; these are the skills that survived.</summary>
+    void SkillsReloaded(IReadOnlyCollection<Skill> skills);
+
     /// <summary>
     /// The whole statistics record, sampled at a turn boundary.
     ///
@@ -61,5 +64,6 @@ public sealed class NullAgentEventSink : IAgentEventSink
     public void PrefixReplaced(string prefixHash, string systemPrompt, string toolsJson) { }
     public void MemoryUpdated(MemoryTarget target, IReadOnlyList<string> entries) { }
     public void SkillUpdated(Skill skill) { }
+    public void SkillsReloaded(IReadOnlyCollection<Skill> skills) { }
     public void Stats(AgentStatsDto stats) { }
 }

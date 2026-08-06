@@ -8,16 +8,12 @@ namespace Content.Server.AiAgent.Bus;
 /// The state getter: one consistent picture of the agent, assembled once.
 ///
 /// <para>
-/// <b>This is the only place that holds more than two locks.</b> The order is
-/// <c>Conv → Memory → Skills → Bus</c> and it is total: every publisher takes at most its own
-/// domain lock and then the bus lock, which is a prefix of that order, so no cycle can be built.
-/// Capture walks the whole chain in the same direction. That is the entire deadlock argument.
-/// </para>
-/// <para>
-/// The bus lock is taken <em>last</em> and read for the sequence number, which is what pairs the
-/// snapshot with the stream: a client that fetches state at seq N and then asks for events after N
-/// sees every change exactly once. Read the seq first and a change landing in between would be
-/// applied twice; read it without the data locks held and it could be applied zero times.
+/// <b>It holds no two locks at once.</b> Each owner is asked in turn — conversation, memory,
+/// skills — and each takes and releases its own lock, so the picture is assembled from adjacent
+/// instants rather than one. That is a deliberate trade, and <see cref="Capture"/> spells out why
+/// the sequence number is read first to make the resulting skew safe. It also means the documented
+/// <c>Conv → Memory → Skills → Bus</c> order costs nothing here: with one lock held at a time there
+/// is no cycle to build.
 /// </para>
 /// <para>
 /// Called from an HTTP thread, never the main thread. It touches no entity, only the three data
@@ -33,27 +29,51 @@ public static class AgentDebugState
         AgentSession? session,
         MemoryStore memory,
         SkillStore skills,
-        string sessionId)
+        string sessionId,
+        int roundId)
     {
-        // Conv first. Everything read here comes out of one acquisition, so the messages, the
-        // prefix and the counters describe the same instant rather than three adjacent ones.
-        var sessionDto = session == null ? null : CaptureSession(session, sessionId);
+        // The sequence number is read FIRST, and that single line is what makes this safe.
+        //
+        // This capture is NOT atomic: each owner is asked separately, so a change can land between
+        // two of the reads below. The only question is which way that failure points, and the order
+        // of this one line decides it.
+        //
+        //   seq last  → the change is counted in seq but missing from the data, so the client
+        //               never receives it and never learns it exists. A LOST UPDATE.
+        //   seq first → the change is in the data and arrives again in the stream, so the client
+        //               applies it twice. A DUPLICATE.
+        //
+        // A duplicate is harmless here because every event carries the whole new value rather than
+        // a delta: memory.updated, skill.updated, skills.reloaded, history.replaced, prefix.replaced
+        // and stats are all idempotent on replay. The single exception is message.appended, and the
+        // client checks `index == messages.length` against it — a mismatch is a resync, not silence.
+        //
+        // Holding all four locks nested in the documented Conv → Memory → Skills → Bus order would
+        // make it genuinely atomic, and CaptureUnderConcurrentPublishDoesNotDeadlock already guards
+        // that order. It is not worth the deadlock surface for a debug endpoint when reordering one
+        // line converts the failure into one the client already detects.
+        var instance = bus.Instance;
+        var seq = bus.Seq;
+
+        var sessionDto = session == null ? null : CaptureSession(session, sessionId, roundId);
 
         var memoryDto = new AgentMemoryDto(
             memory.Entries(MemoryTarget.Memory),
             memory.Snapshot(MemoryTarget.Memory),
+            memory.MemoryLimit,
             memory.Entries(MemoryTarget.Crew),
-            memory.Snapshot(MemoryTarget.Crew));
+            memory.Snapshot(MemoryTarget.Crew),
+            memory.CrewLimit);
 
         var skillDtos = skills.All
             .OrderBy(s => s.Name, System.StringComparer.Ordinal)
             .Select(s => new AgentSkillDto(s.Name, s.When, s.Body))
             .ToList();
 
-        return new AgentStateSnapshot(bus.Instance, bus.Seq, sessionDto, memoryDto, skillDtos);
+        return new AgentStateSnapshot(instance, seq, sessionDto, memoryDto, skillDtos);
     }
 
-    private static AgentSessionDto CaptureSession(AgentSession session, string sessionId)
+    private static AgentSessionDto CaptureSession(AgentSession session, string sessionId, int roundId)
     {
         var conv = session.Conv;
         var body = conv.Snapshot();
@@ -65,6 +85,7 @@ public static class AgentDebugState
         return new AgentSessionDto(
             sessionId,
             (int)session.Brain,
+            roundId,
             conv.PrefixHash,
             conv.SystemPrompt,
             conv.ToolsJson,

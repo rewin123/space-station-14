@@ -38,6 +38,16 @@ public enum AgentEventKind : byte
     SkillUpdated,
 
     /// <summary>
+    /// The whole library was re-read from disk. Payload carries every skill that survived.
+    ///
+    /// Needed because a reload is the only way a skill can <em>disappear</em>: the store clears
+    /// itself and re-adds whatever parsed, so a deleted, archived or newly-unparseable file
+    /// produces no event of its own. A client folding <see cref="SkillUpdated"/> into a map would
+    /// keep the ghost forever — and reloads happen at every compaction, not rarely.
+    /// </summary>
+    SkillsReloaded,
+
+    /// <summary>
     /// The whole statistics record, sampled at a turn boundary rather than diffed per counter.
     /// See <see cref="AgentEventBus"/> for why this one is a sample and not a diff.
     /// </summary>
@@ -56,6 +66,7 @@ public static class AgentEventNames
         AgentEventKind.PrefixReplaced => "prefix.replaced",
         AgentEventKind.MemoryUpdated => "memory.updated",
         AgentEventKind.SkillUpdated => "skill.updated",
+        AgentEventKind.SkillsReloaded => "skills.reloaded",
         AgentEventKind.Stats => "stats",
 
         // Not a default case: a new enum member must fail loudly here rather than travel the wire

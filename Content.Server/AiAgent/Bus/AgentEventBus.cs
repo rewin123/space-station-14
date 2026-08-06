@@ -257,6 +257,18 @@ public sealed class AgentEventBus
             }, AgentDebugJson.Options));
         }
 
+        public void SkillsReloaded(IReadOnlyCollection<Skill> skills)
+        {
+            var all = new List<object>(skills.Count);
+            foreach (var s in skills)
+                all.Add(new { name = s.Name, when = s.When, body = s.Body });
+
+            bus.Publish(AgentEventKind.SkillsReloaded, sessionId, JsonSerializer.Serialize(new
+            {
+                skills = all,
+            }, AgentDebugJson.Options));
+        }
+
         public void Stats(AgentStatsDto stats)
         {
             bus.Publish(AgentEventKind.Stats, sessionId, JsonSerializer.Serialize(stats, AgentDebugJson.Options));

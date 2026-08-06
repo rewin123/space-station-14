@@ -203,13 +203,23 @@ public sealed class MemoryStore
             return _snapshot.GetValueOrDefault(t, string.Empty);
     }
 
-    /// <summary>Catch the snapshot up to the live state. Called only at a prefix rebuild.</summary>
+    /// <summary>
+    /// Catch the snapshot up to the live state. Called only at a prefix rebuild.
+    ///
+    /// Reported, even though the live entries did not move: the frozen text is what the model
+    /// actually reads, and the gap between it and the live list is the single most confusing thing
+    /// about this store. A debugger showing the two side by side would otherwise display a frozen
+    /// column that silently stopped being true at the last compaction.
+    /// </summary>
     public void RefreshSnapshot()
     {
         lock (_sync)
         {
             foreach (var target in new[] { MemoryTarget.Memory, MemoryTarget.Crew })
+            {
                 _snapshot[target] = RenderBlock(target);
+                _sink?.MemoryUpdated(target, EntriesLocked(target));
+            }
         }
     }
 

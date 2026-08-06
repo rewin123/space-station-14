@@ -193,7 +193,14 @@ public sealed class SkillStore
         {
             _skills.Clear();
             foreach (var (name, skill) in loaded)
-                Commit(name, skill);
+                _skills[name] = skill;
+
+            // One whole-library frame, not a Commit per survivor.
+            //
+            // A reload is the only way a skill can vanish — deleted, archived, or newly failing to
+            // parse — and a per-survivor event says nothing about the ones that went. A client
+            // folding those into a map keeps ghosts forever, and this runs at every compaction.
+            _sink?.SkillsReloaded(_skills.Values.ToList());
         }
     }
 

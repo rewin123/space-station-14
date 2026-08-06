@@ -69,6 +69,7 @@ public sealed partial class StationAiAgentSystem
             () => _debugSession,
             () => Memory,
             () => Skills,
+            CurrentRoundId,
             text => (SendUserMessage(text, out var reason), reason),
             ChangeMemory,
             ChangeSkill);

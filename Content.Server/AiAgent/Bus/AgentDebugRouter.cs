@@ -43,6 +43,7 @@ public sealed class AgentDebugRouter
     private readonly Func<AgentSession?> _session;
     private readonly Func<MemoryStore> _memory;
     private readonly Func<SkillStore> _skills;
+    private readonly Func<int> _round;
     private readonly Func<string, (bool Ok, string Reason)> _sendUserMessage;
     private readonly Func<MemoryTarget, string, string, string, MemoryResult> _changeMemory;
     private readonly Func<string, string?, string?, string?, string?, SkillResult> _changeSkill;
@@ -56,6 +57,7 @@ public sealed class AgentDebugRouter
         Func<AgentSession?> session,
         Func<MemoryStore> memory,
         Func<SkillStore> skills,
+        Func<int> round,
         Func<string, (bool Ok, string Reason)> sendUserMessage,
         Func<MemoryTarget, string, string, string, MemoryResult> changeMemory,
         Func<string, string?, string?, string?, string?, SkillResult> changeSkill)
@@ -66,6 +68,7 @@ public sealed class AgentDebugRouter
         _session = session;
         _memory = memory;
         _skills = skills;
+        _round = round;
         _sendUserMessage = sendUserMessage;
         _changeMemory = changeMemory;
         _changeSkill = changeSkill;
@@ -79,6 +82,22 @@ public sealed class AgentDebugRouter
         string? authorization,
         CancellationToken ct)
     {
+        // CORS preflight, answered ABOVE the token check — and that ordering is the whole point.
+        //
+        // `Authorization` is not a CORS-safelisted request header, so a browser preflights every
+        // single request this API takes. The preflight is an OPTIONS that deliberately carries no
+        // Authorization header, so checking the token first answers it 401 — and a preflight needs
+        // a 2xx or the browser blocks the real request. The symptom is that a cross-origin page
+        // cannot even do GET /state, with nothing in the server log to say why.
+        //
+        // This is the only path here that reaches a response without passing Authorised, which is
+        // exactly why it must stay above it. Tidying it back below reintroduces the bug silently.
+        // A 200 with an empty object rather than a 204: the server unconditionally sets a content
+        // type and writes a body, and a 204 carrying Content-Length is a protocol violation. The
+        // browser discards a preflight body unread either way.
+        if (method == "OPTIONS")
+            return new AgentDebugResponse(200, "{}");
+
         if (!Authorised(authorization))
             return AgentDebugResponse.Error(401, "нужен заголовок Authorization: Bearer <ai.debug_token>");
 
@@ -129,7 +148,7 @@ public sealed class AgentDebugRouter
     }
 
     private AgentDebugResponse State() =>
-        AgentDebugResponse.Ok(AgentDebugState.Capture(_bus, _session(), _memory(), _skills(), _sessionId));
+        AgentDebugResponse.Ok(AgentDebugState.Capture(_bus, _session(), _memory(), _skills(), _sessionId, _round()));
 
     private async Task<AgentDebugResponse> Events(IReadOnlyDictionary<string, string> query, CancellationToken ct)
     {

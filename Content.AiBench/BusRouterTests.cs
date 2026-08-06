@@ -77,6 +77,7 @@ public sealed class BusRouterTests
             () => null,
             () => _memory,
             () => _skills,
+            () => 42,
             text =>
             {
                 if (!_hasSession)
@@ -133,6 +134,52 @@ public sealed class BusRouterTests
             Assert.That(wrong.Status, Is.EqualTo(401));
             Assert.That(missing.Status, Is.EqualTo(401), "запрос без заголовка обязан отвергаться");
             Assert.That(noScheme.Status, Is.EqualTo(401), "токен без схемы Bearer — тоже отказ");
+        });
+    }
+
+    /// <summary>
+    /// The preflight is answered BEFORE the token is checked, and this test is named for that
+    /// ordering because the ordering is the whole fix.
+    ///
+    /// `Authorization` is not CORS-safelisted, so a browser preflights every request this API
+    /// takes, and the preflight deliberately carries no Authorization header. Check the token
+    /// first and it answers 401; a preflight needs 2xx or the browser blocks the real request.
+    /// The symptom is a cross-origin page that cannot even do GET /state, with nothing in the
+    /// server log explaining why. Whoever "tidies" the early return back below the auth check
+    /// breaks the debugger silently — this is what stops them.
+    /// </summary>
+    [Test]
+    public async Task PreflightIsAnsweredBeforeTheTokenIsChecked()
+    {
+        var preflight = await Router().RouteAsync("OPTIONS", "/state", new Dictionary<string, string>(), "",
+            null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(preflight.Status, Is.EqualTo(200),
+                "preflight обязан быть 2xx — иначе браузер заблокирует настоящий запрос");
+            Assert.That(preflight.Json, Is.Not.Null);
+        });
+
+        // And the exemption must be exactly that narrow: everything else still needs the token.
+        var unauthorised = await Router().RouteAsync("GET", "/state", new Dictionary<string, string>(), "",
+            null, CancellationToken.None);
+
+        Assert.That(unauthorised.Status, Is.EqualTo(401),
+            "исключение для OPTIONS не должно было открыть остальные маршруты");
+    }
+
+    [Test]
+    public async Task StateCarriesMemoryLimitsAndRound()
+    {
+        var body = Body(await Get("/state"));
+        var memory = body.GetProperty("memory");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(memory.GetProperty("memory_limit").GetInt32(), Is.EqualTo(_memory.MemoryLimit),
+                "без лимита заполненность живой памяти выводится только регуляркой из шапки замороженного блока");
+            Assert.That(memory.GetProperty("crew_limit").GetInt32(), Is.EqualTo(_memory.CrewLimit));
         });
     }
 

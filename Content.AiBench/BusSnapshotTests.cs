@@ -83,10 +83,11 @@ public sealed class BusSnapshotTests
     [Test]
     public void CaptureUnderConcurrentPublishDoesNotDeadlock()
     {
-        // The lock-order test. Capture is the only caller that holds more than two locks, and it
-        // walks Conv → Memory → Skills → Bus while publishers are taking (own domain, Bus) from
-        // three threads. If the order were ever violated this hangs rather than failing an
-        // assertion, so the assertion is on the clock.
+        // Capture takes each owner's lock in turn, never two at once, while three threads publish
+        // and therefore hold (own domain, Bus) pairs. Deadlock should be unconstructible — but this
+        // is the test that would notice if someone later nested the acquisitions to make the
+        // capture atomic and got the order wrong. It hangs rather than failing an assertion, so the
+        // assertion is on the clock.
         var bus = new AgentEventBus(4096);
 
         var conv = new ConversationState();
@@ -129,7 +130,7 @@ public sealed class BusSnapshotTests
         {
             for (var i = 0; i < 200 && !stop.IsCancellationRequested; i++)
             {
-                var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current");
+                var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
                 Assert.That(snapshot.Instance, Is.EqualTo(bus.Instance));
             }
         });
@@ -156,7 +157,7 @@ public sealed class BusSnapshotTests
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
-        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current");
+        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
 
         Assert.Multiple(() =>
         {
@@ -169,7 +170,7 @@ public sealed class BusSnapshotTests
         });
 
         memory.RefreshSnapshot();
-        var after = AgentDebugState.Capture(bus, null, memory, skills, "current");
+        var after = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
 
         Assert.That(after.Memory.MemoryFrozen,
             Does.Contain("записано после того, как префикс заморозили"),
@@ -185,7 +186,7 @@ public sealed class BusSnapshotTests
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
-        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current");
+        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
 
         Assert.Multiple(() =>
         {
@@ -212,7 +213,7 @@ public sealed class BusSnapshotTests
         var memory = new MemoryStore(_dir, Sawmill);
         memory.LoadFromDisk();
 
-        var names = AgentDebugState.Capture(bus, null, memory, skills, "current")
+        var names = AgentDebugState.Capture(bus, null, memory, skills, "current", 7)
             .Skills.Select(s => s.Name).ToList();
 
         Assert.That(names, Is.EqualTo(names.OrderBy(n => n, StringComparer.Ordinal).ToList()));
@@ -230,7 +231,7 @@ public sealed class BusSnapshotTests
         skills.LoadFromDisk();
 
         var json = JsonSerializer.Serialize(
-            AgentDebugState.Capture(bus, null, memory, skills, "current"), LlmJson.Options);
+            AgentDebugState.Capture(bus, null, memory, skills, "current", 7), LlmJson.Options);
 
         Assert.Multiple(() =>
         {

@@ -8,9 +8,12 @@ namespace Content.Server.AiAgent.Bus;
 /// Everything the debugger needs, in one answer.
 ///
 /// <paramref name="Seq"/> is what makes this composable with the event stream: the snapshot is the
-/// state as of that sequence number, and applying every event after it reproduces the present
-/// exactly. That is why <see cref="AgentDebugState.Capture"/> takes the bus lock along with the
-/// data locks — the pairing has to be atomic or a client silently double-applies one change.
+/// state as of that sequence number, and applying every event after it converges on the present.
+///
+/// Converges, not "reproduces exactly" — the capture is deliberately not atomic, and
+/// <see cref="AgentDebugState.Capture"/> explains at length why reading the sequence number first
+/// makes the resulting failure a harmless replay rather than a silent loss. A client must therefore
+/// treat every event as idempotent and must check <c>index</c> on an appended message.
 ///
 /// <paramref name="Session"/> is null when no agent holds a core: between rounds, or on a station
 /// where nobody claimed one. That is a normal answer, not an error.
@@ -30,11 +33,18 @@ public sealed record AgentStateSnapshot(
 /// system. An operator who edits memory, watches the agent behave identically, and has no way to
 /// see why concludes the endpoint is broken. Showing both is most of the debugging value here.
 /// </summary>
+/// <remarks>
+/// The limits are here because they are otherwise only recoverable by regexing the capacity header
+/// out of the frozen block — <c>MemoryStore.RenderBlock</c> prints <c>[N% — used/limit]</c> into it
+/// — and a debug client should not have to parse prose to draw a gauge.
+/// </remarks>
 public sealed record AgentMemoryDto(
     [property: JsonPropertyName("memory_live")] IReadOnlyList<string> MemoryLive,
     [property: JsonPropertyName("memory_frozen")] string MemoryFrozen,
+    [property: JsonPropertyName("memory_limit")] int MemoryLimit,
     [property: JsonPropertyName("crew_live")] IReadOnlyList<string> CrewLive,
-    [property: JsonPropertyName("crew_frozen")] string CrewFrozen);
+    [property: JsonPropertyName("crew_frozen")] string CrewFrozen,
+    [property: JsonPropertyName("crew_limit")] int CrewLimit);
 
 public sealed record AgentSkillDto(
     [property: JsonPropertyName("name")] string Name,
@@ -44,6 +54,9 @@ public sealed record AgentSkillDto(
 public sealed record AgentSessionDto(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("brain")] int Brain,
+    // Otherwise learnable only from the session.started payload — i.e. only by a client that
+    // happened not to miss one event.
+    [property: JsonPropertyName("round")] int Round,
     [property: JsonPropertyName("prefix_hash")] string PrefixHash,
     [property: JsonPropertyName("system_prompt")] string SystemPrompt,
     [property: JsonPropertyName("tools_json")] string ToolsJson,

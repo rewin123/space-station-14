@@ -176,6 +176,59 @@ public sealed class BusStoreTests
     }
 
     [Test]
+    public void RefreshSnapshotIsReported()
+    {
+        // The frozen text is what the model actually reads, and it moves only here — at a prefix
+        // rebuild, i.e. every compaction. Silent, it would leave a debugger's "frozen" column
+        // stale forever while claiming to show live-versus-frozen divergence.
+        var bus = new AgentEventBus(64);
+        var memory = new MemoryStore(_dir, Sawmill);
+        memory.AttachSink(bus.ForProcess());
+        memory.LoadFromDisk();
+        memory.Add(MemoryTarget.Memory, "запись, ещё не попавшая в префикс");
+
+        var before = bus.Seq;
+        memory.RefreshSnapshot();
+
+        Assert.That(bus.Seq, Is.GreaterThan(before),
+            "перестройка снимка не сообщила о себе — замороженная колонка молча устареет");
+    }
+
+    [Test]
+    public void ReloadReportsTheWholeLibraryIncludingDeletions()
+    {
+        // A reload is the ONLY way a skill can disappear: the store clears itself and re-adds
+        // whatever parsed. A per-survivor event says nothing about the ones that went, so a client
+        // folding them into a map keeps ghosts — and reloads happen at every compaction.
+        var bus = new AgentEventBus(256);
+        var skills = new SkillStore(_dir, Sawmill);
+        skills.AttachSink(bus.ForProcess());
+        skills.LoadFromDisk();
+
+        skills.Write("останется", "когда-нибудь", "тело");
+        skills.Write("исчезнет", "когда-нибудь", "тело");
+
+        File.Delete(Path.Combine(_dir, "skills", "исчезнет.md"));
+        skills.LoadFromDisk();
+
+        var reloads = bus.Read(bus.Instance, 0).Events
+            .Where(e => e.Kind == AgentEventKind.SkillsReloaded).ToList();
+
+        Assert.That(reloads, Is.Not.Empty, "перечитывание библиотеки не породило кадра");
+
+        using var doc = JsonDocument.Parse(reloads[^1].PayloadJson);
+        var names = doc.RootElement.GetProperty("skills")
+            .EnumerateArray().Select(x => x.GetProperty("name").GetString()).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Does.Contain("останется"));
+            Assert.That(names, Does.Not.Contain("исчезнет"),
+                "удалённый скилл остался бы призраком в любом клиенте, складывающем skill.updated в карту");
+        });
+    }
+
+    [Test]
     public void StoresWithNoSinkPublishNothing()
     {
         var bus = new AgentEventBus(64);

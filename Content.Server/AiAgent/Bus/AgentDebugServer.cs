@@ -188,6 +188,20 @@ public sealed class AgentDebugServer : IDisposable
         // appears in the server log.
         context.Response.Headers["Access-Control-Allow-Origin"] = "*";
         context.Response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+        context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+
+        // The one CORS header here that costs real money if it is missing.
+        //
+        // Absent, a browser caches a preflight for five seconds. The long-poll on /events runs for
+        // twenty-five, so every single poll would pay for an extra round trip AND burn a second of
+        // the six connections a browser allows per origin — halving how many tabs work before a
+        // POST starts queueing behind parked polls. A day is the usual ceiling; Chrome clamps to
+        // two hours on its own.
+        context.Response.Headers["Access-Control-Max-Age"] = "86400";
+
+        // Credentials are deliberately NOT allowed: the token is a header, not a cookie, and
+        // Allow-Credentials is incompatible with the `*` origin above. A client that ever sets
+        // credentials:'include' would fail every request with a confusing wildcard error.
 
         await context.Response.OutputStream.WriteAsync(bytes, _stop.Token).ConfigureAwait(false);
         context.Response.Close();
