@@ -264,8 +264,10 @@ public sealed class SkillStore
                 var clash = FindOverlapping(name);
                 if (clash != null)
                     return new SkillResult(false,
-                        $"уже есть похожий скилл '{clash}'. Не плоди близнецов — дополни его через skill_edit. " +
-                        "Если имя осмысленно только для сегодняшней задачи, оно неправильное.",
+                        $"'{clash}' — это то же имя с довеском или без него, то есть тот же самый скилл. " +
+                        "Не плоди близнецов: дополни его через skill_edit. Если имя осмысленно только " +
+                        "для сегодняшней задачи, оно неправильное. Соседнее имя в той же области " +
+                        "(другое слово, а не уточнение к этому) записать можно.",
                         new[] { clash });
             }
 
@@ -281,14 +283,32 @@ public sealed class SkillStore
         }
     }
 
-    /// <summary>A skill whose name shares a meaningful word with the proposed one.</summary>
+    /// <summary>
+    /// A skill that is the proposed name with a qualifier bolted on, or the other way round.
+    ///
+    /// Sharing any one word used to be enough to refuse, and that is too coarse for a library that
+    /// covers whole domains: <c>питание-apc</c> and <c>питание-smes</c> are different subjects, and
+    /// refusing the second because the first exists leaves no name the agent is allowed to use —
+    /// the stopper stops honest writes instead of twins. What actually went wrong on the mcbot
+    /// deployment was narrower: <c>safe_mine_ore</c> appearing next to <c>mine_ore</c>, the same
+    /// name plus a word. That relation is a subset, so that is what this looks for.
+    /// </summary>
     private string? FindOverlapping(string name)
     {
         var words = Words(name);
 
+        // Without this the empty set is a subset of everything and the very first write after a
+        // short name like "апц" would be refused against an arbitrary neighbour.
+        if (words.Count == 0)
+            return null;
+
         foreach (var existing in _skills.Keys)
         {
-            if (Words(existing).Any(w => words.Contains(w)))
+            var other = Words(existing);
+            if (other.Count == 0)
+                continue;
+
+            if (words.IsSubsetOf(other) || other.IsSubsetOf(words))
                 return existing;
         }
 

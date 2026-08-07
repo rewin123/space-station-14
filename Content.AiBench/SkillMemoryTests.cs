@@ -210,6 +210,28 @@ public sealed class SkillMemoryTests
     }
 
     [Test]
+    public void Skill_AllowsSiblingsInTheSameArea()
+    {
+        // The counterweight to the test above, and the reason the stopper looks for a subset
+        // rather than a shared word.
+        //
+        // A library that covers whole domains reuses the domain word by design: питание-apc and
+        // питание-smes are two subjects, not one written twice. Refusing the second because the
+        // first exists does not prevent a twin — it leaves the agent with no name it is allowed to
+        // write, and the lesson goes unrecorded.
+        var s = NewSkills();
+        Assert.That(s.Write("питание-apc", "Вопрос про APC отдела.", "тело").Ok, Is.True);
+
+        var sibling = s.Write("питание-smes", "Вопрос про СМЭС и накопители.", "тело");
+        Assert.That(sibling.Ok, Is.True, sibling.Message);
+
+        // And the twin is still caught inside that same area.
+        var twin = s.Write("питание-apc-подробно", "То же про APC, но длиннее.", "тело");
+        Assert.That(twin.Ok, Is.False);
+        Assert.That(twin.Names, Does.Contain("питание-apc"));
+    }
+
+    [Test]
     public void Skill_EditByFragment_AppendsAndReplaces()
     {
         var s = NewSkills();
