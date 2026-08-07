@@ -1,7 +1,7 @@
 # Публичная конфигурация сервера «Аксиома».
 #
 # ЭТО ИСТОЧНИК ИСТИНЫ для всего, что можно держать в git. Рабочий файл —
-# /home/rewin/ss14-watchdog/instances/aurora/config.toml (сервер поднимает вотчдог и
+# /home/rewin/ss14-watchdog/instances/aksioma/config.toml (сервер поднимает вотчдог и
 # передаёт ему --config-file). bin/Content.Server/server_config.toml теперь НЕ читается
 # боевым сервером — только тем, что запускают из каталога сборки вручную.
 #
@@ -103,7 +103,7 @@ loginlocal = true
 # ней не говорило. Сверять сравнением по ИМЕНИ СЕССИИ то, для чего есть аккаунт, — плохая
 # опора на публичном сервере, и апстрим сам просит пользоваться этим только временно.
 #
-# Восстановить, если что-то пойдёт не так: вернуть "rewin123" и перезапустить ss14-aurora.
+# Восстановить, если что-то пойдёт не так: вернуть "rewin123" и перезапустить ss14-aksioma.
 # Дальше админов заводить через F7 -> Permissions Panel, а не правкой базы руками.
 login_host_user = ""
 
@@ -173,8 +173,8 @@ compact_keep_tail = 30000
 
 # ---- Где это всё живёт ----
 #
-# Сервер поднимает SS14.Watchdog как пользовательский systemd-юнит ss14-aurora.service.
-# Рабочий файл конфига теперь /home/rewin/ss14-watchdog/instances/aurora/config.toml,
+# Сервер поднимает SS14.Watchdog как пользовательский systemd-юнит ss14-aksioma.service.
+# Рабочий файл конфига теперь /home/rewin/ss14-watchdog/instances/aksioma/config.toml,
 # база (вайтлист, баны, преференции) — там же в data/. Подробности и команды управления:
 # /home/rewin/ss14-watchdog/README.md
 #
