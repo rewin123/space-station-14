@@ -10,21 +10,37 @@
 
 # ЧАСТЬ 1. Эксплуатация
 
-Всё в этой части — про боевой сервер `[RU] Аврора — станцией управляет нейросеть`.
+Всё в этой части — про боевой сервер `[RU] Аксиома — станцией управляет нейросеть`.
 Он **работает прямо сейчас** и переживает перезагрузку машины.
 
 ## Состояние на 2026-08-07
 
 | | |
 |---|---|
-| Сервер | под SS14.Watchdog, юнит `ss14-aurora.service` (пользовательский, `Linger=yes`) |
+| Сервер | под SS14.Watchdog, юнит `ss14-aksioma.service` (пользовательский, `Linger=yes`) |
 | Снаружи | `vnaa.ru:1212`, проброс есть, DNS смотрит сюда, проверено |
 | Хаб | **выключен** (`hub.advertise = false`) |
 | Вайтлист | **включён**, в нём только `rewin123` |
 | Админ | `rewin123` в таблице `admin`, ранг `Host`, все 23 флага |
-| ИИ | Аврора, занимает ядро сама при старте раунда |
+| ИИ | Аксиома, занимает ядро сама при старте раунда |
 | Станция | «Аксиома» на всех картах ротации |
+| Бэкапы | `ss14-backup.timer`, ежедневно 05:30 UTC, 14 копий в `ss14-watchdog/backups/` |
 | Отладчик | `https://aidebug.vnaa.ru` (basic-auth `rewin`) |
+
+## Имя одно на троих
+
+Сервер, станция и ИИ называются **«Аксиома»** — все трое. Так решено владельцем сервера
+2026-08-07; до этого сервер и ИИ звались «Аврора», а станция уже была «Аксиомой».
+
+Кодом это нигде не различается и сломать ничего не может: `AgentName` только присваивается
+сущности (`StationAiAgentSystem.cs`) и ни с чем не сравнивается, имя станции ставит отдельная
+система на другой сущности. Цена — смысловая: в эфире «Аксиома» значит и место, и собеседника.
+Разрешается это в промпте, а не в коде — в `SOUL.md` есть абзац о том, как агенту разбирать
+обращение по смыслу и переспрашивать, когда непонятно.
+
+Переименование добавило в таблицу `server` новую строку (`aksioma`, id 2). Прежние 42 раунда
+и 79406 записей `admin_log` остались под `aurora` (id 1) — не потеряны, но история разрезана:
+запросы за раунды до 2026-08-07 надо делать по старому имени.
 
 ## Где что живёт
 
@@ -34,7 +50,7 @@
   appsettings.yml         конфиг вотчдога. Читается ОТСЮДА, не из app/
   api.token               токен API вотчдога, chmod 600
   README.md               раскладка и команды
-  instances/aurora/
+  instances/aksioma/
     bin -> /home/rewin/projects/ss14_ai/bin/Content.Server   символьная ссылка
     config.toml           РАБОЧИЙ конфиг сервера. Здесь ключ модели и токен шины. chmod 600
     data/preferences.db   вайтлист, админы, баны, преференции
@@ -50,9 +66,9 @@
 ## Управление
 
 ```bash
-systemctl --user status ss14-aurora
-systemctl --user restart ss14-aurora
-journalctl --user -u ss14-aurora -f
+systemctl --user status ss14-aksioma
+systemctl --user restart ss14-aksioma
+journalctl --user -u ss14-aksioma -f
 ```
 
 Выкатить новую версию кода:
@@ -61,10 +77,44 @@ journalctl --user -u ss14-aurora -f
 export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$DOTNET_ROOT:$PATH"
 cd /home/rewin/projects/ss14_ai
 dotnet build Content.Server/Content.Server.csproj
-systemctl --user restart ss14-aurora
+systemctl --user restart ss14-aksioma
 ```
 
 `bin` в инстансе — символьная ссылка на каталог сборки, поэтому копировать ничего не нужно.
+
+## Резервные копии базы
+
+`preferences.db` — единственное, что нельзя пересобрать: вайтлист, админы, баны, преференции
+и профили игроков. Копии снимает `ss14-backup.timer` ежедневно в 05:30 UTC.
+
+```bash
+systemctl --user list-timers ss14-backup.timer   # когда следующая
+systemctl --user start ss14-backup.service       # снять копию прямо сейчас
+journalctl --user -u ss14-backup.service -n 20   # что получилось
+ls -la /home/rewin/ss14-watchdog/backups/        # 14 последних, gzip, ~4 МБ каждая
+```
+
+**Сервер останавливать не нужно.** Скрипт `ss14-watchdog/backup-preferences.py` использует
+онлайн-бэкап SQLite (`Connection.backup`), а не `cp`: тот проходит через движок и видит WAL,
+поэтому свежий вайтлист и только что выданный бан попадают в копию. Это ровно та грабля №4
+ниже, только обойдённая, а не обойдённая стороной.
+
+Копия проверяется `PRAGMA integrity_check` до того, как ротация вытеснит предыдущую: битый
+бэкап на месте хорошего хуже, чем отсутствие бэкапов. `Persistent=true` в таймере значит,
+что пропущенный из-за выключенной машины запуск состоится при старте, а не через сутки.
+
+Восстановление:
+
+```bash
+systemctl --user stop ss14-aksioma
+cd /home/rewin/ss14-watchdog/instances/aksioma/data
+mv preferences.db preferences.db.broken
+gunzip -c /home/rewin/ss14-watchdog/backups/preferences-<метка>.db.gz > preferences.db
+systemctl --user start ss14-aksioma
+```
+
+Копии лежат на том же диске, что и оригинал: от отказа диска это не защищает, только от
+порчи базы и ошибочного удаления. Вынести их на другой носитель — незакрытая задача.
 
 **Автообновления нет и не должно быть.** В `appsettings.yml` не задан `UpdateType`: это даёт
 `_updateProvider = null`, а все четыре обращения к провайдеру в `ServerInstance` закрыты
@@ -74,7 +124,7 @@ systemctl --user restart ss14-aurora
 
 ## Конфиг: два файла и правило
 
-* **Рабочий** — `/home/rewin/ss14-watchdog/instances/aurora/config.toml`. Вотчдог передаёт
+* **Рабочий** — `/home/rewin/ss14-watchdog/instances/aksioma/config.toml`. Вотчдог передаёт
   его через `--config-file`. Только он и читается боевым сервером.
 * **Источник истины** — `Tools/server_config.public.toml`, в git, без секретов.
 
@@ -103,9 +153,10 @@ systemctl --user restart ss14-aurora
    Это единственный способ узнать то, что чтением кода не узнаётся: выдержит ли SOUL
    скоординированную атаку нескольких человек, сколько реально стоит тик на 50 игроках,
    каков объём радиотрафика.
-2. **Проверить срок инвайта Discord.** `infolinks.discord` заполнен, но инвайт по умолчанию
-   протухает через 7 дней, а протухший = «не смогли связаться» = условие делистинга в обход
-   страйков. Нужен Never / No limit.
+2. **Инвайт Discord протухает 2026-09-05.** Проверено запросом к API (через прокси, см.
+   грабля №3): инвайт живой, сервер называется «SS14 - Станция Аксиома». Но срок у него есть,
+   а протухший инвайт = «не смогли связаться» = делистинг в обход страйков. Нужен Never /
+   No limit — переставить до сентября.
 3. **Хаб и вайтлист переключать вместе.** `hub.advertise = true` при включённом вайтлисте
    даёт худший вариант первого впечатления: сервер виден, зайти нельзя.
 4. **Этап 3 — производительность.** Квадратичный `look` (флаги без `Contained`), `look_limit`
@@ -166,17 +217,17 @@ cd Tools/aidebug && npx vitest run                      # 33 зелёных
 конфиге**, иначе проверяется не то, что работает:
 
 ```bash
-systemctl --user stop ss14-aurora
+systemctl --user stop ss14-aksioma
 S=/tmp/ss14cmds.txt; : > $S
-cd /home/rewin/ss14-watchdog/instances/aurora
+cd /home/rewin/ss14-watchdog/instances/aksioma
 tail -n0 -F $S | ./bin/Content.Server \
-  --config-file /home/rewin/ss14-watchdog/instances/aurora/config.toml \
-  --data-dir /home/rewin/ss14-watchdog/instances/aurora/data
+  --config-file /home/rewin/ss14-watchdog/instances/aksioma/config.toml \
+  --data-dir /home/rewin/ss14-watchdog/instances/aksioma/data
 # в другом терминале:
 echo 'startround' >> $S
 echo 'aiagent tool station_status "{}"' >> $S
 # вернуть под вотчдог:
-systemctl --user start ss14-aurora
+systemctl --user start ss14-aksioma
 ```
 
 FIFO (`mkfifo`) для этого не годится: открытие на чтение блокируется, пока нет писателя, и при
@@ -214,7 +265,16 @@ curl -s --noproxy '*' http://127.0.0.1:1212/status
 поэтому запросы на `127.0.0.1` через них виснут. В shell — `curl --noproxy '*'`; в C# —
 `new HttpClient(new SocketsHttpHandler { UseProxy = false, Proxy = null })`, потому что
 `HttpClient.DefaultProxy` читает окружение при старте процесса.
-Отдельно: **Discord с этой машины недоступен вообще** (`HTTP 000`), проверить инвайт нельзя.
+Отдельно про Discord: **напрямую** он с этой машины недоступен (`--noproxy '*'` даёт `HTTP 000`),
+а **через прокси — доступен**. Здесь всё наоборот по сравнению с localhost, и раньше в этом
+README стояло, что инвайт проверить нельзя вовсе. Можно:
+
+```bash
+curl -s --max-time 15 https://discord.com/api/v10/invites/XshSGMpAH   # БЕЗ --noproxy
+```
+
+Ответ отдаёт `expires_at` — тот самый срок, из-за которого протухший инвайт превращается в
+«не смогли связаться».
 
 **4. Копирование `preferences.db` при живом сервере теряет свежие строки.**
 База в WAL-режиме: только что добавленный вайтлист сидит в журнале, а копия приезжает пустой.

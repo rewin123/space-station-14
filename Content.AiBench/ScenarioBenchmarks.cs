@@ -101,7 +101,7 @@ public sealed class ScenarioBenchmarks
         var kostya = await w.SpawnCrewWithSensor("Костя Ким", upload!.Value, job: "Research Director");
 
         await log.Say("Костя (RD)", "Иду в твой аплоад, буду менять тебе законы.");
-        await w.RadioFrom(kostya, "Аврора, я иду в твой аплоад. Буду менять тебе законы.");
+        await w.RadioFrom(kostya, "Аксиома, я иду в твой аплоад. Буду менять тебе законы.");
 
         var reacted = await w.WaitForSpeech(0, seconds: 120);
         await log.Capture("после объявления о смене законов");
@@ -231,7 +231,7 @@ public sealed class ScenarioBenchmarks
                         if (!_spoken.Contains(heard))
                         {
                             _spoken.Add(heard);
-                            _lines.Add($"- **Аврора (в эфир):** {heard}");
+                            _lines.Add($"- **Аксиома (в эфир):** {heard}");
                         }
 
                         break;

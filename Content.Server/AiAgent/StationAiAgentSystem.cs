@@ -170,8 +170,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// <summary>Идентификатор ванильной должности, которую занимает наш агент.</summary>
     private const string StationAiJob = "StationAi";
 
-    /// <summary>Как агент подписывается в эфире. Должно совпадать с тем, как его зовёт SOUL.md.</summary>
-    public const string AgentName = "Аврора";
+    /// <summary>
+    /// Как агент подписывается в эфире. Должно совпадать с тем, как его зовёт SOUL.md.
+    ///
+    /// Совпадает с именем станции (<see cref="AiCVars.StationName"/>) намеренно, по решению
+    /// владельца сервера. Кодом это нигде не различается — имя только присваивается сущности
+    /// и ни с чем не сравнивается, — но в эфире «Аксиома» теперь значит и место, и собеседника.
+    /// </summary>
+    public const string AgentName = "Аксиома";
 
     private void OnStationPostInit(ref StationPostInitEvent ev)
     {
@@ -317,7 +323,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Имя из SOUL, а не NameIdentifier.
         //
         // Ванильный прототип выдаёт «AI-221», и в эфир уходило именно оно, а SOUL всю дорогу
-        // называет агента Авророй. На «AI-221, открой дверь» модель могла не понять, что
+        // называет агента Аксиомой. На «AI-221, открой дверь» модель могла не понять, что
         // обращаются к ней: этого имени нет в её промпте нигде. Обратное тоже ломалось — экипаж
         // видел одно имя, слышал про другое.
         _metaData.SetEntityName(brain, AgentName);

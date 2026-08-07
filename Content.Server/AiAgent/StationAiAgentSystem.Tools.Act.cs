@@ -27,7 +27,7 @@ public sealed partial class StationAiAgentSystem
     /// <summary>
     /// Refuse to broadcast a line the agent has just broadcast.
     ///
-    /// This model fills silence: on a live station it put "Экипаж, Аврора на связи" on the common
+    /// This model fills silence: on a live station it put "Экипаж, Аксиома на связи" on the common
     /// channel every eight seconds for minutes. A player would never; the crew reads it as a stuck
     /// machine. Refusing at the tool is the only place the habit reliably breaks, and the message
     /// says what to do instead rather than just saying no.
@@ -52,7 +52,7 @@ public sealed partial class StationAiAgentSystem
     /// А проза при любом радиотрафике поднимает owed — <c>Addressed</c> истинно от ЛЮБОЙ строки
     /// рации, не только обращённой к ИИ, — и тянет за собой напоминание «этого никто не услышал»
     /// и лишний запрос к модели. То есть агента подталкивали высказаться ровно там, где правильный
-    /// ответ молчание, и он высказывался: наблюдённая привычка ставить «Экипаж, Аврора на связи»
+    /// ответ молчание, и он высказывался: наблюдённая привычка ставить «Экипаж, Аксиома на связи»
     /// в общий канал растёт отсюда же.
     /// </summary>
     private Task<ToolResult> NoopAsync(AgentSession s, JsonElement args, CancellationToken ct)
