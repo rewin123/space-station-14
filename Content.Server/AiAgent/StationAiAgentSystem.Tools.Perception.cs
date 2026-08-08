@@ -106,9 +106,9 @@ public sealed partial class StationAiAgentSystem
                 if (TryComp<StationAiWhitelistComponent>(uid, out var aiWire))
                     state += aiWire.Enabled ? ", управляю" : ", провод перерезан";
 
-                var where = anchor != null
-                    ? BearingFrom(origin, pos)
-                    : string.Create(CultureInfo.InvariantCulture, $"{dist:F0} тайлов");
+                // Same shape whether the listing is measured from a person or from the eye: the
+                // offset answers "which one", the absolute pair feeds move_camera.
+                var where = PositionFrom(origin, pos);
 
                 rows.Add((dist, $"{handle} | {Identity.Name(uid, EntityManager)} | {state} | {where}"));
             }
@@ -152,7 +152,10 @@ public sealed partial class StationAiAgentSystem
                 result["near"] = Identity.Name(anchor.Value, EntityManager);
                 result["near_handle"] = s.Handles.GetOrCreate(anchor.Value, KindOf(anchor.Value));
                 result["near_facing"] = FacingRu(anchor.Value);
-                result["note"] = "расстояния и стороны света отсчитаны от него; север — вверх экрана";
+                result["note"] =
+                    "Δ отсчитана ОТ него. Список отсортирован от ближнего, «дверь рядом со мной» — " +
+                    "первая строка. В одном проёме часто стоят две створки, шлюз и файрлок, с " +
+                    "одинаковой Δ: не прошёл после открытия — открывай вторую, а не ищи другую дверь";
             }
 
             return ToolResult.Success(result);

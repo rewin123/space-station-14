@@ -24,6 +24,15 @@ namespace Content.Server.AiAgent;
 /// <summary>Acting tools: say, radio, announce, move_camera, jump_to_core, device_action, device_ui.</summary>
 public sealed partial class StationAiAgentSystem
 {
+    private UiActionIndex? _uiIndex;
+
+    /// <summary>
+    /// Built on first use and never off the main thread: every tool body runs inside
+    /// <c>OnMainAsync</c>, so there is no second caller to race with. Constructing it eagerly would
+    /// mean binding reflection against an event bus the benchmarks replace between worlds.
+    /// </summary>
+    private UiActionIndex UiIndex => _uiIndex ??= new UiActionIndex(EntityManager, _sawmill);
+
     /// <summary>
     /// Refuse to broadcast a line the agent has just broadcast.
     ///
@@ -265,6 +274,12 @@ public sealed partial class StationAiAgentSystem
 
             if (!string.IsNullOrWhiteSpace(text))
             {
+                // Noted BEFORE the message goes out, because the echo comes back synchronously:
+                // the console dispatches the announcement inside this same RaiseLocalEvent, and the
+                // agent's own observation handler runs before control returns here. Recording it
+                // afterwards would be recording it too late.
+                s.Queue.NoteSelfAnnouncement(text!);
+
                 var msg = new CommunicationsConsoleAnnounceMessage(text!)
                 {
                     Actor = s.Brain,
@@ -604,30 +619,31 @@ public sealed partial class StationAiAgentSystem
     // ------------------------------------------------------------------ device_ui
 
     /// <summary>
-    /// The escape hatch for whitelisted consoles that have no dedicated action.
+    /// Console documentation, fetched on demand, and the one verb that acts on it.
     ///
-    /// A curated command table rather than an open door: each entry builds a concrete
-    /// <c>BoundUserInterfaceMessage</c>, stamps <c>Actor</c> and <c>UiKey</c>, and raises it the
-    /// same way the UI layer would. Adding a console is one dictionary entry — the tool schema, and
-    /// therefore the frozen prefix, never grows.
+    /// Called with just a handle it reads: the console's current state and the list of actions it
+    /// accepts, both derived by reflecting the client/server data contract
+    /// (<see cref="UiContract"/>, <see cref="UiActionIndex"/>). Called with an action it presses
+    /// that action and reads the console again, so the response is always the new state rather
+    /// than a claim about it.
+    ///
+    /// This replaces a hand-written table of two commands. The table was the reason the agent could
+    /// talk to exactly one console in the game: everything else in the AI whitelist — atmospherics
+    /// alerts, power monitoring, criminal records, robotics, cargo — was reachable and undescribed.
+    /// Nothing about a console is spelled out here, so nothing here goes stale when a console
+    /// changes, and a console added upstream works the day it lands.
+    ///
+    /// The description never enters the frozen prefix: the tool schema is four fields, and the
+    /// hundred consoles behind it cost nothing until one is opened.
     /// </summary>
     private Task<ToolResult> DeviceUiAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
-        if (!TryGetString(args, "command", out var command) || string.IsNullOrWhiteSpace(command))
-            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "device_ui: нужен 'command'",
-                alternatives: DeviceUiCommands.ToList()));
+        TryGetString(args, "action", out var action);
+        var hasArgs = args.ValueKind == JsonValueKind.Object &&
+                      args.TryGetProperty("args", out var rawArgs) &&
+                      rawArgs.ValueKind != JsonValueKind.Null;
 
-        if (!DeviceUiCommands.Contains(command!))
-        {
-            var near = DeviceUiCommands
-                .OrderBy(c => AiToolRegistry.Distance(c, command!))
-                .Take(3).ToList();
-
-            return Task.FromResult(ToolResult.Fail(ToolError.BadArgs,
-                $"device_ui: нет команды '{command}'", retry: "other_target", alternatives: near));
-        }
-
-        TryGetString(args, "text", out var text);
+        var callArgs = hasArgs ? args.GetProperty("args") : (JsonElement?)null;
 
         return OnMainAsync(s, "device_ui", () =>
         {
@@ -639,52 +655,116 @@ public sealed partial class StationAiAgentSystem
                 return ToolResult.Fail(gate.ToError(), gate.ToDetail(), gate.Retry());
 
             var handle = s.Handles.TryGetHandle(uid, out var h) ? h : "device";
+            var index = UiIndex;
+            var keys = index.KeysFor(uid);
 
-            if (_cfg.GetCVar(AiCVars.DryRun))
-                return ToolResult.Effected(handle,
-                    new Dictionary<string, object?> { ["dry_run"] = true, ["command"] = command });
+            if (keys.Count == 0)
+                return ToolResult.Fail(ToolError.NotControllable,
+                    "у этого устройства нет консоли, которую можно открыть — управляй им через device_action",
+                    retry: "other_target");
 
-            switch (command)
+            var actions = index.ActionsFor(uid);
+
+            // No action named: this is the read half, the "documentation" call.
+            if (string.IsNullOrWhiteSpace(action))
+                return ToolResult.Success(Snapshot(uid, handle, keys, actions));
+
+            if (!actions.TryGetValue(action!, out var chosen))
             {
-                case "comms_broadcast":
-                {
-                    if (string.IsNullOrWhiteSpace(text))
-                        return ToolResult.Fail(ToolError.BadArgs, "comms_broadcast: нужен 'text'");
+                var near = actions.Keys
+                    .OrderBy(a => AiToolRegistry.Distance(a, action!))
+                    .Take(3).ToList();
 
-                    var msg = new CommunicationsConsoleBroadcastMessage(text!)
-                    {
-                        Actor = s.Brain,
-                        UiKey = CommunicationsConsoleUiKey.Key,
-                    };
-                    RaiseLocalEvent(uid, (object)msg, true);
-                    break;
-                }
-
-                case "comms_announce":
-                {
-                    if (string.IsNullOrWhiteSpace(text))
-                        return ToolResult.Fail(ToolError.BadArgs, "comms_announce: нужен 'text'");
-
-                    var msg = new CommunicationsConsoleAnnounceMessage(text!)
-                    {
-                        Actor = s.Brain,
-                        UiKey = CommunicationsConsoleUiKey.Key,
-                    };
-                    RaiseLocalEvent(uid, (object)msg, true);
-                    break;
-                }
-
-                default:
-                    return ToolResult.Fail(ToolError.BadArgs, $"команда '{command}' не реализована");
+                return ToolResult.Fail(ToolError.BadArgs,
+                    $"у '{handle}' нет действия '{action}'. Открой device_ui без action, чтобы увидеть список.",
+                    retry: "other_target", alternatives: near);
             }
 
-            _sawmill.Info($"[LLM] device_ui {command} on {ToPrettyString(uid)}");
-            return ToolResult.Effected(handle, ReadBack(uid));
+            var message = UiContract.Build(chosen, callArgs, out var error);
+            if (message == null)
+                return ToolResult.Fail(ToolError.BadArgs, error, retry: "other_target",
+                    alternatives: new[] { chosen.Signature });
+
+            if (_cfg.GetCVar(AiCVars.DryRun))
+                return ToolResult.Effected(handle, new Dictionary<string, object?>
+                {
+                    ["dry_run"] = true,
+                    ["action"] = chosen.Signature,
+                });
+
+            // Stamped and raised exactly as SharedUserInterfaceSystem.OnMessageReceived does for a
+            // real click. The key matters: Subs.BuiEvents filters on it, and a message carrying the
+            // wrong one is silently dropped by every handler.
+            //
+            // With several interfaces on one entity there is no way to tell from outside which key
+            // a handler wants — the filter is inside the subscription closure — so each is tried in
+            // turn. Handlers for the other keys see a message they do not match and ignore it.
+            foreach (var key in keys)
+            {
+                message.Actor = s.Brain;
+                message.UiKey = key;
+                RaiseLocalEvent(uid, (object)message, true);
+            }
+
+            _sawmill.Info($"[LLM] device_ui {chosen.Name} on {ToPrettyString(uid)}");
+
+            return ToolResult.Effected(handle, Snapshot(uid, handle, keys, actions));
         }, ct);
     }
 
-    private static readonly HashSet<string> DeviceUiCommands = new()
+    /// <summary>
+    /// What the console looks like right now: one state block per interface, plus the callable
+    /// actions.
+    ///
+    /// State is read back after acting rather than predicted, for the same reason every other tool
+    /// here returns <c>effect</c> — what the server recorded, not what the agent intended.
+    /// </summary>
+    private Dictionary<string, object?> Snapshot(
+        EntityUid uid,
+        string handle,
+        IReadOnlyList<Enum> keys,
+        IReadOnlyDictionary<string, UiContract.UiAction> actions)
     {
-        "comms_broadcast", "comms_announce",
-    };
+        var state = new Dictionary<string, object?>();
+
+        foreach (var key in keys)
+        {
+            // The state object first, then the console's own component. Two sources because the
+            // engine has two conventions: the older one pushes a state object, the newer one
+            // networks a component and lets the client read it directly. A console using the newer
+            // one is not a console without readings — it is a console whose readings are somewhere
+            // else, and reading only the first source showed it as empty.
+            if (_uiSystem.TryGetUiState<BoundUserInterfaceState>((uid, null), key, out var raw))
+                state[key.ToString()] = UiContract.Describe(raw);
+            else if (UiIndex.StateComponentFor(uid, key) is { } component)
+                state[key.ToString()] = UiContract.Describe(component);
+        }
+
+        var result = new Dictionary<string, object?>
+        {
+            ["handle"] = handle,
+            ["actions"] = actions.Values
+                .OrderBy(a => a.Name, StringComparer.Ordinal)
+                .Select(a => a.Signature)
+                .ToList(),
+        };
+
+        if (state.Count > 0)
+        {
+            // Several consoles carry one interface; unwrapping the single case keeps the common
+            // response from being a dictionary with one meaningless key in it.
+            result["state"] = state.Count == 1 ? state.Values.First() : state;
+        }
+        else
+        {
+            // Not a malfunction. Newer interfaces push their data through networked components
+            // instead of the legacy state object, and some fill the state only once a client has
+            // opened them. Saying so stops the model reading an empty console as a broken one.
+            result["state_note"] =
+                "состояние этой консоли не передаётся отдельным блоком — читай его через inspect, " +
+                "а здесь пользуйся списком действий";
+        }
+
+        return result;
+    }
 }

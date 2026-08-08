@@ -158,7 +158,6 @@ public sealed record AgentStatsDto(
     [property: JsonPropertyName("consecutive_failures")] int ConsecutiveFailures,
     [property: JsonPropertyName("broken_promises")] int BrokenPromises,
     [property: JsonPropertyName("compactions")] int Compactions,
-    [property: JsonPropertyName("compaction_armed")] bool CompactionArmed,
     [property: JsonPropertyName("last_prompt_tokens")] int LastPromptTokens,
     [property: JsonPropertyName("chars_per_token")] double CharsPerToken,
     [property: JsonPropertyName("body_chars")] int BodyChars,

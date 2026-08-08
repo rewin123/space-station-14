@@ -109,4 +109,45 @@ public sealed class AwarenessTests
         Assert.That(second, Does.Not.Contain("LAWS"),
             "законы не менялись — строки LAWS быть не должно: " + second);
     }
+
+    [Test]
+    public async Task CentralCommandAnnouncement_ReachesTheAgent()
+    {
+        // The bug this pins was found by playing: an automatic Central Command announcement went
+        // out and the agent did not react, because it could not know. Announcements are written
+        // straight to player sessions, and a brain has none — the console was the only origin that
+        // raised a server-side event, so the agent heard consoles and nothing else. On a live round
+        // that means missing the shuttle call and the code change.
+        await using var w = await AiWorld.Create();
+        await Freeze(w);
+
+        var chat = w.Pair.Server.System<Content.Server.Chat.Systems.ChatSystem>();
+
+        await w.Post(() => chat.DispatchGlobalAnnouncement(
+            "Внимание: шаттл эвакуации вызван.", "Центральное командование", playSound: false));
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var observation = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        Assert.That(observation, Does.Contain("ANNOUNCE").And.Contain("шаттл эвакуации"),
+            "объявление Центрального командования обязано доходить до ИИ: " + observation);
+    }
+
+    [Test]
+    public async Task OwnAnnouncement_DoesNotComeBackAsAnObservation()
+    {
+        // The counterweight. The brain carries the console component the announce tool drives, so
+        // it is both announcer and listener; without suppression every announcement it makes would
+        // be read back to it a moment later as if Central Command had confirmed it.
+        await using var w = await AiWorld.Create();
+
+        var result = await w.Invoke("announce", """{"text":"Говорит Аксиома, проверка связи"}""");
+        Assert.That(result.Ok, Is.True, result.ToJson());
+
+        await Freeze(w);
+        var observation = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        Assert.That(observation, Does.Not.Contain("проверка связи"),
+            "своё же объявление не должно возвращаться наблюдением: " + observation);
+    }
 }

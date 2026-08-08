@@ -156,12 +156,34 @@ public sealed class ChatRequestDto
     [JsonPropertyName("min_p")]
     public float MinP { get; set; }
 
+    /// <summary>
+    /// Null means "no ceiling", and that is the default.
+    ///
+    /// A cap sized for the answer truncates a reasoning model mid-thought, and a completion cut off
+    /// before it produced either text or a tool call comes back empty — which used to poison the
+    /// conversation outright. Letting the provider apply its own limit costs nothing here: the
+    /// agent's replies are a sentence or two, and what it spends is decided by
+    /// <c>ai.thinking_effort</c>, not by where the budget happens to run out.
+    /// </summary>
     [JsonPropertyName("max_tokens")]
-    public int MaxTokens { get; set; }
+    public int? MaxTokens { get; set; }
 
     /// <summary>llama.cpp extension: reuse the slot's prefix KV cache.</summary>
     [JsonPropertyName("cache_prompt")]
     public bool CachePrompt { get; set; } = true;
+
+    /// <summary>
+    /// DeepSeek's thinking switch. Null leaves the model on its own default, and is serialised
+    /// away — a local llama.cpp never sees a field it does not know.
+    ///
+    /// The default matters here: on <c>deepseek-v4-flash</c> thinking is on at effort
+    /// <c>high</c> unless the request says otherwise, and that is most of the delay between the
+    /// crew asking something and hearing an answer. Turning it off entirely bought the latency
+    /// back and cost noticeably in answer quality, so the useful setting is the middle one — think,
+    /// but briefly.
+    /// </summary>
+    [JsonPropertyName("thinking")]
+    public ThinkingDto? Thinking { get; set; }
 
     /// <summary>
     /// Pin the agent to one slot. <c>--slot-prompt-similarity</c> routing is documented as
@@ -169,6 +191,23 @@ public sealed class ChatRequestDto
     /// </summary>
     [JsonPropertyName("id_slot")]
     public int? IdSlot { get; set; }
+}
+
+/// <summary>
+/// The <c>thinking</c> object DeepSeek expects. Its own SDK hides this under <c>extra_body</c>;
+/// over plain HTTP it is a top-level field like any other.
+/// </summary>
+public sealed class ThinkingDto
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "disabled";
+
+    /// <summary>
+    /// <c>low</c>, <c>high</c> or <c>max</c> on <c>deepseek-v4-flash</c>; null when thinking is off.
+    /// <c>medium</c> and <c>xhigh</c> are accepted but fold into <c>high</c>.
+    /// </summary>
+    [JsonPropertyName("reasoning_effort")]
+    public string? ReasoningEffort { get; set; }
 }
 
 /// <summary>What the agent loop actually consumes from a completion.</summary>

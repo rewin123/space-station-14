@@ -12,11 +12,13 @@ public sealed class CompactionOptions
     /// <summary>Prompt tokens above which compaction arms and fires.</summary>
     public required Func<int> High { get; init; }
 
-    /// <summary>Fall back below this before compaction may fire again — the hysteresis floor.</summary>
-    public required Func<int> Low { get; init; }
-
     /// <summary>Roughly how much conversation to keep after the summary, in tokens.</summary>
-    public required Func<int> KeepTail { get; init; }
+    /// <summary>
+    /// How many event lines the fold keeps. Replaces a character budget over retained messages:
+    /// the messages were the expensive part, and counting them in characters made the cost of a
+    /// fold depend on what happened to be in the last one.
+    /// </summary>
+    public required Func<int> KeepEvents { get; init; }
 }
 
 /// <summary>
@@ -53,31 +55,43 @@ public sealed class Compactor
     private readonly CacheMetrics _cache;
     private readonly ISawmill _sawmill;
 
-    public Compactor(ILlmClient llm, CompactionOptions options, CacheMetrics cache, ISawmill sawmill)
+    private readonly Journal _journal;
+
+    public Compactor(
+        ILlmClient llm,
+        CompactionOptions options,
+        CacheMetrics cache,
+        ISawmill sawmill,
+        Journal? journal = null)
     {
         _llm = llm;
         _options = options;
         _cache = cache;
         _sawmill = sawmill;
+
+        // The event ring the fold rebuilds history from. Optional so a test that only exercises the
+        // threshold logic does not have to supply one; a fold against an empty ring simply keeps
+        // the summary alone, which is the honest outcome when nothing was recorded.
+        _journal = journal ?? Journal.Disabled;
     }
 
     /// <summary>
     /// Whether to compact now.
     ///
-    /// Two guards beyond the threshold. The hysteresis stops a conversation hovering at the limit
-    /// from compacting every single turn — which would be the worst possible outcome, paying a full
-    /// prefill each time to reclaim almost nothing. And an open tool call means the only safe cut
-    /// points are behind us, so we wait for the turn to close.
+    /// One threshold and one guard. The low-water mark is gone: it existed so a conversation
+    /// hovering at the limit would not fold every turn, and it did that by refusing to re-arm until
+    /// usage fell back under it — which silently assumed a fold can always get that far down. It
+    /// could not, and on a live shift one fold left 162k against a low of 45k, so the agent never
+    /// compacted again and climbed to 236k before dying on a truncated completion.
+    ///
+    /// Nothing replaces it, because nothing needs to. The fold now discards the whole body for a
+    /// summary and a page of event lines, so it lands far below the threshold by construction, and
+    /// <c>LastPromptTokens</c> is zeroed on commit so the reading that decides is always a fresh
+    /// one. An open tool call still defers: cutting there would orphan a result from its call.
     /// </summary>
     public bool ShouldCompact(AgentState state)
     {
         var conv = state.Conv;
-
-        if (conv.LastPromptTokens < _options.Low())
-            state.CompactionArmed = true;
-
-        if (!state.CompactionArmed)
-            return false;
 
         if (conv.LastPromptTokens < _options.High())
             return false;
@@ -102,7 +116,6 @@ public sealed class Compactor
     {
         var conv = state.Conv;
 
-        var armedAtEntry = state.CompactionArmed;
         var tokensAtEntry = conv.LastPromptTokens;
         var hashAtEntry = conv.PrefixHash;
         var promptAtEntry = conv.SystemPrompt;
@@ -111,6 +124,7 @@ public sealed class Compactor
         var ctx = new CompactionContext
         {
             State = state,
+            Journal = _journal,
             Tools = tools,
             Hooks = hooks,
             RoundStamp = roundStamp,
@@ -150,9 +164,6 @@ public sealed class Compactor
         {
             if (!committed)
             {
-                // Arming exactly as it was: a half-ritual must not silently stop future compactions.
-                state.CompactionArmed = armedAtEntry;
-
                 // The token reading, so the next turn re-evaluates honestly instead of on a zero.
                 conv.LastPromptTokens = tokensAtEntry;
 

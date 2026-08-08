@@ -330,16 +330,27 @@ public sealed class ToolTests
     }
 
     [Test]
-    public async Task DeviceUi_RejectsUnknownCommand()
+    public async Task DeviceUi_DoesNotOfferTheWirePanel()
     {
+        // An airlock's only bound interface is its maintenance panel, and its messages land on the
+        // same entity as any console's would — reflection cannot tell them apart, because the UI
+        // key each handler wants is hidden inside the subscription closure.
+        //
+        // So the panel is excluded by name, and this is the test that says so. Cutting wires is a
+        // screwdriver against an opened hatch; the AI has no hands, cannot open one in vanilla, and
+        // the wires behind that particular hatch include the one that cuts AI control of the door.
         await using var w = await AiWorld.Create();
         var door = await w.Spawn("AirlockCommand");
         var handle = await w.Handle(door);
 
-        var result = await w.Invoke("device_ui", $$"""{"handle":"{{handle}}","command":"нет_такой"}""");
+        var listing = await w.Invoke("device_ui", $$"""{"handle":"{{handle}}"}""");
+        Assert.That(listing.ToJson(), Does.Not.Contain("wires"), listing.ToJson());
 
-        Assert.That(result.Ok, Is.False);
-        Assert.That(result.Error, Is.EqualTo(ToolError.BadArgs), result.ToJson());
+        var cut = await w.Invoke("device_ui",
+            $$$"""{"handle":"{{{handle}}}","action":"wires_action","args":{"id":1,"action":"Cut"}}""");
+
+        Assert.That(cut.Ok, Is.False, cut.ToJson());
+        Assert.That(cut.Error, Is.EqualTo(ToolError.BadArgs), cut.ToJson());
     }
 
     // ------------------------------------------------------------------ dispatcher

@@ -76,6 +76,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private Content.Shared.Power.EntitySystems.SharedBatterySystem _battery = default!;
     [Dependency] private SharedContainerSystem _container = default!;
     [Dependency] private IGameTiming _gameTiming = default!;
+    [Dependency] private SharedUserInterfaceSystem _uiSystem = default!;
 
     private ISawmill _sawmill = default!;
     private MainThreadDispatcher _dispatcher = default!;
@@ -138,7 +139,13 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // would hear: an ion storm could rewrite its laws and a captain could raise the alert to red,
         // and it went on behaving exactly as before because nothing ever told it.
         SubscribeLocalEvent<AlertLevelChangedEvent>(OnAlertLevelChanged);
-        SubscribeLocalEvent<CommunicationConsoleAnnouncementEvent>(OnConsoleAnnouncement);
+        // One subscription for every announcement path, not one per origin.
+        //
+        // The console used to be hooked directly, and it is the only origin that raises an event of
+        // its own — which is exactly why the agent heard consoles and nothing else. It now arrives
+        // here like the rest: the console also calls DispatchGlobalAnnouncement a few lines later,
+        // so keeping both subscriptions would have delivered console announcements twice.
+        SubscribeLocalEvent<StationAnnouncementEvent>(OnAnnouncement);
 
         // Carding moves the brain between the core and an intellicard; the mode gate follows it.
         //
@@ -394,8 +401,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             new CompactionOptions
             {
                 High = () => EffectiveCompactHigh(self!),
-                Low = () => _cfg.GetCVar(AiCVars.CompactLow),
-                KeepTail = () => _cfg.GetCVar(AiCVars.CompactKeepTail),
+                KeepEvents = () => _cfg.GetCVar(AiCVars.CompactEvents),
             },
             _cfg.GetCVar(AiCVars.LogTranscript)
                 ? new Journal(System.IO.Path.Combine(DataDir(), "logs"), _sawmill)
@@ -405,6 +411,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _sawmill);
 
         self = session;
+
+        // Wired after construction, not inside the queue, because the queue is built before the
+        // session exists. Every perception handler already funnels through Push, so this one line
+        // is what makes the whole agent event-driven rather than polled.
+        queue.Arrived = session.Wake;
 
         RegisterTools(session, registry);
         session.Conv.SetPrefix(BuildSystemPrompt(), registry.WireJson());
@@ -580,7 +591,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             _cfg.GetCVar(AiCVars.TopK),
             _cfg.GetCVar(AiCVars.MinP),
             _cfg.GetCVar(AiCVars.MaxTokens),
-            IdSlot: 0);
+            IdSlot: 0,
+            ThinkingEffort: _cfg.GetCVar(AiCVars.ThinkingEffort));
 
         _llm = new LlamaClient(
             _cfg.GetCVar(AiCVars.Endpoint),
@@ -687,30 +699,42 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     }
 
     /// <summary>
-    /// An announcement made from a communications console.
+    /// Any announcement the station hears: a communications console, Central Command, the shuttle
+    /// countdown, an admin, the round-end call.
     ///
-    /// This is the only announcement path reachable without editing upstream. Central Command,
-    /// shuttle calls and round-end messages go out as raw chat packets to player <em>sessions</em>,
-    /// and a brain with no session is not a recipient of anything — there is no server-side entity
-    /// event to hook. The prompt says so rather than letting the model assume it heard everything.
+    /// Delivery is by chat packet to player <em>sessions</em>, and the brain has none, so nothing
+    /// reaches it on its own — the event this handles is raised from <c>ChatSystem</c> for exactly
+    /// that reason. Before it existed the agent heard console announcements and missed every other
+    /// kind, which on a live round meant missing the shuttle being called.
     /// </summary>
-    private void OnConsoleAnnouncement(ref CommunicationConsoleAnnouncementEvent args)
+    /// <remarks>
+    /// By value, not by ref. The struct is three fields, and a by-ref raise needs a local at every
+    /// call site — which would double the size of the patch in upstream's ChatSystem for nothing.
+    /// </remarks>
+    private void OnAnnouncement(StationAnnouncementEvent args)
     {
         if (_sessions.Count == 0)
             return;
 
-        var sender = args.Sender != null ? GetVoiceName(args.Sender.Value) : "Центральное командование";
-
         foreach (var (brain, session) in _sessions)
         {
-            // Its own announcements come back through here; it already knows what it said.
-            if (args.Sender == brain)
+            // A global announcement has no origin on the map and is heard everywhere; only a
+            // sourced one can belong to somebody else's station.
+            if (args.Source is { } source &&
+                _station.GetOwningStation(brain) != _station.GetOwningStation(source))
                 continue;
 
-            if (_station.GetOwningStation(brain) != _station.GetOwningStation(args.Uid))
+            // Its own announcement comes back around: the brain carries the console component the
+            // announce tool drives, so it is both the source and a listener. Repeating it back
+            // would read as Central Command confirming whatever it just said.
+            //
+            // Matching on text as well as on source is not belt and braces. A console set to
+            // announce globally dispatches with no source at all, so on that path identity is the
+            // one thing the event cannot carry.
+            if (args.Source == brain || session.Queue.WasLastAnnouncedBySelf(args.Message))
                 continue;
 
-            session.Queue.Push(Observation.Announce(sender, args.Text, RoundTime()));
+            session.Queue.Push(Observation.Announce(args.Sender, args.Message, RoundTime()));
         }
     }
 

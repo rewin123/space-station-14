@@ -152,6 +152,12 @@ public sealed partial class StationAiAgentSystem
         }
 
         session.Inbox.Enqueue(text);
+
+        // An operator typing into the debugger is the least patient audience there is, and unlike a
+        // radio line this never passes through the observation queue — so without waking the loop
+        // here it would sit out the tick, or on an idle station the twenty-five second one.
+        session.Wake();
+
         reason = "доставлено следующим ходом";
         return true;
     }

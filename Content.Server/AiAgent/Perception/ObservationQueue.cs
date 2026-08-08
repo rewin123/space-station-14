@@ -34,6 +34,16 @@ public sealed class ObservationQueue
         }
     }
 
+    /// <summary>
+    /// Raised the moment something lands, so the loop can start on it instead of sleeping out the
+    /// rest of its tick.
+    ///
+    /// Polling alone made the agent's response time a coin flip between nothing and a full tick,
+    /// and the crew feels that most exactly when it matters least to wait: someone shouting about
+    /// a fire does not care that the poll had six seconds left on it.
+    /// </summary>
+    public Action? Arrived { get; set; }
+
     public void Push(Observation obs)
     {
         lock (_lock)
@@ -45,6 +55,10 @@ public sealed class ObservationQueue
                 _dropped++;
             }
         }
+
+        // Outside the lock. The handler wakes the agent thread, and holding a perception lock while
+        // another thread starts a turn is how a deadlock gets written.
+        Arrived?.Invoke();
     }
 
     /// <summary>Take everything buffered and reset the drop counter.</summary>
@@ -111,11 +125,35 @@ public sealed class ObservationQueue
         }
     }
 
+    /// <summary>
+    /// The last thing the agent announced itself, kept only long enough to recognise the echo.
+    ///
+    /// An announcement the agent makes comes straight back at it: the brain carries the console
+    /// component the tool drives, so it is both the announcer and a listener. Usually the source on
+    /// the event identifies it, but a console configured to announce globally dispatches with no
+    /// source at all, and then the text is the only thing left to match on.
+    /// </summary>
+    private string? _selfAnnounced;
+
+    /// <summary>Called before the announcement goes out, because the echo arrives synchronously.</summary>
+    public void NoteSelfAnnouncement(string text)
+    {
+        lock (_lock)
+            _selfAnnounced = text;
+    }
+
+    public bool WasLastAnnouncedBySelf(string text)
+    {
+        lock (_lock)
+            return _selfAnnounced != null && _selfAnnounced == text;
+    }
+
     public void Clear()
     {
         lock (_lock)
         {
             _items.Clear();
+            _selfAnnounced = null;
             _dropped = 0;
         }
     }

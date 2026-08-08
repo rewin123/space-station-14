@@ -75,11 +75,24 @@ public sealed class Curator
                 return verdict;
             }
 
+            // Same trap as ConversationState.AppendAssistant, and worth repeating rather than
+            // sharing: an assistant message with neither content nor tool calls makes the provider
+            // reject the whole conversation, and this one is a copy of the live history. Nothing to
+            // append means nothing to say, which for a review is simply the end of it.
+            var content = string.IsNullOrEmpty(response.Content) ? null : response.Content;
+            var calls = response.ToolCalls.Count > 0 ? new List<ToolCallDto>(response.ToolCalls) : null;
+
+            if (content == null && calls == null)
+            {
+                _sawmill.Warning("куратор вернул пустой ответ — разбор прекращён");
+                return verdict;
+            }
+
             messages.Add(new ChatMessageDto
             {
                 Role = "assistant",
-                Content = string.IsNullOrEmpty(response.Content) ? null : response.Content,
-                ToolCalls = response.ToolCalls.Count > 0 ? new List<ToolCallDto>(response.ToolCalls) : null,
+                Content = content,
+                ToolCalls = calls,
             });
 
             if (!string.IsNullOrWhiteSpace(response.Content))

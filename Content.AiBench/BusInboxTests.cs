@@ -160,8 +160,7 @@ public sealed class BusInboxTests
             new CompactionOptions
             {
                 High = () => int.MaxValue,
-                Low = () => 0,
-                KeepTail = () => 1000,
+                KeepEvents = () => 40,
             },
             Journal.Disabled,
             null,
@@ -233,8 +232,7 @@ public sealed class BusInboxTests
             new CompactionOptions
             {
                 High = () => int.MaxValue,
-                Low = () => 0,
-                KeepTail = () => 1000,
+                KeepEvents = () => 40,
             },
             Journal.Disabled,
             null,

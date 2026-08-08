@@ -80,16 +80,36 @@ public sealed class AiCVars
         CVarDef.Create("ai.min_p", 0.05f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Ceiling on one completion.
+    /// How hard the model deliberates before answering: <c>off</c>, <c>low</c>, <c>high</c>,
+    /// <c>max</c>, or empty to send nothing and leave the model on its own default.
     ///
-    /// 640 is sized for a non-reasoning model, where the whole budget goes into the answer. A
-    /// reasoning model spends most of it thinking first — DeepSeek measured at 215 tokens of
-    /// deliberation before a one-sentence radio call — so on one of those this has to go up several
-    /// times over or the tool call itself gets truncated mid-argument. The client now warns when
-    /// that happens instead of leaving it to look like the model behaving oddly.
+    /// <c>low</c> rather than either extreme, and both extremes were measured. On
+    /// <c>deepseek-v4-flash</c> thinking is on at <c>high</c> unless the request says otherwise,
+    /// and that dominated the delay between a crewman asking something and hearing a reply — p90
+    /// of six seconds, worst case fifteen. Turning it off outright halved that and visibly cost
+    /// answer quality. The work per turn is picking a tool and filling a few arguments; it needs
+    /// some thought, not a lot.
+    ///
+    /// Only DeepSeek is known to honour the field. Set it empty for a local endpoint, which would
+    /// otherwise receive a parameter it does not recognise.
+    /// </summary>
+    public static readonly CVarDef<string> ThinkingEffort =
+        CVarDef.Create("ai.thinking_effort", "low", CVar.SERVERONLY);
+
+    /// <summary>
+    /// Ceiling on one completion. Zero — the default — sends no limit at all.
+    ///
+    /// A ceiling is the wrong tool on a reasoning model. It cannot distinguish thinking from
+    /// answering, so it cuts wherever the budget runs out, and a completion cut before it emitted
+    /// either text or a tool call comes back empty. On a live shift one such response ended the
+    /// round for the agent: 3000 tokens in, 3000 of them reasoning, nothing out — and every request
+    /// afterwards was rejected for carrying an empty assistant message.
+    ///
+    /// What the model spends is now governed by <c>ai.thinking_effort</c>, which limits the part
+    /// that actually runs long. Set this above zero only against an endpoint that needs it.
     /// </summary>
     public static readonly CVarDef<int> MaxTokens =
-        CVarDef.Create("ai.max_tokens", 3000, CVar.SERVERONLY);
+        CVarDef.Create("ai.max_tokens", 0, CVar.SERVERONLY);
 
     /// <summary>A remote API can be slow; llama-swap may need to load the model from disk.</summary>
     public static readonly CVarDef<float> RequestTimeout =
@@ -97,16 +117,38 @@ public sealed class AiCVars
 
     // ------------------------------------------------------------------ loop
 
-    /// <summary>N — how often accumulated observations are handed to the model as one user message.</summary>
+    /// <summary>
+    /// Ceiling on how long the agent sleeps before looking at what accumulated.
+    ///
+    /// A ceiling rather than a period: anything landing in the observation queue wakes the loop
+    /// immediately, so this only governs how often it checks on a station that has said nothing.
+    /// Before the wake existed this was the whole latency budget, and being addressed just after a
+    /// tick began meant waiting out the full interval — worst on exactly the shouted, urgent
+    /// message that should have been answered fastest.
+    /// </summary>
     public static readonly CVarDef<float> TickSeconds =
-        CVarDef.Create("ai.tick_seconds", 8f, CVar.SERVERONLY);
+        CVarDef.Create("ai.tick_seconds", 5f, CVar.SERVERONLY);
 
     /// <summary>Back-off when nothing at all happened, so an empty station costs nothing.</summary>
     public static readonly CVarDef<float> TickSecondsIdle =
         CVarDef.Create("ai.tick_seconds_idle", 25f, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Steps in one turn, where a step is one round trip to the model.
+    ///
+    /// Six was too few for the work a single request actually takes. A question like "what is the
+    /// pressure in the bar" is map, move_camera, look, inspect, radio — five before anything is
+    /// said, and any correction along the way ran the turn out. What that looked like from the
+    /// station was the AI aiming its camera at something and then going quiet, because a turn cut
+    /// off by the budget says nothing on its way out.
+    ///
+    /// The ceiling is not the cost control here; the model stopping when it is done is. Turns end
+    /// on their own at two or three steps when nothing is needed, and <c>noop</c> exists precisely
+    /// so that a quiet observation costs one call. What this number does is stop a loop, and for
+    /// that it only has to be lower than "forever".
+    /// </summary>
     public static readonly CVarDef<int> MaxToolCallsPerTurn =
-        CVarDef.Create("ai.max_tool_calls_per_turn", 6, CVar.SERVERONLY);
+        CVarDef.Create("ai.max_tool_calls_per_turn", 90, CVar.SERVERONLY);
 
     /// <summary>Observations buffered before the oldest are dropped (and the drop is reported).</summary>
     public static readonly CVarDef<int> ObsBuffer =
@@ -132,15 +174,22 @@ public sealed class AiCVars
     public static readonly CVarDef<int> CtxLimit =
         CVarDef.Create("ai.ctx_limit", 0, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Event lines the fold keeps as the whole of the retained history.
+    ///
+    /// Replaces a character budget over retained <em>messages</em>. Messages are where the weight
+    /// is — one <c>look</c> of a busy room is thousands of tokens of crates — and keeping the last
+    /// few of them carried that weight forward for the rest of the round. Forty lines of "heard
+    /// this, called that, it refused" is a page, and it is the part the agent cannot reconstruct
+    /// from its memory files or by looking again.
+    /// </summary>
+    public static readonly CVarDef<int> CompactEvents =
+        CVarDef.Create("ai.compact_events", 40, CVar.SERVERONLY);
+
     public static readonly CVarDef<int> CompactHigh =
         CVarDef.Create("ai.compact_high", 90000, CVar.SERVERONLY);
 
-    public static readonly CVarDef<int> CompactKeepTail =
-        CVarDef.Create("ai.compact_keep_tail", 30000, CVar.SERVERONLY);
 
-    /// <summary>Hysteresis: compaction re-arms only after usage falls back below this.</summary>
-    public static readonly CVarDef<int> CompactLow =
-        CVarDef.Create("ai.compact_low", 45000, CVar.SERVERONLY);
 
     // ----------------------------------------------------------- diagnostics
 
@@ -151,6 +200,10 @@ public sealed class AiCVars
     /// verbosity — an agent that lists sixty of four hundred things tells the crew "there is no
     /// SMES here" with complete confidence. Rows come out nearest-first, so a cut removes the far
     /// end of the room, and the answer says out loud that it was cut.
+    ///
+    /// It stays generous now that a fold no longer retains tool results: a big look is expensive
+    /// once, in the turn that asks for it, and stops being expensive the moment the history is
+    /// compacted. Paying for the answer is the point; paying for it forever was the bug.
     /// </summary>
     public static readonly CVarDef<int> LookLimit =
         CVarDef.Create("ai.look_limit", 300, CVar.SERVERONLY);

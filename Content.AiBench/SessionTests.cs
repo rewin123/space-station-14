@@ -171,7 +171,6 @@ public sealed class SessionTests
             var state = Populated();
             state.Turns = 17;
             state.UntooledReplies = 2;
-            state.CompactionArmed = false;
             state.Mode = AgentMode.Carded;
             state.RememberSpeech("Ожидание запросов.");
 
@@ -186,7 +185,6 @@ public sealed class SessionTests
             {
                 Assert.That(restored.Turns, Is.EqualTo(17));
                 Assert.That(restored.UntooledReplies, Is.EqualTo(2));
-                Assert.That(restored.CompactionArmed, Is.False);
                 Assert.That(restored.Mode, Is.EqualTo(AgentMode.Carded));
                 Assert.That(restored.AlreadySaid("Ожидание запросов."), Is.True,
                     "иначе после рестарта агент повторит в эфир то, что сказал перед падением");
@@ -243,7 +241,6 @@ public sealed class SessionTests
             Assert.Multiple(() =>
             {
                 Assert.That(loaded!.Mode, Is.EqualTo(AgentMode.Core));
-                Assert.That(loaded.CompactionArmed, Is.True);
                 Assert.That(loaded.RecentSpeech, Is.Empty);
                 Assert.That(loaded.AgentTurns, Is.Zero);
             });

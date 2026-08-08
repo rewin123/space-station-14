@@ -35,6 +35,9 @@ public sealed class CompactionContext
     public required string RoundStamp { get; init; }
 
     public required ILlmClient Llm { get; init; }
+
+    /// <summary>Where the retained tail comes from now: short event lines, not whole messages.</summary>
+    public required Journal Journal { get; init; }
     public required CompactionOptions Options { get; init; }
     public required ISawmill Sawmill { get; init; }
 
@@ -104,18 +107,13 @@ public static class CompactionSteps
             ctx.BeforeTokens = ctx.Conv.LastPromptTokens;
             ctx.BeforeMessages = ctx.Conv.Body.Count;
 
-            var keepChars = (int)(ctx.Options.KeepTail() * ctx.Conv.CharsPerToken);
-            ctx.CutIndex = ctx.Conv.SafeCutIndex(keepChars);
-
-            if (ctx.CutIndex > 0)
+            // There is no cut point to find any more: the body is replaced wholesale, not sliced.
+            // The only thing that can make a fold pointless is there being nothing to fold — which
+            // happens when a fold has just run and the next turn has not landed yet.
+            if (ctx.BeforeMessages > 1)
                 return Task.FromResult(true);
 
-            // Do NOT disarm here — the runner's finally restores arming for exactly this reason.
-            // Disarming is for "we just compacted, wait for usage to fall back". Having no cut point
-            // yet is transient: the very next turn creates a new boundary. The first live run
-            // disarmed on it and then never compacted again for the rest of the round, growing the
-            // context unboundedly while reporting nothing wrong.
-            ctx.Sawmill.Info("компакция отложена: пока нет безопасной границы хода для разреза");
+            ctx.Sawmill.Info("компакция пропущена: сворачивать нечего");
             return Task.FromResult(false);
         }
     }
@@ -226,9 +224,29 @@ public static class CompactionSteps
 
         public Task<bool> RunAsync(CompactionContext ctx, CancellationToken ct)
         {
-            var tail = ctx.Conv.BodyFrom(ctx.CutIndex).ToList();
-            ctx.TailCount = tail.Count;
-            ctx.Conv.ReplaceBody(ctx.Summary, tail);
+            // The tail used to be the last few messages, and messages carry their payloads: one
+            // look of a crowded room is thousands of tokens of crates, and retaining it meant
+            // paying for that room for the rest of the round. A measured turn took the conversation
+            // from 27k to 183k tokens this way, and the fold that followed could not get back under
+            // any threshold because the weight was inside the part it was keeping.
+            //
+            // What replaces it is the event log: what was heard, what was called, what refused —
+            // one line each, no payloads. look stays expensive to make, which is correct, and stops
+            // being expensive to remember, which is the part that was wrong.
+            var events = ctx.Journal.Recent(ctx.Options.KeepEvents());
+            ctx.TailCount = events.Count;
+
+            var body = ctx.Summary;
+
+            if (events.Count > 0)
+            {
+                body += "\n\nПОСЛЕДНИЕ СОБЫТИЯ (свёрнуто, без содержимого ответов):\n"
+                        + string.Join("\n", events);
+            }
+
+            // One message, and no tail after it. Two adjacent user messages would fabricate a turn
+            // boundary, and an orphaned tool result would be a protocol error outright.
+            ctx.Conv.ReplaceBody(body, Array.Empty<ChatMessageDto>());
             return Task.FromResult(true);
         }
     }
@@ -258,7 +276,6 @@ public static class CompactionSteps
         {
             // Do not let the stale reading re-fire compaction on the very next turn.
             ctx.Conv.LastPromptTokens = 0;
-            ctx.State.CompactionArmed = false;
             ctx.State.Compactions++;
             ctx.State.LastSummary = ctx.Summary;
 

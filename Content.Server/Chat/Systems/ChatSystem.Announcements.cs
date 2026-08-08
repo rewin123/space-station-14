@@ -1,3 +1,4 @@
+using Content.Server.AiAgent;
 using Content.Shared.Chat;
 using Content.Shared.Database;
 using Content.Shared.Station.Components;
@@ -26,6 +27,7 @@ public sealed partial class ChatSystem
         {
             _audio.PlayGlobal(announcementSound ?? DefaultAnnouncementSound, Filter.Broadcast(), true, AudioParams.Default.WithVolume(-2f));
         }
+        RaiseLocalEvent(new StationAnnouncementEvent(sender, message, null));
         _adminLogger.Add(LogType.Chat, LogImpact.Low, $"Global station announcement from {sender}: {message}");
     }
 
@@ -47,6 +49,7 @@ public sealed partial class ChatSystem
         {
             _audio.PlayGlobal(announcementSound ?? DefaultAnnouncementSound, filter, true, AudioParams.Default.WithVolume(-2f));
         }
+        RaiseLocalEvent(new StationAnnouncementEvent(sender, message, source));
         _adminLogger.Add(LogType.Chat, LogImpact.Low, $"Station Announcement from {sender}: {message}");
     }
 
@@ -81,6 +84,7 @@ public sealed partial class ChatSystem
             _audio.PlayGlobal(announcementSound ?? DefaultAnnouncementSound, filter, true, AudioParams.Default.WithVolume(-2f));
         }
 
+        RaiseLocalEvent(new StationAnnouncementEvent(sender, message, source));
         _adminLogger.Add(LogType.Chat, LogImpact.Low, $"Station Announcement on {station} from {sender}: {message}");
     }
 }

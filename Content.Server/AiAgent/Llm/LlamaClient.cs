@@ -67,9 +67,11 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             TopP = _sampling.TopP,
             TopK = _sampling.TopK,
             MinP = _sampling.MinP,
-            MaxTokens = _sampling.MaxTokens,
+            MaxTokens = _sampling.MaxTokens > 0 ? _sampling.MaxTokens : null,
             CachePrompt = true,
             IdSlot = _sampling.IdSlot,
+
+            Thinking = ThinkingRequest.Build(_sampling.ThinkingEffort),
         };
 
         var body = JsonSerializer.Serialize(request, LlmJson.Options);
@@ -237,13 +239,31 @@ public sealed class LlamaClient : ILlmClient, IDisposable
     public void Dispose() => _http.Dispose();
 }
 
+/// <summary>
+/// Translate the configured effort into the object DeepSeek expects.
+///
+/// An empty setting sends no field at all, which is what a local llama.cpp needs: it would see a
+/// parameter it does not know. Everything else is explicit, because "the model's own default" is
+/// <c>high</c> and that is the one setting this agent should not be silently left on.
+/// </summary>
+public static partial class ThinkingRequest
+{
+    public static ThinkingDto? Build(string effort) => effort.Trim().ToLowerInvariant() switch
+    {
+        "" => null,
+        "off" or "disabled" or "none" => new ThinkingDto { Type = "disabled" },
+        var e => new ThinkingDto { Type = "enabled", ReasoningEffort = e },
+    };
+}
+
 public sealed record LlmSampling(
     float Temperature,
     float TopP,
     int TopK,
     float MinP,
     int MaxTokens,
-    int? IdSlot);
+    int? IdSlot,
+    string ThinkingEffort = "");
 
 public sealed class LlmException : Exception
 {

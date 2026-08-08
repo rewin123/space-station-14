@@ -175,6 +175,23 @@ public sealed partial class StationAiAgentSystem
         return string.Create(CultureInfo.InvariantCulture, $"{DirectionRu(delta.GetDir())} {dist:F0}");
     }
 
+    /// <summary>
+    /// Where a thing is, as two pairs of numbers: the offset from whatever the listing is measured
+    /// from, and the absolute position.
+    ///
+    /// The offset replaces an eight-way bearing with a rounded distance, which threw away exactly
+    /// the part that settles "which door am I standing at" — <c>(3,1)</c> and <c>(1,3)</c> both
+    /// printed as "северо-восток 3", and on a station those are two doors in two different walls.
+    /// One live request returned fifty-five doors, four of them tied at the same bearing and
+    /// distance and most named "secure windoor"; the agent opened the wrong one twice, then gave up.
+    ///
+    /// The absolute pair is there because it is what <c>move_camera</c> takes. Without it, looking
+    /// at something and then going to see it meant a separate <c>map</c> call and a guess.
+    /// </summary>
+    private static string PositionFrom(Vector2 from, Vector2 target) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"Δ({target.X - from.X:F0},{target.Y - from.Y:F0}) ({target.X:F0},{target.Y:F0})");
+
     /// <summary>Which way a mob is facing, for "открой дверь, на которую я смотрю".</summary>
     private string FacingRu(EntityUid uid) => DirectionRu(_xform.GetWorldRotation(uid).GetDir());
 

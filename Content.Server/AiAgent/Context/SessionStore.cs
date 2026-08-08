@@ -57,9 +57,6 @@ public sealed class SessionSnapshot
     [JsonPropertyName("untooled_replies")]
     public int UntooledReplies { get; set; }
 
-    [JsonPropertyName("compaction_armed")]
-    public bool CompactionArmed { get; set; } = true;
-
     /// <summary>
     /// What the agent said just before the restart.
     ///

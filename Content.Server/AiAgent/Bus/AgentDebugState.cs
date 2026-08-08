@@ -114,7 +114,6 @@ public static class AgentDebugState
             session.ConsecutiveFailures,
             session.State.BrokenPromises,
             session.State.Compactions,
-            session.State.CompactionArmed,
             conv.LastPromptTokens,
             conv.CharsPerToken,
             conv.BodyChars(),

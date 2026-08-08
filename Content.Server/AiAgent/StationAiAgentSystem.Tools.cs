@@ -63,8 +63,7 @@ public sealed partial class StationAiAgentSystem
                 {"type":"object","additionalProperties":false,"properties":{
                 "expand":{"type":"integer","minimum":0,"maximum":3,"default":0,"description":"Смотреть дальше вокруг глаза: 0 — комната, 3 — дальше всего. Список от этого только растёт."},
                 "kind":{"type":"string","enum":["door","crew","apc","camera","airalarm","power","canister","computer","locker","device","obj"],"description":"Показать только объекты этого вида. Так сужают длинный список."},
-                "near":{"type":"string","description":"Имя человека или хендл. Список пересчитается от него: направления и расстояния будут относительно него, ближайшее первым."},
-                "via_skill":{"type":"string"}}}
+                "near":{"type":"string","description":"Имя человека или хендл. Список пересчитается от него: направления и расстояния будут относительно него, ближайшее первым."}}}
                 """,
             Handler = (a, ct) => LookAsync(s, a, ct),
         });
@@ -81,8 +80,7 @@ public sealed partial class StationAiAgentSystem
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"Хендл из look, например door-3."},
-                "by":{"type":"string","description":"Имя или хендл человека. Ответит, открывает ли его карта этот замок. Человек должен быть виден камерами."},
-                "via_skill":{"type":"string"}}}
+                "by":{"type":"string","description":"Имя или хендл человека. Ответит, открывает ли его карта этот замок. Человек должен быть виден камерами."}}}
                 """,
             Handler = (a, ct) => InspectAsync(s, a, ct),
         });
@@ -97,8 +95,7 @@ public sealed partial class StationAiAgentSystem
                 {"type":"object","additionalProperties":false,"properties":{
                 "query":{"type":"string","description":"Подстрока названия места, например 'engine', 'bridge', 'medical' — подписи на карте английские. Без неё — вся карта."},
                 "x":{"type":"number","description":"Считать расстояния не от своего глаза, а от этой точки — например от координат человека из crew_status."},
-                "y":{"type":"number","description":"Задаётся вместе с x."},
-                "via_skill":{"type":"string"}}}
+                "y":{"type":"number","description":"Задаётся вместе с x."}}}
                 """,
             Handler = (a, ct) => MapAsync(s, a, ct),
         });
@@ -110,8 +107,7 @@ public sealed partial class StationAiAgentSystem
                           "по тем, у кого включён датчик костюма.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
-                "filter":{"type":"string","description":"Подстрока имени, должности или отдела."},
-                "via_skill":{"type":"string"}}}
+                "filter":{"type":"string","description":"Подстрока имени, должности или отдела."}}}
                 """,
             Handler = (a, ct) => CrewStatusAsync(s, a, ct),
         });
@@ -123,8 +119,7 @@ public sealed partial class StationAiAgentSystem
                           "должности над головой. Это ровно то, что видит живой ИИ — и это можно подделать.",
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
-                "handle":{"type":"string","description":"Хендл существа из look, например crew-2."},
-                "via_skill":{"type":"string"}}}
+                "handle":{"type":"string","description":"Хендл существа из look, например crew-2."}}}
                 """,
             Handler = (a, ct) => IdentifyAsync(s, a, ct),
         });
@@ -136,8 +131,7 @@ public sealed partial class StationAiAgentSystem
                           "Это официальная база — она может расходиться с тем, что человек предъявляет.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
-                "query":{"type":"string","description":"Подстрока имени или должности."},
-                "via_skill":{"type":"string"}}}
+                "query":{"type":"string","description":"Подстрока имени или должности."}}}
                 """,
             Handler = (a, ct) => RecordsAsync(s, a, ct),
         });
@@ -148,7 +142,7 @@ public sealed partial class StationAiAgentSystem
             Description = "Перечитать свои законы. О перепрошивке тебе сообщит строка LAWS с новым " +
                           "текстом; этот инструмент — чтобы свериться, когда сомневаешься.",
             SchemaJson = """
-                {"type":"object","additionalProperties":false,"properties":{"via_skill":{"type":"string"}}}
+                {"type":"object","additionalProperties":false,"properties":{}}
                 """,
             Handler = (a, ct) => LawsAsync(s, a, ct),
         });
@@ -158,7 +152,7 @@ public sealed partial class StationAiAgentSystem
             Name = "station_status",
             Description = "Сводка по станции: уровень тревоги, состояние твоего ядра, питание.",
             SchemaJson = """
-                {"type":"object","additionalProperties":false,"properties":{"via_skill":{"type":"string"}}}
+                {"type":"object","additionalProperties":false,"properties":{}}
                 """,
             Handler = (a, ct) => StationStatusAsync(s, a, ct),
         });
@@ -175,8 +169,7 @@ public sealed partial class StationAiAgentSystem
             SpokenText = AiTool.TextArgument,
             SchemaJson = """
                 {"type":"object","required":["text"],"additionalProperties":false,"properties":{
-                "text":{"type":"string","maxLength":400},
-                "via_skill":{"type":"string"}}}
+                "text":{"type":"string","maxLength":400}}}
                 """,
             Handler = (a, ct) => SayAsync(s, a, ct),
         });
@@ -193,8 +186,7 @@ public sealed partial class StationAiAgentSystem
             SchemaJson = """
                 {"type":"object","required":["text"],"additionalProperties":false,"properties":{
                 "channel":{"type":"string","enum":["Binary","Common","Command","Engineering","Medical","Science","Security","Service","Supply"]},
-                "text":{"type":"string","maxLength":400},
-                "via_skill":{"type":"string"}}}
+                "text":{"type":"string","maxLength":400}}}
                 """,
             Handler = (a, ct) => RadioAsync(s, a, ct),
         });
@@ -208,8 +200,7 @@ public sealed partial class StationAiAgentSystem
             GameAction = false,
             SchemaJson = """
                 {"type":"object","required":["channel"],"additionalProperties":false,"properties":{
-                "channel":{"type":"string","enum":["Binary","Common","Command","Engineering","Medical","Science","Security","Service","Supply"]},
-                "via_skill":{"type":"string"}}}
+                "channel":{"type":"string","enum":["Binary","Common","Command","Engineering","Medical","Science","Security","Service","Supply"]}}}
                 """,
             Handler = (a, ct) => SetChannelAsync(s, a, ct),
         });
@@ -225,8 +216,7 @@ public sealed partial class StationAiAgentSystem
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "text":{"type":"string","maxLength":800,"description":"Текст объявления."},
-                "alert_level":{"type":"string","enum":["Green","Blue","Yellow","Violet","Red"],"description":"Новый уровень тревоги. Регистр важен: это идентификаторы, а не слова."},
-                "via_skill":{"type":"string"}}}
+                "alert_level":{"type":"string","enum":["Green","Blue","Yellow","Violet","Red"],"description":"Новый уровень тревоги. Регистр важен: это идентификаторы, а не слова."}}}
                 """,
             Handler = (a, ct) => AnnounceAsync(s, a, ct),
         });
@@ -244,8 +234,7 @@ public sealed partial class StationAiAgentSystem
                 {"type":"object","additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"К чему переместиться."},
                 "x":{"type":"number","description":"Координата X. Задаётся вместе с y вместо handle."},
-                "y":{"type":"number","description":"Координата Y. Задаётся вместе с x вместо handle."},
-                "via_skill":{"type":"string"}}}
+                "y":{"type":"number","description":"Координата Y. Задаётся вместе с x вместо handle."}}}
                 """,
             Handler = (a, ct) => MoveCameraAsync(s, a, ct),
         });
@@ -256,7 +245,7 @@ public sealed partial class StationAiAgentSystem
             Description = "Вернуть глаз к своему ядру.",
             GameAction = true,
             SchemaJson = """
-                {"type":"object","additionalProperties":false,"properties":{"via_skill":{"type":"string"}}}
+                {"type":"object","additionalProperties":false,"properties":{}}
                 """,
             Handler = (a, ct) => JumpToCoreAsync(s, a, ct),
         });
@@ -274,8 +263,7 @@ public sealed partial class StationAiAgentSystem
                 {"type":"object","required":["handle","action"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"Хендл устройства из look."},
                 "action":{"type":"string","enum":["open","close","bolt","unbolt","electrify","unelectrify","emergency_access_on","emergency_access_off","apc_breaker_on","apc_breaker_off","air_alarm_mode"],"description":"Что сделать."},
-                "value":{"type":"string","enum":["filtering","wide_filtering","fill","panic","none"],"description":"Режим воздушной тревоги. Нужен только когда action=air_alarm_mode."},
-                "via_skill":{"type":"string"}}}
+                "value":{"type":"string","enum":["filtering","wide_filtering","fill","panic","none"],"description":"Режим воздушной тревоги. Нужен только когда action=air_alarm_mode."}}}
                 """,
             Handler = (a, ct) => DeviceActionAsync(s, a, ct),
         });
@@ -283,15 +271,16 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "device_ui",
-            Description = "Команда консоли, для которой нет отдельного действия. Если ошибёшься в " +
-                          "имени команды, в alternatives придут те, что эта консоль понимает.",
+            Description = "Консоль станции. Без 'action' — читает её: текущее состояние и список " +
+                          "действий, которые именно эта консоль понимает. С 'action' — выполняет " +
+                          "действие и возвращает состояние уже после него. Список действий заранее " +
+                          "знать не нужно и выдумывать нельзя: сначала прочитай консоль.",
             GameAction = true,
             SchemaJson = """
-                {"type":"object","required":["handle","command"],"additionalProperties":false,"properties":{
-                "handle":{"type":"string"},
-                "command":{"type":"string","description":"Имя команды. Ошибёшься — придёт список подходящих."},
-                "text":{"type":"string","description":"Текстовый аргумент, если команда его требует."},
-                "via_skill":{"type":"string"}}}
+                {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
+                "handle":{"type":"string","description":"Хендл консоли из look."},
+                "action":{"type":"string","description":"Имя действия из списка, который вернул этот же инструмент без action. Пусто — только прочитать."},
+                "args":{"type":"object","description":"Аргументы действия по его сигнатуре из того же списка."}}}
                 """,
             Handler = (a, ct) => DeviceUiAsync(s, a, ct),
         });
@@ -312,8 +301,7 @@ public sealed partial class StationAiAgentSystem
             EndsTurn = true,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
-                "reason":{"type":"string","maxLength":200,"description":"Коротко для журнала, зачем ты решил не вмешиваться. Экипаж этого не увидит."},
-                "via_skill":{"type":"string"}}}
+                "reason":{"type":"string","maxLength":200,"description":"Коротко для журнала, зачем ты решил не вмешиваться. Экипаж этого не увидит."}}}
                 """,
             Handler = (a, ct) => NoopAsync(s, a, ct),
         });

@@ -393,6 +393,16 @@ public sealed class ScenarioTests
         // that it changed, which needs the AlertLevelChangedEvent subscription.
         await using var w = await AiStation.Create();
 
+        // Stop the loop, keep the session. The perception handlers go on filling the queue, but
+        // nothing drains it before the assertion does.
+        //
+        // This used to pass by luck: the loop slept out a fixed tick, and the test simply got there
+        // first. It now wakes the instant an observation lands, so it consumes the ALERT line into
+        // a turn and the queue is empty by the time the test looks — a faster agent, not a broken
+        // one, and a race the test should never have depended on.
+        await w.Post(() => w.System.GetSession(w.Brain)!.Cts.Cancel());
+        await w.Pair.Server.WaitRunTicks(5);
+
         var before = await w.Read(() =>
             w.Ent.GetComponent<Content.Shared.AlertLevel.AlertLevelComponent>(w.Station).CurrentAlertLevel);
 

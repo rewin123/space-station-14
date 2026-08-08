@@ -87,8 +87,11 @@ public sealed class OffsetGridTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Ok, Is.True, result.ToJson());
-            Assert.That(result.ToJson(), Does.Contain("север"),
-                "дверь к северу от человека остаётся севером и на смещённом гриде: " + result.ToJson());
+            // The point of the test is unchanged: an offset grid must not rotate or shift the answer.
+        // Δ is relative to the person, so it stays (0,4) however far from the origin the grid sits —
+        // while the absolute pair beside it moves with the grid.
+        Assert.That(result.ToJson(), Does.Contain("Δ(0,4)"),
+                "смещение от человека не должно зависеть от положения грида: " + result.ToJson());
         });
     }
 }

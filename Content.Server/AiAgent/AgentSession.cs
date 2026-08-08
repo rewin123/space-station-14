@@ -146,6 +146,40 @@ public sealed class AgentSession : IDisposable
     /// <see cref="CurateRequested"/>: asked for from outside, applied by the loop.
     /// </summary>
     public AgentInbox Inbox { get; } = new();
+
+    /// <summary>
+    /// Released whenever something the agent should look at arrives — a radio line, speech, an
+    /// announcement, an operator's message.
+    ///
+    /// Capacity one on purpose. A burst of chatter should start exactly one turn, and that turn's
+    /// observation carries every line of it; releasing per line would queue up turns describing a
+    /// conversation that has already moved on. The count also survives a turn: something that lands
+    /// while the model is working is waited on for zero milliseconds afterwards, not slept past.
+    /// </summary>
+    public SemaphoreSlim Woken { get; } = new(0, 1);
+
+    /// <summary>
+    /// Wake the loop. Safe to call from any thread and as often as anything likes — a signal that
+    /// is already pending is simply left pending.
+    /// </summary>
+    public void Wake()
+    {
+        try
+        {
+            if (Woken.CurrentCount == 0)
+                Woken.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // Two perception handlers released at once. The loop is awake either way, which is the
+            // entire point of the call.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The session is going away mid-round. Nothing left to wake.
+        }
+    }
+
     public CancellationTokenSource Cts { get; } = new();
     public Task Loop { get; private set; } = Task.CompletedTask;
 
@@ -194,7 +228,7 @@ public sealed class AgentSession : IDisposable
         _sawmill = sawmill;
 
         Cache = new CacheMetrics(sawmill);
-        Compactor = new Compactor(llm, compaction, Cache, sawmill);
+        Compactor = new Compactor(llm, compaction, Cache, sawmill, Journal);
         Dispatcher = new ToolDispatcher(registry, sawmill);
         _turn = new TurnRunner(llm, registry, Dispatcher, queue, State, Cache, Journal, speak, sawmill);
 
@@ -226,7 +260,20 @@ public sealed class AgentSession : IDisposable
             {
                 var idle = idleStreak > 2;
                 var wait = idle ? _options.TickSecondsIdle() : _options.TickSeconds();
-                await Task.Delay(TimeSpan.FromSeconds(wait), ct).ConfigureAwait(false);
+
+                // A ceiling on the sleep, not a period.
+                //
+                // Anything pushed into the observation queue releases this, so being spoken to
+                // starts a turn now rather than whenever the timer happened to land. Polling alone
+                // made response time a coin flip across the whole interval, and the crew feels that
+                // precisely when waiting is least acceptable: on a shout about a fire.
+                //
+                // A signal that arrived while the previous turn was still running is still sitting
+                // in the semaphore, so this returns immediately and nothing is missed. Several lines
+                // in the same instant collapse into one wake, and the observation carries them all —
+                // which is the batching the old delay provided, without the latency it charged for
+                // it.
+                await Woken.WaitAsync(TimeSpan.FromSeconds(wait), ct).ConfigureAwait(false);
 
                 // Claimed HERE, at the top of the body, and not at the end of the turn where
                 // CurateRequested is picked up.
@@ -240,11 +287,29 @@ public sealed class AgentSession : IDisposable
                 // It also has to be here for correctness: the previous turn's
                 // finally { Conv.CloseTurn(); } has already run by this point, so nothing can land
                 // between an assistant's tool_calls and their results.
-                var pending = Inbox.Claim();
+                // Peeked, not claimed.
+                //
+                // Claiming here and building the observation afterwards lost the message outright
+                // whenever the build returned null, and two of the three ways it can do that —
+                // ai.enabled switched off, and a world paused because the last player left — do not
+                // look at `force` at all. The text was already out of the inbox by then, so an
+                // operator's message sent in either of those windows went nowhere and nothing
+                // anywhere reported it. Observed live: a message typed into the debugger never
+                // reached the agent.
+                //
+                // Only this loop ever claims, so nothing can take it in between; and a message that
+                // arrives during the build is simply picked up by the Claim below.
+                // A turn cut off by the step budget is unfinished business, not a decision.
+                //
+                // The model was mid-plan — the observed case was move_camera as the last allowed
+                // call, so the eye was aimed and nothing was ever looked at or said — and the loop
+                // then went back to waiting for a new observation. On a quiet station there is no
+                // new observation, so the agent simply stopped, with the crew watching it do
+                // nothing after being asked something. Forcing the next tick lets it carry on from
+                // where it was cut, which is what a player would do.
+                var unfinished = LastTurn?.Exit == TurnExit.BudgetExhausted;
 
-                // Force a turn occasionally even when nothing was heard, so the agent can act on
-                // its own initiative rather than only ever reacting to being spoken to.
-                var force = idleStreak >= 6 || pending != null;
+                var force = idleStreak >= 6 || Inbox.HasPending || unfinished;
                 var perception = await _buildObservation(force, ct).ConfigureAwait(false);
 
                 if (perception == null)
@@ -252,6 +317,8 @@ public sealed class AgentSession : IDisposable
                     idleStreak++;
                     continue;
                 }
+
+                var pending = Inbox.Claim();
 
                 // Merged into the one observation rather than appended as a second user message:
                 // two adjacent user messages fabricate a turn boundary that TurnBoundaries() will

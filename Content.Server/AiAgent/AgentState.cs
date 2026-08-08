@@ -57,15 +57,6 @@ public sealed class AgentState
 
     public int Compactions { get; set; }
 
-    /// <summary>
-    /// False until usage has fallen back below <c>ai.compact_low</c> — the hysteresis.
-    ///
-    /// It lived as a private field on the compactor, which meant the only way for a test to set up
-    /// the hysteresis case was <c>GetField(..., NonPublic | Instance)</c>. Reflection in a test is
-    /// the clearest possible sign that a piece of state is in the wrong class.
-    /// </summary>
-    public bool CompactionArmed { get; set; } = true;
-
     public string? LastSummary { get; set; }
 
     /// <summary>
@@ -172,7 +163,6 @@ public sealed class AgentState
         AgentTurns = Turns,
         Mode = Mode,
         UntooledReplies = UntooledReplies,
-        CompactionArmed = CompactionArmed,
         RecentSpeech = new List<string>(_recentSpeech),
     };
 
@@ -191,7 +181,6 @@ public sealed class AgentState
         Turns = snapshot.AgentTurns;
         UntooledReplies = snapshot.UntooledReplies;
         Compactions = snapshot.Compactions;
-        CompactionArmed = snapshot.CompactionArmed;
         RestoreRecentSpeech(snapshot.RecentSpeech);
 
         // Anything but Core or Carded collapses to Core, and this is load-bearing: a snapshot taken

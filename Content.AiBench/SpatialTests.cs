@@ -38,8 +38,10 @@ public sealed class SpatialTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Ok, Is.True, result.ToJson());
-            Assert.That(result.ToJson(), Does.Contain("север"),
-                "дверь к северу от человека должна быть описана как север: " + result.ToJson());
+            // Δ is measured from the person, so a door three tiles above a crewman standing one
+            // tile below it reads as a positive y offset — not as the bearing it used to print.
+            Assert.That(result.ToJson(), Does.Contain("Δ(0,4)"),
+                "дверь к северу от человека — это положительный y в Δ: " + result.ToJson());
             Assert.That(result.ToJson(), Does.Contain(name),
                 "в ответе должно быть видно, от кого считали: " + result.ToJson());
         });
@@ -62,8 +64,8 @@ public sealed class SpatialTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Ok, Is.True, result.ToJson());
-            Assert.That(result.ToJson(), Does.Contain("восток"),
-                "дверь к востоку от человека: " + result.ToJson());
+            Assert.That(result.ToJson(), Does.Contain("Δ(2,0)"),
+                "дверь к востоку от человека — положительный x в Δ: " + result.ToJson());
         });
     }
 

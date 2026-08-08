@@ -62,9 +62,8 @@ public sealed class JournalTests
             () => ("ПРОМПТ", registry.WireJson()),
             new CompactionOptions
             {
+                KeepEvents = () => 40,
                 High = () => int.MaxValue,
-                Low = () => 0,
-                KeepTail = () => 1000,
             },
             new Journal(logDir, Sawmill),
             null,

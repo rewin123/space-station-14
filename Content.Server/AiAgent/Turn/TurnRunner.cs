@@ -72,6 +72,18 @@ public sealed class TurnRunner
     {
         var ctx = new TurnContext(_state.Turns, perception, maxSteps);
 
+        // What the agent heard, recorded alongside what it then did.
+        //
+        // Observations were the one thing missing from the journal, which made a transcript read as
+        // a series of actions with no stimulus. They are also what a fold needs most: after the
+        // history is summarised away, "who said what to me" is the part the agent cannot reconstruct
+        // from memory or from the station.
+        _journal.Write("obs", new Dictionary<string, object?>
+        {
+            ["turn"] = ctx.Index,
+            ["text"] = perception.Text,
+        });
+
         try
         {
             await StepsAsync(ctx, ct).ConfigureAwait(false);
@@ -293,12 +305,6 @@ public sealed class TurnRunner
                 ["ok"] = result.Ok,
                 ["error"] = result.Error,
                 ["detail"] = result.Ok ? null : Trim(result.Detail, 200),
-
-                // The one consumer of via_skill. It is declared on every game-facing tool and was
-                // read by nothing at all — fifteen parameters in the frozen prefix referring to a
-                // concept the prompt never mentioned. Recorded here it becomes what it was meant to
-                // be: mechanical attribution, so which skills actually route has an answer.
-                ["via_skill"] = ArgumentValue(call.Function.Arguments, "via_skill"),
             });
 
             if (result.Ok && invocation.Tool is { Speech: true } speech)
@@ -386,21 +392,4 @@ public sealed class TurnRunner
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
-    /// <summary>One string argument out of a raw tool-call payload, or null if it is not there.</summary>
-    private static string? ArgumentValue(string argsJson, string name)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(argsJson) ? "{}" : argsJson);
-            return doc.RootElement.ValueKind == JsonValueKind.Object
-                   && doc.RootElement.TryGetProperty(name, out var el)
-                   && el.ValueKind == JsonValueKind.String
-                ? el.GetString()
-                : null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
 }
