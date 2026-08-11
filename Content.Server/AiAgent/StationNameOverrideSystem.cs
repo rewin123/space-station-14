@@ -18,7 +18,9 @@ namespace Content.Server.AiAgent;
 /// Пустое значение отключает подмену целиком, и это важнее, чем кажется: так ведут себя
 /// бенчмарки и тесты, которым ванильное поведение и нужно.
 /// </summary>
-public sealed class StationNameOverrideSystem : EntitySystem
+// partial — требование анализатора RA0049 для типов с [Dependency]. В Debug это
+// предупреждение, в Release оно ошибка: без него сборка боевой конфигурации не проходит вовсе.
+public sealed partial class StationNameOverrideSystem : EntitySystem
 {
     [Dependency] private IConfigurationManager _cfg = default!;
     [Dependency] private StationSystem _station = default!;

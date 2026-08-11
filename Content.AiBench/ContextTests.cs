@@ -292,8 +292,8 @@ public sealed class ContextTests
         var conv = Fresh();
         var journal = new Journal(null, Sawmill);
 
-        journal.Write("obs", new System.Collections.Generic.Dictionary<string, object?> { ["text"] = "RADIO Common | Autumn: где аномалия" });
-        journal.Write("tool", new System.Collections.Generic.Dictionary<string, object?>
+        journal.Write("obs", new System.Collections.Generic.Dictionary<string, object> { ["text"] = "RADIO Common | Autumn: где аномалия" });
+        journal.Write("tool", new System.Collections.Generic.Dictionary<string, object>
         {
             ["name"] = "look", ["args"] = """{"kind":"obj"}""", ["ok"] = true,
         });
