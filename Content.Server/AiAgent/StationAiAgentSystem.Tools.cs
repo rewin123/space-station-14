@@ -306,6 +306,9 @@ public sealed partial class StationAiAgentSystem
             Handler = (a, ct) => NoopAsync(s, a, ct),
         });
 
+        // ---------------------------------------------------------------- таймеры
+        RegisterTimerTools(s, r);
+
         // ------------------------------------------------- skills and memory
         RegisterMemoryTools(s, r);
     }
@@ -474,6 +477,14 @@ public sealed partial class StationAiAgentSystem
         // вообще был допустим. Иначе это скрытое состояние: модель забудет, куда настроена, и
         // отправит разговор о предателе в общий канал. Читать дешевле, чем помнить.
         sb.Append(" канал=").Append(session.State.OutputChannel);
+
+        // Заведённые будильники печатаются по той же причине, что и положение тумблера: иначе это
+        // скрытое состояние. Агент, забывший, что уже поставил таймер на обход, ставит второй — и
+        // будит себя дважды на одно дело. Печатается только когда они есть, и только имя со сроком:
+        // тексты лежат в list_timers, и место в каждом наблюдении им ни к чему.
+        var timers = TimersForSelf(session);
+        if (timers.Length > 0)
+            sb.Append(" таймеры=").Append(timers);
 
         sb.Append(" turn=").Append(session.Turns.ToString(CultureInfo.InvariantCulture));
         return sb.ToString();

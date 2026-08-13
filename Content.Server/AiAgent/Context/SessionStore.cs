@@ -65,6 +65,32 @@ public sealed class SessionSnapshot
     /// </summary>
     [JsonPropertyName("recent_speech")]
     public List<string> RecentSpeech { get; set; } = new();
+
+    /// <summary>
+    /// Заведённые агентом таймеры. Сроки — раундовые, и это то, что делает их восстановимыми: снимок
+    /// и так принимается только внутри своего раунда (см. проверку round_id), а раундовые часы
+    /// перезапуск сервера переживают — их считает база, а не процесс.
+    /// </summary>
+    [JsonPropertyName("timers")]
+    public List<TimerDto> Timers { get; set; } = new();
+}
+
+/// <summary>Таймер на диске. Времена в секундах: TimeSpan сериализуется как "00:10:00", и это
+/// формат для человека, а не для дописывания поля со значением по умолчанию.</summary>
+public sealed class TimerDto
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("due_seconds")]
+    public double DueSeconds { get; set; }
+
+    /// <summary>Ноль — одноразовый.</summary>
+    [JsonPropertyName("every_seconds")]
+    public double EverySeconds { get; set; }
 }
 
 /// <summary>

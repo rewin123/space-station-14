@@ -154,6 +154,29 @@ public sealed class AiCVars
     public static readonly CVarDef<int> ObsBuffer =
         CVarDef.Create("ai.obs_buffer", 200, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Сколько будильников агент может держать одновременно.
+    ///
+    /// Потолок нужен не ради памяти — восемь записей ничего не стоят, — а ради самой петли: каждый
+    /// сработавший таймер это ход, то есть запрос к модели. Агент, поставивший напоминалку на каждое
+    /// обещание за смену, разбудил бы себя чаще, чем его будит экипаж, и перестал бы отличать
+    /// собственный фон от станции. Восемь — это примерно предел того, что он способен внятно
+    /// перечислить в строке SELF.
+    /// </summary>
+    public static readonly CVarDef<int> MaxTimers =
+        CVarDef.Create("ai.max_timers", 8, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Нижняя граница срока таймера, в секундах. Она же минимальный интервал повтора.
+    ///
+    /// Тридцать секунд — это не «достаточно точно», а «дешевле, чем тик простоя». Повтор с
+    /// интервалом в секунду превратил бы петлю в генератор ходов и счётчик расходов на модель,
+    /// причём с самым безобидным следом в логах: агент просто всё время о чём-то думает.
+    /// Бенчмарки опускают это значение, чтобы не ждать полминуты на каждый тест.
+    /// </summary>
+    public static readonly CVarDef<int> TimerMinSeconds =
+        CVarDef.Create("ai.timer_min_seconds", 30, CVar.SERVERONLY);
+
     /// <summary>Vanilla parity: the AI hears local speech only near its physical core.</summary>
     public static readonly CVarDef<float> HearRange =
         CVarDef.Create("ai.hear_range", 10f, CVar.SERVERONLY);

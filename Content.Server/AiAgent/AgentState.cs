@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
@@ -21,6 +22,13 @@ namespace Content.Server.AiAgent;
 public sealed class AgentState
 {
     public ConversationState Conv { get; } = new();
+
+    /// <summary>
+    /// Будильники, которые агент завёл сам. Здесь, а не на сессии, ровно по правилу выше: они
+    /// переживают ход, и перезапуск сервера посреди смены не должен стирать «проверю через десять
+    /// минут», сказанное экипажу вслух.
+    /// </summary>
+    public Perception.TimerStore Timers { get; } = new();
 
     /// <summary>
     /// Turns the loop has run.
@@ -164,6 +172,14 @@ public sealed class AgentState
         Mode = Mode,
         UntooledReplies = UntooledReplies,
         RecentSpeech = new List<string>(_recentSpeech),
+
+        Timers = Timers.All().Select(t => new TimerDto
+        {
+            Name = t.Name,
+            Message = t.Message,
+            DueSeconds = t.DueAt.TotalSeconds,
+            EverySeconds = t.Every?.TotalSeconds ?? 0,
+        }).ToList(),
     };
 
     /// <summary>
@@ -182,6 +198,15 @@ public sealed class AgentState
         UntooledReplies = snapshot.UntooledReplies;
         Compactions = snapshot.Compactions;
         RestoreRecentSpeech(snapshot.RecentSpeech);
+
+        // Просроченное за время простоя не отбрасывается: таймер, чей срок прошёл, пока сервер
+        // лежал, сработает на первом же тике после восстановления. Это и есть правильное поведение —
+        // «проверить реактор» не перестало быть нужным оттого, что мы перезагрузились.
+        Timers.Restore(snapshot.Timers.Select(t => new Perception.AgentTimer(
+            t.Name,
+            t.Message,
+            TimeSpan.FromSeconds(t.DueSeconds),
+            t.EverySeconds > 0 ? TimeSpan.FromSeconds(t.EverySeconds) : null)));
 
         // Anything but Core or Carded collapses to Core, and this is load-bearing: a snapshot taken
         // mid-compaction holds Review, and restoring it would leave the agent refusing every game

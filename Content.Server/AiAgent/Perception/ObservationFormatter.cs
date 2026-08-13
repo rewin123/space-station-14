@@ -26,6 +26,7 @@ public static class ObservationFormatter
             : $"ANNOUNCE {o.Speaker}: \"{o.Text}\"",
         ObsKind.Alert => $"ALERT {o.Text}",
         ObsKind.Laws => $"LAWS {o.Text}",
+        ObsKind.Timer => $"TIMER {o.Speaker}: \"{o.Text}\"",
         _ => $"EVENT {o.Text}",
     };
 
@@ -72,6 +73,7 @@ public static class ObservationFormatter
         ObsKind.Alert,
         ObsKind.Laws,
         ObsKind.Event,
+        ObsKind.Timer,
     };
 
     /// <summary>T+H:MM:SS since round start.</summary>

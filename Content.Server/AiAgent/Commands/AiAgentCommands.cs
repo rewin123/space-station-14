@@ -17,7 +17,7 @@ public sealed class AiAgentCommand : IConsoleCommand
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
     public string Help => "aiagent status | claim [uid] | release | inject <канал> <текст> | " +
-                          "tool <имя> [json] | curate | skills | debug | dryrun on|off";
+                          "tool <имя> [json] | curate | skills | timers | debug | dryrun on|off";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
@@ -102,6 +102,31 @@ public sealed class AiAgentCommand : IConsoleCommand
             {
                 var index = system.Skills.RenderIndex();
                 shell.WriteLine(index.Length > 0 ? index : "библиотека скиллов пуста");
+                break;
+            }
+
+            case "timers":
+            {
+                // Отдельная подкоманда, а не строчка в status: таймер, о котором агент забыл, —
+                // это будущие ходы и будущие деньги, и увидеть их до срабатывания можно только так.
+                var now = system.RoundTime();
+                var any = false;
+
+                foreach (var session in system.Sessions.Values)
+                {
+                    foreach (var timer in session.State.Timers.All())
+                    {
+                        any = true;
+                        var left = (int)(timer.DueAt - now).TotalSeconds;
+                        shell.WriteLine($"{timer.Name} — через {left}с" +
+                                        (timer.Every.HasValue ? $", повтор каждые {(int)timer.Every.Value.TotalSeconds}с" : "") +
+                                        $": {timer.Message}");
+                    }
+                }
+
+                if (!any)
+                    shell.WriteLine("ни одного таймера не заведено");
+
                 break;
             }
 

@@ -13,6 +13,12 @@ public enum ObsKind : byte
     Alert,
     Laws,
     Event,
+
+    /// <summary>
+    /// Сработал таймер, который агент завёл сам. Добавлено в конец перечисления намеренно: порядок
+    /// категорий — это порядок строк в наблюдении, и вставка в середину сдвинула бы все прежние.
+    /// </summary>
+    Timer,
 }
 
 /// <summary>
@@ -47,4 +53,12 @@ public sealed record Observation(
 
     public static Observation Event(string text, TimeSpan t) =>
         new(ObsKind.Event, string.Empty, string.Empty, text, t);
+
+    /// <summary>
+    /// Сработавший таймер. Имя едет в <see cref="Speaker"/> — это и есть тот, кто «заговорил»:
+    /// агент из прошлого. Имя обязательно в строке, иначе на две поставленные напоминалки придёт
+    /// два неразличимых текста, и снять нужный через del_timer будет нечем.
+    /// </summary>
+    public static Observation Timer(string name, string text, TimeSpan t) =>
+        new(ObsKind.Timer, string.Empty, name, text, t);
 }

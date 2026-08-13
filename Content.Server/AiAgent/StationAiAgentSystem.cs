@@ -535,6 +535,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             session.Dispose();
         }
 
+        // Каждый тик, без своего интервала: сроки заданы агентом с точностью до секунды, а обход
+        // восьми записей под замком дешевле, чем счётчик, который пришлось бы объяснять.
+        FireDueTimers();
+
         AutoSaveSessions(frameTime);
         PruneHandles(frameTime);
     }
