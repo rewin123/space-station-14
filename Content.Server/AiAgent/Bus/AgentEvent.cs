@@ -48,6 +48,24 @@ public enum AgentEventKind : byte
     SkillsReloaded,
 
     /// <summary>
+    /// Одна заметка о человеке целиком, после того как запись легла на диск.
+    ///
+    /// ПУСТОЙ список записей — надгробие: заметки больше нет. Удаление последней записи сносит и
+    /// файл (каталог из пустых заметок врал бы поиску о том, кого агент знает), и отдельного вида
+    /// события на это заводить незачем — «новое целое значение этого ключа» здесь просто пусто.
+    /// Клиент, складывающий эти кадры в карту, обязан на пустом списке ключ УДАЛЯТЬ, иначе он
+    /// нарисует человека, о котором ничего не известно.
+    /// </summary>
+    PlayerNoteUpdated,
+
+    /// <summary>
+    /// Всё хранилище заметок перечитано с диска. Причина та же, что у <see cref="SkillsReloaded"/>:
+    /// перечитывание — единственный путь, которым заметка исчезает без собственного события (файл
+    /// удалили руками, или он перестал разбираться).
+    /// </summary>
+    PlayerNotesReloaded,
+
+    /// <summary>
     /// The whole statistics record, sampled at a turn boundary rather than diffed per counter.
     /// See <see cref="AgentEventBus"/> for why this one is a sample and not a diff.
     /// </summary>
@@ -67,6 +85,8 @@ public static class AgentEventNames
         AgentEventKind.MemoryUpdated => "memory.updated",
         AgentEventKind.SkillUpdated => "skill.updated",
         AgentEventKind.SkillsReloaded => "skills.reloaded",
+        AgentEventKind.PlayerNoteUpdated => "note.updated",
+        AgentEventKind.PlayerNotesReloaded => "notes.reloaded",
         AgentEventKind.Stats => "stats",
 
         // Not a default case: a new enum member must fail loudly here rather than travel the wire

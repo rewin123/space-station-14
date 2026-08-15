@@ -42,7 +42,7 @@ public sealed class SkillMemoryTests
 
     private MemoryStore NewMemory(int limit = 300)
     {
-        var store = new MemoryStore(_dir, Sawmill) { MemoryLimit = limit, CrewLimit = limit };
+        var store = new MemoryStore(_dir, Sawmill) { MemoryLimit = limit };
         store.LoadFromDisk();
         return store;
     }
@@ -60,12 +60,12 @@ public sealed class SkillMemoryTests
     public void Memory_AddAndPersist()
     {
         var m = NewMemory();
-        Assert.That(m.Add(MemoryTarget.Memory, "Ставни карго на том же APC, что и бар.").Ok, Is.True);
+        Assert.That(m.Add("Ставни карго на том же APC, что и бар.").Ok, Is.True);
 
         // A second store reading the same directory must see it — the write has to be durable
         // immediately, not at shutdown.
         var reloaded = NewMemory();
-        Assert.That(reloaded.Entries(MemoryTarget.Memory), Has.Count.EqualTo(1));
+        Assert.That(reloaded.Entries(), Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -75,19 +75,19 @@ public sealed class SkillMemoryTests
         // visible to the tool caller and INVISIBLE to zone 0, or the prefix cache dies every time
         // the agent remembers something.
         var m = NewMemory();
-        m.Add(MemoryTarget.Memory, "первая запись");
+        m.Add("первая запись");
         m.RefreshSnapshot();
 
-        var before = m.Snapshot(MemoryTarget.Memory);
-        m.Add(MemoryTarget.Memory, "вторая запись, добавлена посреди сессии");
+        var before = m.Snapshot();
+        m.Add("вторая запись, добавлена посреди сессии");
 
-        Assert.That(m.Snapshot(MemoryTarget.Memory), Is.EqualTo(before),
+        Assert.That(m.Snapshot(), Is.EqualTo(before),
             "снапшот зоны 0 не должен меняться от записи посреди сессии");
-        Assert.That(m.Entries(MemoryTarget.Memory), Has.Count.EqualTo(2),
+        Assert.That(m.Entries(), Has.Count.EqualTo(2),
             "живое состояние обязано измениться сразу — иначе модель не увидит своей же записи");
 
         m.RefreshSnapshot();
-        Assert.That(m.Snapshot(MemoryTarget.Memory), Is.Not.EqualTo(before),
+        Assert.That(m.Snapshot(), Is.Not.EqualTo(before),
             "после перестройки префикса снапшот обязан догнать живое состояние");
     }
 
@@ -95,10 +95,10 @@ public sealed class SkillMemoryTests
     public void Memory_SnapshotCarriesCapacityHeader()
     {
         var m = NewMemory(limit: 1000);
-        m.Add(MemoryTarget.Memory, new string('я', 250));
+        m.Add(new string('я', 250));
         m.RefreshSnapshot();
 
-        var snapshot = m.Snapshot(MemoryTarget.Memory);
+        var snapshot = m.Snapshot();
         Assert.That(snapshot, Does.Contain("/1000 символов"),
             "модель должна видеть свой бюджет, иначе консолидировать она начнёт только упёршись в стену");
         Assert.That(snapshot, Does.Contain("%"));
@@ -108,9 +108,9 @@ public sealed class SkillMemoryTests
     public void Memory_RefusesToOverflow()
     {
         var m = NewMemory(limit: 100);
-        m.Add(MemoryTarget.Memory, new string('a', 90));
+        m.Add(new string('a', 90));
 
-        var result = m.Add(MemoryTarget.Memory, new string('b', 90));
+        var result = m.Add(new string('b', 90));
 
         Assert.That(result.Ok, Is.False);
         Assert.That(result.Entries, Is.Not.Null.And.Not.Empty,
@@ -124,13 +124,13 @@ public sealed class SkillMemoryTests
         // was over it, and every repair was refused for "would exceed the limit" — including the
         // repairs that made it smaller.
         var m = NewMemory(limit: 1000);
-        m.Add(MemoryTarget.Memory, new string('a', 400));
-        m.Add(MemoryTarget.Memory, new string('b', 400));
+        m.Add(new string('a', 400));
+        m.Add(new string('b', 400));
 
-        var tight = new MemoryStore(_dir, Sawmill) { MemoryLimit = 100, CrewLimit = 100 };
+        var tight = new MemoryStore(_dir, Sawmill) { MemoryLimit = 100 };
         tight.LoadFromDisk();
 
-        var result = tight.Replace(MemoryTarget.Memory, new string('a', 20), "коротко");
+        var result = tight.Replace(new string('a', 20), "коротко");
 
         Assert.That(result.Ok, Is.True,
             "сжатие обязано проходить даже за лимитом, иначе переполненная память запирается навсегда");
@@ -140,14 +140,14 @@ public sealed class SkillMemoryTests
     public void Memory_ReplaceNeedsAnUnambiguousFragment()
     {
         var m = NewMemory();
-        m.Add(MemoryTarget.Memory, "капитан Иванов носит красную куртку");
-        m.Add(MemoryTarget.Memory, "капитан Петров носит синюю куртку");
+        m.Add("капитан Иванов носит красную куртку");
+        m.Add("капитан Петров носит синюю куртку");
 
-        var ambiguous = m.Replace(MemoryTarget.Memory, "капитан", "неважно");
+        var ambiguous = m.Replace("капитан", "неважно");
         Assert.That(ambiguous.Ok, Is.False, "неоднозначный фрагмент должен отвергаться");
         Assert.That(ambiguous.Message, Does.Contain("подлиннее"));
 
-        var exact = m.Replace(MemoryTarget.Memory, "Иванов", "капитан Иванов сдал куртку в стирку");
+        var exact = m.Replace("Иванов", "капитан Иванов сдал куртку в стирку");
         Assert.That(exact.Ok, Is.True);
     }
 
@@ -157,12 +157,12 @@ public sealed class SkillMemoryTests
         // A fragile write must not be able to burn the whole turn and swallow the reply the crew
         // is waiting for.
         var m = NewMemory(limit: 50);
-        m.Add(MemoryTarget.Memory, new string('a', 45));
+        m.Add(new string('a', 45));
 
         for (var i = 0; i < 4; i++)
-            m.Add(MemoryTarget.Memory, new string('b', 45));
+            m.Add(new string('b', 45));
 
-        var terminal = m.Add(MemoryTarget.Memory, new string('c', 45));
+        var terminal = m.Add(new string('c', 45));
         Assert.That(terminal.Message, Does.Contain("пропущена"),
             "после нескольких провалов ответ должен стать терминальным, а не звать повторять");
     }

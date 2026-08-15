@@ -123,6 +123,35 @@ public sealed class AgentSession : IDisposable
     /// <summary>Handle registry — per session, so names never leak between rounds.</summary>
     public Handles.EntityHandleRegistry Handles { get; } = new();
 
+    /// <summary>
+    /// Кому за эту смену уже напоминали, что на него есть заметка.
+    ///
+    /// Живёт на сессии, а не в <see cref="AgentState"/>, намеренно: <c>AgentState</c> уезжает в
+    /// снапшот и восстанавливается, и поле здесь поменяло бы схему снапшота ради того, чтобы после
+    /// рестарта посреди раунда не подсказать во второй раз. Одна лишняя строка дешевле схемы.
+    ///
+    /// Сброса не требуется: сессия умирает вместе с раундом (<c>OnRoundCleanup</c> зовёт
+    /// <c>ReleaseAll</c>), а вместе с ней и это множество. Комментарий здесь именно затем, чтобы
+    /// никто не добавил «забытую» очистку.
+    ///
+    /// Читается и пишется с главного потока, из обработчиков речи; лок — на случай, если однажды
+    /// это перестанет быть правдой.
+    /// </summary>
+    private readonly HashSet<string> _notedPeople = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Первая ли это реплика этого человека за смену. Дальше вызывающий решает, есть ли о чём
+    /// напоминать.
+    ///
+    /// Имя запоминается и тогда, когда заметки нет: иначе безымянный болтун стоил бы обращения к
+    /// локу хранилища на каждую свою реплику, а так — одно за смену.
+    /// </summary>
+    public bool FirstUtteranceOf(string speaker)
+    {
+        lock (_notedPeople)
+            return _notedPeople.Add(speaker);
+    }
+
     public string? LastLawsDigest
     {
         get => State.LastLawsDigest;

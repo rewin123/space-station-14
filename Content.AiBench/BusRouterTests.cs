@@ -31,6 +31,7 @@ public sealed class BusRouterTests
     private AgentEventBus _bus = null!;
     private MemoryStore _memory = null!;
     private SkillStore _skills = null!;
+    private PlayerNoteStore _notes = null!;
     private ConversationState _conv = null!;
     private bool _hasSession;
 
@@ -46,6 +47,7 @@ public sealed class BusRouterTests
         _memory.LoadFromDisk();
 
         _skills = new SkillStore(_dir, Sawmill);
+        _notes = new PlayerNoteStore(_dir, Sawmill);
         _skills.AttachSink(_bus.ForProcess());
         _skills.LoadFromDisk();
 
@@ -77,6 +79,7 @@ public sealed class BusRouterTests
             () => null,
             () => _memory,
             () => _skills,
+            () => _notes,
             () => 42,
             text =>
             {
@@ -86,11 +89,11 @@ public sealed class BusRouterTests
                 _sent.Add(text);
                 return (true, "доставлено следующим ходом");
             },
-            (target, action, match, content) => action switch
+            (action, match, content) => action switch
             {
-                "add" => _memory.Add(target, content),
-                "replace" => _memory.Replace(target, match, content),
-                "remove" => _memory.Remove(target, match),
+                "add" => _memory.Add(content),
+                "replace" => _memory.Replace(match, content),
+                "remove" => _memory.Remove(match),
                 _ => new MemoryResult(false, $"неизвестное действие '{action}'"),
             },
             (name, when, body, match, replacement) =>
@@ -179,7 +182,6 @@ public sealed class BusRouterTests
         {
             Assert.That(memory.GetProperty("memory_limit").GetInt32(), Is.EqualTo(_memory.MemoryLimit),
                 "без лимита заполненность живой памяти выводится только регуляркой из шапки замороженного блока");
-            Assert.That(memory.GetProperty("crew_limit").GetInt32(), Is.EqualTo(_memory.CrewLimit));
         });
     }
 
@@ -195,7 +197,7 @@ public sealed class BusRouterTests
     [Test]
     public async Task StateCarriesTheWholeAgent()
     {
-        _memory.Add(MemoryTarget.Memory, "капитан доверяет мне");
+        _memory.Add("капитан доверяет мне");
         _skills.Write("restore-core-power", "когда ядро обесточено", "звать инженеров");
 
         var body = Body(await Get("/state"));
@@ -321,7 +323,7 @@ public sealed class BusRouterTests
     {
         // Memory and skills are process-wide: they exist from Initialize and outlive every round.
         var body = Body(await Post(
-            "{\"type\":\"memory.change\",\"target\":\"crew\",\"action\":\"add\",\"content\":\"Мария Сидорова — врач\"}"));
+            "{\"type\":\"memory.change\",\"action\":\"add\",\"content\":\"SMES в инженерном разряжается быстрее\"}"));
 
         Assert.Multiple(() =>
         {
@@ -329,7 +331,7 @@ public sealed class BusRouterTests
             Assert.That(body.GetProperty("applied").GetString(), Is.EqualTo("disk"));
             Assert.That(body.GetProperty("visible_to_model").GetString(), Is.EqualTo("next_compaction"),
                 "без этого оператор правит память, видит то же поведение и решает, что эндпоинт сломан");
-            Assert.That(_memory.Entries(MemoryTarget.Crew), Does.Contain("Мария Сидорова — врач"));
+            Assert.That(_memory.Entries(), Does.Contain("SMES в инженерном разряжается быстрее"));
         });
     }
 
@@ -360,7 +362,6 @@ public sealed class BusRouterTests
         var broken = await Post("{это не json");
         var noType = await Post("{}");
         var unknown = await Post("{\"type\":\"выключи-станцию\"}");
-        var badTarget = await Post("{\"type\":\"memory.change\",\"target\":\"мозг\",\"action\":\"add\",\"content\":\"x\"}");
         var noName = await Post("{\"type\":\"skill.change\",\"body\":\"тело без имени\"}");
 
         Assert.Multiple(() =>
@@ -370,7 +371,6 @@ public sealed class BusRouterTests
             Assert.That(unknown.Status, Is.EqualTo(400));
             Assert.That(Body(unknown).GetProperty("error").GetString(), Does.Contain("message.send"),
                 "отказ обязан перечислять, что вообще бывает");
-            Assert.That(badTarget.Status, Is.EqualTo(400));
             Assert.That(noName.Status, Is.EqualTo(400));
         });
     }
@@ -378,18 +378,18 @@ public sealed class BusRouterTests
     [Test]
     public async Task RefusedMemoryChangeIs400AndChangesNothing()
     {
-        var full = new MemoryStore(_dir, Sawmill) { CrewLimit = 20 };
+        var full = new MemoryStore(_dir, Sawmill) { MemoryLimit = 20 };
         full.LoadFromDisk();
         _memory = full;
 
         var response = await Post(
-            "{\"type\":\"memory.change\",\"target\":\"crew\",\"action\":\"add\",\"content\":\"" +
+            "{\"type\":\"memory.change\",\"action\":\"add\",\"content\":\"" +
             new string('щ', 100) + "\"}");
 
         Assert.Multiple(() =>
         {
             Assert.That(response.Status, Is.EqualTo(400));
-            Assert.That(full.Entries(MemoryTarget.Crew), Is.Empty);
+            Assert.That(full.Entries(), Is.Empty);
         });
     }
 }

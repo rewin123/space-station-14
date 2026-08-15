@@ -55,11 +55,10 @@ function snapshot(overrides: Partial<AgentStateSnapshot> = {}): AgentStateSnapsh
       memory_live: ['запись'],
       memory_frozen: 'заморожено',
       memory_limit: 4000,
-      crew_live: [],
-      crew_frozen: '',
-      crew_limit: 2000,
     },
     skills: [{ name: 'alpha', when: 'когда', body: 'тело' }],
+    notes: [{ slug: 'autumn-treeby', name: 'Autumn Treeby', entries: ['[раунд 7] ей нельзя кофе'] }],
+    note_limit: 2000,
     ...overrides,
   }
 }
@@ -207,10 +206,10 @@ describe('apply', () => {
     const state = emptyState()
     seed(state, snapshot({ session: null }))
 
-    apply(state, frame(11, 'memory.updated', { target: 'crew', entries: ['Иван Петров'] }, ''))
+    apply(state, frame(11, 'memory.updated', { entries: ['SMES разряжается быстрее'] }, ''))
     apply(state, frame(12, 'skills.reloaded', { skills: [{ name: 'beta', when: 'к', body: 'т' }] }, ''))
 
-    expect(state.memory?.crew_live).toEqual(['Иван Петров'])
+    expect(state.memory?.memory_live).toEqual(['SMES разряжается быстрее'])
     expect(state.skills.map((s) => s.name)).toEqual(['beta'])
   })
 
@@ -223,6 +222,57 @@ describe('apply', () => {
 
     apply(state, frame(12, 'skills.reloaded', { skills: [{ name: 'alpha', when: 'когда', body: 'тело' }] }, ''))
     expect(state.skills.map((s) => s.name)).toEqual(['alpha'])
+  })
+
+  it('снимок со старого сервера, ещё не знающего о заметках, не роняет клиент', () => {
+    // Страница и сервер выкатываются разными шагами: окно, где свежий клиент говорит со старым
+    // сервером, существует всегда. Падение именно здесь отнимает инструмент, которым и разбираются.
+    const state = emptyState()
+    const old = snapshot() as Partial<AgentStateSnapshot>
+    delete old.notes
+    delete old.note_limit
+
+    seed(state, old as AgentStateSnapshot)
+
+    expect(state.notes).toEqual([])
+    expect(state.noteLimit).toBe(0)
+    expect(state.skills).toHaveLength(1)
+  })
+
+  it('заметка о человеке обновляется и добавляется в порядке слага', () => {
+    const state = emptyState()
+    seed(state, snapshot())
+
+    apply(state, frame(11, 'note.updated', { slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер'] }, ''))
+    expect(state.notes.map((n) => n.slug)).toEqual(['autumn-treeby', 'ezbozo'])
+
+    apply(state, frame(12, 'note.updated',
+      { slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер', 'чинил СМЕС'] }, ''))
+    expect(state.notes.find((n) => n.slug === 'ezbozo')?.entries).toEqual(['инженер', 'чинил СМЕС'])
+  })
+
+  it('пустой список записей закрывает заметку, а не рисует пустого человека', () => {
+    // Удаление последней записи сносит файл. Клиент, оставивший ключ, показывал бы человека,
+    // о котором уже ничего не известно, до самой перезагрузки хранилища.
+    const state = emptyState()
+    seed(state, snapshot())
+
+    apply(state, frame(11, 'note.updated', { slug: 'autumn-treeby', name: 'Autumn Treeby', entries: [] }, ''))
+
+    expect(state.notes).toEqual([])
+  })
+
+  it('перечитывание заметок убирает пропавшие', () => {
+    const state = emptyState()
+    seed(state, snapshot())
+
+    apply(state, frame(11, 'note.updated', { slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер'] }, ''))
+    expect(state.notes).toHaveLength(2)
+
+    apply(state, frame(12, 'notes.reloaded',
+      { notes: [{ slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер'] }] }, ''))
+
+    expect(state.notes.map((n) => n.slug)).toEqual(['ezbozo'])
   })
 
   it('повторное применение всего, кроме append, ничего не портит', () => {

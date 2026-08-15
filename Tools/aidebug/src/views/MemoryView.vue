@@ -9,23 +9,14 @@ import type { AgentCommandResult } from '../api/types'
 const agent = useAgent()
 const settings = useSettings()
 
-const target = ref<'memory' | 'crew'>('memory')
 const draft = ref('')
 const busy = ref(false)
 const result = ref<AgentCommandResult | null>(null)
 const error = ref('')
 
-const live = computed(() =>
-  target.value === 'memory' ? (agent.state.memory?.memory_live ?? []) : (agent.state.memory?.crew_live ?? []),
-)
-
-const frozenText = computed(() =>
-  target.value === 'memory' ? (agent.state.memory?.memory_frozen ?? '') : (agent.state.memory?.crew_frozen ?? ''),
-)
-
-const limit = computed(() =>
-  target.value === 'memory' ? (agent.state.memory?.memory_limit ?? 0) : (agent.state.memory?.crew_limit ?? 0),
-)
+const live = computed(() => agent.state.memory?.memory_live ?? [])
+const frozenText = computed(() => agent.state.memory?.memory_frozen ?? '')
+const limit = computed(() => agent.state.memory?.memory_limit ?? 0)
 
 const frozen = computed(() => parseFrozen(frozenText.value))
 const pending = computed(() => pendingEntries(live.value, frozen.value.entries))
@@ -43,8 +34,8 @@ async function send(action: 'add' | 'remove', match?: string): Promise<void> {
     result.value = await postCommand(
       { baseUrl: settings.baseUrl, token: settings.token },
       action === 'add'
-        ? { type: 'memory.change', target: target.value, action: 'add', content: draft.value }
-        : { type: 'memory.change', target: target.value, action: 'remove', match: match ?? '' },
+        ? { type: 'memory.change', action: 'add', content: draft.value }
+        : { type: 'memory.change', action: 'remove', match: match ?? '' },
     )
     if (action === 'add') draft.value = ''
   } catch (e) {
@@ -60,8 +51,7 @@ async function send(action: 'add' | 'remove', match?: string): Promise<void> {
 
   <div v-else class="memory">
     <div class="bar">
-      <button :class="{ active: target === 'memory' }" @click="target = 'memory'">Станция</button>
-      <button :class="{ active: target === 'crew' }" @click="target = 'crew'">Экипаж</button>
+      <span class="title">Станция и мир</span>
 
       <span class="gauge mono">
         {{ used }} / {{ limit }} символов

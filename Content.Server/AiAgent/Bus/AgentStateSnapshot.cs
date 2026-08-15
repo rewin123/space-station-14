@@ -23,7 +23,14 @@ public sealed record AgentStateSnapshot(
     [property: JsonPropertyName("seq")] long Seq,
     [property: JsonPropertyName("session")] AgentSessionDto? Session,
     [property: JsonPropertyName("memory")] AgentMemoryDto Memory,
-    [property: JsonPropertyName("skills")] IReadOnlyList<AgentSkillDto> Skills);
+    [property: JsonPropertyName("skills")] IReadOnlyList<AgentSkillDto> Skills,
+    [property: JsonPropertyName("notes")] IReadOnlyList<AgentPlayerNoteDto> Notes,
+
+    /// <summary>
+    /// Потолок ОДНОЙ заметки в символах. Здесь, а не в каждой заметке: он общий на хранилище, и
+    /// повторять его на каждого человека значило бы врать о том, что он бывает разным.
+    /// </summary>
+    [property: JsonPropertyName("note_limit")] int NoteLimit);
 
 /// <summary>
 /// Live memory entries and the frozen zone-0 text, side by side and labelled.
@@ -41,15 +48,28 @@ public sealed record AgentStateSnapshot(
 public sealed record AgentMemoryDto(
     [property: JsonPropertyName("memory_live")] IReadOnlyList<string> MemoryLive,
     [property: JsonPropertyName("memory_frozen")] string MemoryFrozen,
-    [property: JsonPropertyName("memory_limit")] int MemoryLimit,
-    [property: JsonPropertyName("crew_live")] IReadOnlyList<string> CrewLive,
-    [property: JsonPropertyName("crew_frozen")] string CrewFrozen,
-    [property: JsonPropertyName("crew_limit")] int CrewLimit);
+    [property: JsonPropertyName("memory_limit")] int MemoryLimit);
 
 public sealed record AgentSkillDto(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("when")] string When,
     [property: JsonPropertyName("body")] string Body);
+
+/// <summary>
+/// Заметка об одном человеке: ключ, отображаемое имя и записи целиком.
+///
+/// Заморожённого двойника, в отличие от памяти, здесь нет и быть не может: заметки в системный
+/// промпт не вклеиваются вовсе. Агент узнаёт о них только строкой NOTE, когда знакомый впервые за
+/// смену заговорил, и читает инструментом. Расхождения «живое против замороженного», которое у
+/// памяти составляет половину отладочной ценности, тут просто не существует.
+///
+/// <paramref name="Slug"/> отдаётся вместе с именем, потому что именно он — ключ: два написания
+/// одного имени дают один файл, и без слага в отладчике это выглядит как пропавшая запись.
+/// </summary>
+public sealed record AgentPlayerNoteDto(
+    [property: JsonPropertyName("slug")] string Slug,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("entries")] IReadOnlyList<string> Entries);
 
 public sealed record AgentSessionDto(
     [property: JsonPropertyName("id")] string Id,

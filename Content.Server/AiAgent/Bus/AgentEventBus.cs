@@ -238,11 +238,10 @@ public sealed class AgentEventBus
             }, AgentDebugJson.Options));
         }
 
-        public void MemoryUpdated(MemoryTarget target, IReadOnlyList<string> entries)
+        public void MemoryUpdated(IReadOnlyList<string> entries)
         {
             bus.Publish(AgentEventKind.MemoryUpdated, sessionId, JsonSerializer.Serialize(new
             {
-                target = target.ToString().ToLowerInvariant(),
                 entries,
             }, AgentDebugJson.Options));
         }
@@ -266,6 +265,33 @@ public sealed class AgentEventBus
             bus.Publish(AgentEventKind.SkillsReloaded, sessionId, JsonSerializer.Serialize(new
             {
                 skills = all,
+            }, AgentDebugJson.Options));
+        }
+
+        public void PlayerNoteUpdated(PlayerNote note)
+        {
+            bus.Publish(AgentEventKind.PlayerNoteUpdated, sessionId, JsonSerializer.Serialize(new
+            {
+                slug = note.Slug,
+                name = note.Name,
+                entries = note.Entries,
+            }, AgentDebugJson.Options));
+        }
+
+        public void PlayerNotesReloaded(IReadOnlyCollection<PlayerNote> notes)
+        {
+            // Кадр несёт хранилище целиком, как и у скиллов. Это осознанный предел: одна заметка
+            // ограничена 2000 символами, но самих заметок может накопиться до 2000, и тогда кадр
+            // вырастет до мегабайтов, а перечитывание случается на каждой компакции. Когда каталог
+            // перестанет быть десятками файлов, здесь надо оставить только индекс (слаг, имя, число
+            // записей) и добавить маршрут за одной заметкой — сейчас это была бы сложность впрок.
+            var all = new List<object>(notes.Count);
+            foreach (var n in notes)
+                all.Add(new { slug = n.Slug, name = n.Name, entries = n.Entries });
+
+            bus.Publish(AgentEventKind.PlayerNotesReloaded, sessionId, JsonSerializer.Serialize(new
+            {
+                notes = all,
             }, AgentDebugJson.Options));
         }
 

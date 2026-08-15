@@ -27,14 +27,23 @@ public interface IAgentEventSink
     /// <summary>Zone 0 changed.</summary>
     void PrefixReplaced(string prefixHash, string systemPrompt, string toolsJson);
 
-    /// <summary>Live entries for one memory target, as they now stand on disk.</summary>
-    void MemoryUpdated(MemoryTarget target, IReadOnlyList<string> entries);
+    /// <summary>Live memory entries, as they now stand on disk.</summary>
+    void MemoryUpdated(IReadOnlyList<string> entries);
 
     /// <summary>One skill written or edited.</summary>
     void SkillUpdated(Skill skill);
 
     /// <summary>The library was re-read from disk; these are the skills that survived.</summary>
     void SkillsReloaded(IReadOnlyCollection<Skill> skills);
+
+    /// <summary>
+    /// Одна заметка о человеке целиком. Пустой <see cref="PlayerNote.Entries"/> значит, что заметки
+    /// больше нет, — см. <see cref="AgentEventKind.PlayerNoteUpdated"/>.
+    /// </summary>
+    void PlayerNoteUpdated(PlayerNote note);
+
+    /// <summary>Хранилище заметок перечитано с диска; вот те, что уцелели.</summary>
+    void PlayerNotesReloaded(IReadOnlyCollection<PlayerNote> notes);
 
     /// <summary>
     /// The whole statistics record, sampled at a turn boundary.
@@ -62,8 +71,10 @@ public sealed class NullAgentEventSink : IAgentEventSink
     public void MessageAppended(int bodyEpoch, int index, ChatMessageDto message) { }
     public void HistoryReplaced(int bodyEpoch, IReadOnlyList<ChatMessageDto> body) { }
     public void PrefixReplaced(string prefixHash, string systemPrompt, string toolsJson) { }
-    public void MemoryUpdated(MemoryTarget target, IReadOnlyList<string> entries) { }
+    public void MemoryUpdated(IReadOnlyList<string> entries) { }
     public void SkillUpdated(Skill skill) { }
     public void SkillsReloaded(IReadOnlyCollection<Skill> skills) { }
+    public void PlayerNoteUpdated(PlayerNote note) { }
+    public void PlayerNotesReloaded(IReadOnlyCollection<PlayerNote> notes) { }
     public void Stats(AgentStatsDto stats) { }
 }

@@ -30,6 +30,14 @@ public sealed class BusSnapshotTests
 
     private string _dir = "";
 
+    /// <summary>Пустое хранилище заметок: снимок обязан собираться и когда агент ещё никого не знает.</summary>
+    private PlayerNoteStore Notes()
+    {
+        var notes = new PlayerNoteStore(_dir, Sawmill);
+        notes.LoadFromDisk();
+        return notes;
+    }
+
     [SetUp]
     public void SetUp()
     {
@@ -116,7 +124,7 @@ public sealed class BusSnapshotTests
             {
                 var n = 0;
                 while (!stop.IsCancellationRequested)
-                    memory.Replace(MemoryTarget.Memory, "запись", $"запись {n++}");
+                    memory.Replace("запись", $"запись {n++}");
             }),
             Task.Run(() =>
             {
@@ -130,7 +138,7 @@ public sealed class BusSnapshotTests
         {
             for (var i = 0; i < 200 && !stop.IsCancellationRequested; i++)
             {
-                var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
+                var snapshot = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
                 Assert.That(snapshot.Instance, Is.EqualTo(bus.Instance));
             }
         });
@@ -152,12 +160,12 @@ public sealed class BusSnapshotTests
         var memory = new MemoryStore(_dir, Sawmill);
         memory.LoadFromDisk();
 
-        memory.Add(MemoryTarget.Memory, "записано после того, как префикс заморозили");
+        memory.Add("записано после того, как префикс заморозили");
 
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
-        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
+        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
 
         Assert.Multiple(() =>
         {
@@ -170,7 +178,7 @@ public sealed class BusSnapshotTests
         });
 
         memory.RefreshSnapshot();
-        var after = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
+        var after = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
 
         Assert.That(after.Memory.MemoryFrozen,
             Does.Contain("записано после того, как префикс заморозили"),
@@ -186,7 +194,7 @@ public sealed class BusSnapshotTests
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
-        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, "current", 7);
+        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
 
         Assert.Multiple(() =>
         {
@@ -213,7 +221,7 @@ public sealed class BusSnapshotTests
         var memory = new MemoryStore(_dir, Sawmill);
         memory.LoadFromDisk();
 
-        var names = AgentDebugState.Capture(bus, null, memory, skills, "current", 7)
+        var names = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7)
             .Skills.Select(s => s.Name).ToList();
 
         Assert.That(names, Is.EqualTo(names.OrderBy(n => n, StringComparer.Ordinal).ToList()));
@@ -225,20 +233,20 @@ public sealed class BusSnapshotTests
         var bus = new AgentEventBus(256);
         var memory = new MemoryStore(_dir, Sawmill);
         memory.LoadFromDisk();
-        memory.Add(MemoryTarget.Crew, "Иван Петров — инженер");
+        memory.Add("Иван Петров — инженер");
 
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
         var json = JsonSerializer.Serialize(
-            AgentDebugState.Capture(bus, null, memory, skills, "current", 7), LlmJson.Options);
+            AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7), LlmJson.Options);
 
         Assert.Multiple(() =>
         {
             Assert.That(json, Does.Contain("Иван Петров"),
                 "кириллица обязана уходить как UTF-8, а не как \\uXXXX");
             Assert.That(json, Does.Contain("\"memory_live\""));
-            Assert.That(json, Does.Contain("\"crew_frozen\""));
+            Assert.That(json, Does.Contain("\"memory_frozen\""));
         });
     }
 }

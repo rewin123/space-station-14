@@ -27,6 +27,11 @@ public static class ObservationFormatter
         ObsKind.Alert => $"ALERT {o.Text}",
         ObsKind.Laws => $"LAWS {o.Text}",
         ObsKind.Timer => $"TIMER {o.Speaker}: \"{o.Text}\"",
+        ObsKind.Arrival => string.IsNullOrEmpty(o.Text)
+            ? $"ARRIVAL {o.Speaker}"
+            : $"ARRIVAL {o.Speaker} ({o.Text})",
+        ObsKind.Note => $"NOTE о «{o.Speaker}» есть заметки ({o.Text}) — " +
+                        "read_player_related_memory, если пригодится",
         _ => $"EVENT {o.Text}",
     };
 
@@ -74,6 +79,8 @@ public static class ObservationFormatter
         ObsKind.Laws,
         ObsKind.Event,
         ObsKind.Timer,
+        ObsKind.Arrival,
+        ObsKind.Note,
     };
 
     /// <summary>T+H:MM:SS since round start.</summary>

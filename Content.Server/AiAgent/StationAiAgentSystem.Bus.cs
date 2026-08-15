@@ -69,6 +69,7 @@ public sealed partial class StationAiAgentSystem
             () => _debugSession,
             () => Memory,
             () => Skills,
+            () => Notes,
             CurrentRoundId,
             text => (SendUserMessage(text, out var reason), reason),
             ChangeMemory,
@@ -171,12 +172,12 @@ public sealed partial class StationAiAgentSystem
     /// the next prefix rebuild, and an operator who is not told that watches the agent behave
     /// identically and concludes the endpoint is broken.
     /// </summary>
-    public MemoryResult ChangeMemory(MemoryTarget target, string action, string match, string content) =>
+    public MemoryResult ChangeMemory(string action, string match, string content) =>
         action switch
         {
-            "add" => Memory.Add(target, content),
-            "replace" => Memory.Replace(target, match, content),
-            "remove" => Memory.Remove(target, match),
+            "add" => Memory.Add(content),
+            "replace" => Memory.Replace(match, content),
+            "remove" => Memory.Remove(match),
             _ => new MemoryResult(false, $"неизвестное действие '{action}' — ожидалось add, replace или remove"),
         };
 

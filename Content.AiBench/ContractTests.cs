@@ -220,6 +220,59 @@ public sealed class ContractTests
 
     [Test]
     [Category("AiTools")]
+    public async Task Prompt_ExplainsThePlayerNotes()
+    {
+        await using var w = await AiWorld.Create();
+        var prompt = await w.Read(() => w.System.BuildSystemPromptForTest());
+
+        Assert.Multiple(() =>
+        {
+            foreach (var needed in new[]
+                     {
+                         "read_player_related_memory",
+                         "edit_player_related_memory",
+                         "search_player_related_notes",
+                         "[раунд",
+                         "NOTE",
+                     })
+            {
+                Assert.That(prompt, Does.Contain(needed),
+                    $"промпт молчит про '{needed}', а модель без этого заметками не воспользуется");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Заметок в зоне 0 быть не должно — ни одной.
+    ///
+    /// Это сторож против «услужливой» правки. У скиллов индекс в промпте есть, и на 167 файлах он
+    /// уже около 20 КБ замороженного префикса; персонажей за месяцы станет кратно больше, и такой
+    /// же индекс съел бы окно. Заметки поданы лениво именно поэтому.
+    /// </summary>
+    [Test]
+    [Category("AiTools")]
+    public async Task Prompt_DoesNotCarryANoteIndex()
+    {
+        await using var w = await AiWorld.Create();
+
+        await w.Post(() =>
+        {
+            w.System.Notes.Add("Аглая Сидорова", "Ботаник.", "[раунд 1 · 01.01]");
+            w.System.Notes.Add("Бонифаций Крот", "Шахтёр.", "[раунд 1 · 01.01]");
+        });
+
+        var prompt = await w.Read(() => w.System.BuildSystemPromptForTest());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prompt, Does.Not.Contain("Аглая Сидорова"));
+            Assert.That(prompt, Does.Not.Contain("Бонифаций Крот"));
+            Assert.That(prompt, Does.Not.Contain("Ботаник."));
+        });
+    }
+
+    [Test]
+    [Category("AiTools")]
     public async Task Prompt_ExplainsHandlesAndRetry()
     {
         // Two things the model needs on every single turn and that the prompt never said: what a

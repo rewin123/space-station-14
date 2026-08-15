@@ -40,20 +40,61 @@ public sealed class BusStoreTests
             Directory.Delete(_dir, recursive: true);
     }
 
-    /// <summary>Last reported entries per target, rebuilt from events alone.</summary>
-    private static Dictionary<string, List<string>> ReplayMemory(AgentEventBus bus)
+    /// <summary>Last reported entries, rebuilt from events alone.</summary>
+    private static List<string> ReplayMemory(AgentEventBus bus)
     {
-        var state = new Dictionary<string, List<string>>();
+        var state = new List<string>();
 
         foreach (var e in bus.Read(bus.Instance, 0).Events.Where(e => e.Kind == AgentEventKind.MemoryUpdated))
         {
             using var doc = JsonDocument.Parse(e.PayloadJson);
-            var target = doc.RootElement.GetProperty("target").GetString()!;
-            state[target] = doc.RootElement.GetProperty("entries")
+            state = doc.RootElement.GetProperty("entries")
                 .EnumerateArray().Select(x => x.GetString()!).ToList();
         }
 
         return state;
+    }
+
+    /// <summary>Штамп раунда фиксированный: формат заметок проверяется не здесь.</summary>
+    private const string Stamp = "[раунд 7 · 15.08]";
+
+    /// <summary>
+    /// Заметки, собранные из одних событий, ровно как это делал бы клиент: складывая в карту и
+    /// удаляя ключ на пустом списке записей.
+    /// </summary>
+    private static Dictionary<string, List<string>> ReplayNotes(AgentEventBus bus)
+    {
+        var state = new Dictionary<string, List<string>>();
+
+        foreach (var e in bus.Read(bus.Instance, 0).Events)
+        {
+            using var doc = JsonDocument.Parse(e.PayloadJson);
+            var r = doc.RootElement;
+
+            switch (e.Kind)
+            {
+                case AgentEventKind.PlayerNotesReloaded:
+                    state.Clear();
+                    foreach (var n in r.GetProperty("notes").EnumerateArray())
+                        state[n.GetProperty("slug").GetString()!] = EntriesOf(n);
+                    break;
+
+                case AgentEventKind.PlayerNoteUpdated:
+                    var slug = r.GetProperty("slug").GetString()!;
+                    var entries = EntriesOf(r);
+
+                    if (entries.Count == 0)
+                        state.Remove(slug);
+                    else
+                        state[slug] = entries;
+                    break;
+            }
+        }
+
+        return state;
+
+        static List<string> EntriesOf(JsonElement el) =>
+            el.GetProperty("entries").EnumerateArray().Select(x => x.GetString()!).ToList();
     }
 
     private static Dictionary<string, Skill> ReplaySkills(AgentEventBus bus)
@@ -83,23 +124,21 @@ public sealed class BusStoreTests
         memory.AttachSink(bus.ForProcess());
         memory.LoadFromDisk();
 
-        memory.Add(MemoryTarget.Memory, "капитан доверяет мне после инцидента в атмосе");
-        memory.Add(MemoryTarget.Memory, "SMES в инженерном разряжается быстрее остальных");
-        memory.Add(MemoryTarget.Crew, "Иван Петров — инженер, спокойный");
+        memory.Add("капитан доверяет мне после инцидента в атмосе");
+        memory.Add("SMES в инженерном разряжается быстрее остальных");
+        memory.Add("Иван Петров — инженер, спокойный");
 
-        memory.Replace(MemoryTarget.Memory, "SMES в инженерном", "SMES в инженерном разряжается быстро — проверять каждые 20 минут");
-        memory.Remove(MemoryTarget.Crew, "Иван Петров");
+        memory.Replace("SMES в инженерном", "SMES в инженерном разряжается быстро — проверять каждые 20 минут");
+        memory.Remove("Иван Петров");
 
-        memory.Add(MemoryTarget.Crew, "Мария Сидорова — врач");
+        memory.Add("Мария Сидорова — врач");
 
         var replayed = ReplayMemory(bus);
 
         Assert.Multiple(() =>
         {
-            Assert.That(replayed["memory"], Is.EqualTo(memory.Entries(MemoryTarget.Memory).ToList()),
+            Assert.That(replayed, Is.EqualTo(memory.Entries().ToList()),
                 "воспроизведение памяти разъехалось с живыми записями");
-            Assert.That(replayed["crew"], Is.EqualTo(memory.Entries(MemoryTarget.Crew).ToList()),
-                "воспроизведение экипажа разъехалось с живыми записями");
         });
     }
 
@@ -111,10 +150,10 @@ public sealed class BusStoreTests
         memory.AttachSink(bus.ForProcess());
         memory.LoadFromDisk();
 
-        memory.Add(MemoryTarget.Memory, "короткая запись");
+        memory.Add("короткая запись");
         var afterFirst = bus.Seq;
 
-        var overflow = memory.Add(MemoryTarget.Memory, new string('щ', 200));
+        var overflow = memory.Add(new string('щ', 200));
 
         Assert.Multiple(() =>
         {
@@ -163,7 +202,7 @@ public sealed class BusStoreTests
 
         var first = new MemoryStore(_dir, Sawmill);
         first.LoadFromDisk();
-        first.Add(MemoryTarget.Memory, "запись, пережившая перезагрузку");
+        first.Add("запись, пережившая перезагрузку");
 
         var second = new MemoryStore(_dir, Sawmill);
         second.AttachSink(bus.ForProcess());
@@ -171,7 +210,7 @@ public sealed class BusStoreTests
 
         var replayed = ReplayMemory(bus);
 
-        Assert.That(replayed["memory"], Is.EqualTo(new[] { "запись, пережившая перезагрузку" }),
+        Assert.That(replayed, Is.EqualTo(new[] { "запись, пережившая перезагрузку" }),
             "перезагруженный стор не рассказал о своём содержимом");
     }
 
@@ -185,7 +224,7 @@ public sealed class BusStoreTests
         var memory = new MemoryStore(_dir, Sawmill);
         memory.AttachSink(bus.ForProcess());
         memory.LoadFromDisk();
-        memory.Add(MemoryTarget.Memory, "запись, ещё не попавшая в префикс");
+        memory.Add("запись, ещё не попавшая в префикс");
 
         var before = bus.Seq;
         memory.RefreshSnapshot();
@@ -229,17 +268,122 @@ public sealed class BusStoreTests
     }
 
     [Test]
+    public void NoteEventsReplayToTheLiveStore()
+    {
+        var bus = new AgentEventBus(1024);
+        var notes = new PlayerNoteStore(_dir, Sawmill);
+        notes.AttachSink(bus.ForProcess());
+        notes.LoadFromDisk();
+
+        notes.Add("Autumn Treeby", "просила запомнить: ей нельзя кофе — шутка", Stamp);
+        notes.Add("Autumn Treeby", "работает в ботанике, спокойная", Stamp);
+        notes.Add("Hareeya-Seek", "клоун, выпрашивал доступ ложью", Stamp);
+
+        notes.Replace("Autumn Treeby", "спокойная", "инженер, не ботаник — я перепутала отдел");
+        notes.Remove("Hareeya-Seek", "выпрашивал доступ");
+
+        notes.Add("Autumn Treeby", "во вторую смену помогала в карго", Stamp);
+
+        var replayed = ReplayNotes(bus);
+        var live = notes.All.ToDictionary(n => n.Slug, n => n.Entries.ToList());
+
+        Assert.That(replayed.Keys, Is.EquivalentTo(live.Keys),
+            "воспроизведение разъехалось по составу заметок");
+
+        foreach (var (slug, entries) in live)
+            Assert.That(replayed[slug], Is.EqualTo(entries), $"записи разъехались у «{slug}»");
+    }
+
+    [Test]
+    public void ClosingANoteIsReportedAsATombstone()
+    {
+        // Удаление ПОСЛЕДНЕЙ записи сносит и файл. Без события об этом клиент, складывающий
+        // note.updated в карту, держал бы человека, о котором уже ничего не известно, — и заметил
+        // бы это только после перезагрузки хранилища, то есть на следующей компакции.
+        var bus = new AgentEventBus(256);
+        var notes = new PlayerNoteStore(_dir, Sawmill);
+        notes.AttachSink(bus.ForProcess());
+        notes.LoadFromDisk();
+
+        notes.Add("Ezbozo", "единственная запись", Stamp);
+        Assert.That(ReplayNotes(bus), Does.ContainKey("ezbozo"), "заметки не было — тест ничего не проверяет");
+
+        var closed = notes.Remove("Ezbozo", "единственная");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(closed.Ok, Is.True, closed.Message);
+            Assert.That(notes.All, Is.Empty, "заметка обязана была закрыться вместе с файлом");
+            Assert.That(ReplayNotes(bus), Does.Not.ContainKey("ezbozo"),
+                "закрытая заметка осталась призраком в воспроизведении");
+        });
+    }
+
+    [Test]
+    public void RefusedNoteWriteReportsNothing()
+    {
+        var bus = new AgentEventBus(256);
+        var notes = new PlayerNoteStore(_dir, Sawmill) { NoteLimit = 120 };
+        notes.AttachSink(bus.ForProcess());
+        notes.LoadFromDisk();
+
+        notes.Add("Autumn Treeby", "короткая запись", Stamp);
+        var afterFirst = bus.Seq;
+
+        var overflow = notes.Add("Autumn Treeby", new string('щ', 200), Stamp);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(overflow.Ok, Is.False, "запись обязана была не влезть — иначе тест пустой");
+            Assert.That(bus.Seq, Is.EqualTo(afterFirst),
+                "отказанная запись породила событие: клиент увидел бы запись, которой нет на диске");
+        });
+    }
+
+    [Test]
+    public void ReloadRepublishesEveryNote()
+    {
+        // Тот же довод, что у скиллов: перечитывание — единственный путь, которым заметка исчезает
+        // без собственного события. Здесь файл убирается с диска мимо стора, как это делает рука.
+        var bus = new AgentEventBus(256);
+
+        var first = new PlayerNoteStore(_dir, Sawmill);
+        first.LoadFromDisk();
+        first.Add("Останется", "запись", Stamp);
+        first.Add("Исчезнет", "запись", Stamp);
+
+        File.Delete(Path.Combine(_dir, "people", "исчезнет.md"));
+
+        var second = new PlayerNoteStore(_dir, Sawmill);
+        second.AttachSink(bus.ForProcess());
+        second.LoadFromDisk();
+
+        var replayed = ReplayNotes(bus);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(replayed, Does.ContainKey("останется"));
+            Assert.That(replayed, Does.Not.ContainKey("исчезнет"),
+                "удалённая руками заметка осталась бы призраком в любом клиенте");
+        });
+    }
+
+    [Test]
     public void StoresWithNoSinkPublishNothing()
     {
         var bus = new AgentEventBus(64);
 
         var memory = new MemoryStore(_dir, Sawmill);
         memory.LoadFromDisk();
-        memory.Add(MemoryTarget.Memory, "запись");
+        memory.Add("запись");
 
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
         skills.Write("скилл", "когда-нибудь", "тело");
+
+        var notes = new PlayerNoteStore(_dir, Sawmill);
+        notes.LoadFromDisk();
+        notes.Add("Кто-то", "запись", Stamp);
 
         Assert.That(bus.Seq, Is.Zero, "выключенная шина обязана стоить ровно ноль");
     }

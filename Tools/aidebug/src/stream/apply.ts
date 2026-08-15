@@ -2,6 +2,7 @@ import type {
   AgentEventFrame,
   AgentMemory,
   AgentMessage,
+  AgentPlayerNote,
   AgentSkill,
   AgentStateSnapshot,
   AgentStats,
@@ -9,6 +10,8 @@ import type {
   HistoryReplacedPayload,
   MemoryUpdatedPayload,
   MessageAppendedPayload,
+  PlayerNoteUpdatedPayload,
+  PlayerNotesReloadedPayload,
   PrefixReplacedPayload,
   SessionEndedPayload,
   SessionStartedPayload,
@@ -43,6 +46,9 @@ export interface AgentViewState {
 
   memory: AgentMemory | null
   skills: AgentSkill[]
+  notes: AgentPlayerNote[]
+  /** Потолок одной заметки. Приходит только со снимком, как и memory_limit. */
+  noteLimit: number
 
   series: StatsSeries
 
@@ -69,6 +75,8 @@ export function emptyState(): AgentViewState {
     lastTurn: null,
     memory: null,
     skills: [],
+    notes: [],
+    noteLimit: 0,
     series: emptySeries(),
     sessionGone: false,
   }
@@ -82,6 +90,12 @@ export function seed(state: AgentViewState, snapshot: AgentStateSnapshot): void 
   state.seq = snapshot.seq
   state.memory = snapshot.memory
   state.skills = [...snapshot.skills]
+  // С запасом на рассинхрон версий: страница и сервер выкатываются РАЗНЫМИ шагами, и между ними
+  // всегда есть окно, когда свежий клиент говорит со старым сервером. Отладчик, падающий в этом
+  // окне на `[...undefined]`, отнимает ровно тот инструмент, которым разбираются, что случилось.
+  // Отсутствие поля — это «сервер о заметках ещё не знает», а не ошибка.
+  state.notes = [...(snapshot.notes ?? [])]
+  state.noteLimit = snapshot.note_limit ?? 0
 
   const session = snapshot.session
 
@@ -134,10 +148,7 @@ export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutco
       if (!state.memory)
         return 'resync'
 
-      if (p.target === 'memory')
-        state.memory = { ...state.memory, memory_live: [...p.entries] }
-      else
-        state.memory = { ...state.memory, crew_live: [...p.entries] }
+      state.memory = { ...state.memory, memory_live: [...p.entries] }
 
       // Замороженный текст меняется ТОЛЬКО при перестройке префикса, и сервер шлёт этот же кадр,
       // когда она случается. Отличить одно от другого по payload нельзя, поэтому живую колонку
@@ -152,6 +163,30 @@ export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutco
         state.skills[at] = skill
       else
         state.skills = [...state.skills, skill].sort((a, b) => (a.name < b.name ? -1 : 1))
+      return 'ok'
+    }
+
+    case 'note.updated': {
+      const note = frame.payload as PlayerNoteUpdatedPayload
+      const at = state.notes.findIndex((n) => n.slug === note.slug)
+
+      // Пустой entries — надгробие: удаление последней записи сносит и файл. Не удалить ключ
+      // здесь значит рисовать человека, о котором уже ничего не известно, до самой перезагрузки
+      // хранилища.
+      if (note.entries.length === 0)
+        state.notes = state.notes.filter((n) => n.slug !== note.slug)
+      else if (at >= 0)
+        state.notes[at] = note
+      else
+        state.notes = [...state.notes, note].sort((a, b) => (a.slug < b.slug ? -1 : 1))
+
+      return 'ok'
+    }
+
+    case 'notes.reloaded': {
+      // Целиком, по тому же доводу, что и у скиллов: заметку могли удалить с диска руками.
+      const p = frame.payload as PlayerNotesReloadedPayload
+      state.notes = [...p.notes].sort((a, b) => (a.slug < b.slug ? -1 : 1))
       return 'ok'
     }
 

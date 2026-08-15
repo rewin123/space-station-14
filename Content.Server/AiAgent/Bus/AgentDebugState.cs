@@ -29,6 +29,7 @@ public static class AgentDebugState
         AgentSession? session,
         MemoryStore memory,
         SkillStore skills,
+        PlayerNoteStore notes,
         string sessionId,
         int roundId)
     {
@@ -58,19 +59,23 @@ public static class AgentDebugState
         var sessionDto = session == null ? null : CaptureSession(session, sessionId, roundId);
 
         var memoryDto = new AgentMemoryDto(
-            memory.Entries(MemoryTarget.Memory),
-            memory.Snapshot(MemoryTarget.Memory),
-            memory.MemoryLimit,
-            memory.Entries(MemoryTarget.Crew),
-            memory.Snapshot(MemoryTarget.Crew),
-            memory.CrewLimit);
+            memory.Entries(),
+            memory.Snapshot(),
+            memory.MemoryLimit);
 
         var skillDtos = skills.All
             .OrderBy(s => s.Name, System.StringComparer.Ordinal)
             .Select(s => new AgentSkillDto(s.Name, s.When, s.Body))
             .ToList();
 
-        return new AgentStateSnapshot(instance, seq, sessionDto, memoryDto, skillDtos);
+        // Порядок задаёт стор (по слагу, ординально), а не эта строка: тот же порядок уезжает в
+        // notes.reloaded, и клиент, применяющий снимок и поток вперемешку, не переставляет список
+        // под читателем.
+        var noteDtos = notes.All
+            .Select(n => new AgentPlayerNoteDto(n.Slug, n.Name, n.Entries))
+            .ToList();
+
+        return new AgentStateSnapshot(instance, seq, sessionDto, memoryDto, skillDtos, noteDtos, notes.NoteLimit);
     }
 
     private static AgentSessionDto CaptureSession(AgentSession session, string sessionId, int roundId)

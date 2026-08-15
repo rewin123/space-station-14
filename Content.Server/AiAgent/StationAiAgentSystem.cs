@@ -30,6 +30,7 @@ using Content.Shared.IdentityManagement;
 using Content.Shared.Station;
 using Content.Shared.StationRecords.Systems;
 using Content.Shared.Radio;
+using Content.Shared.Roles;
 using Content.Shared.Silicons.StationAi;
 using Robust.Shared.Asynchronous;
 using Robust.Shared.Configuration;
@@ -81,6 +82,16 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     private ISawmill _sawmill = default!;
     private MainThreadDispatcher _dispatcher = default!;
     private GameTicker? _ticker;
+
+    /// <summary>
+    /// Номер текущего раунда, снятый на главном потоке.
+    ///
+    /// Нужен инструментам заметок, чтобы штамповать записи, а они работают на потоке агента и
+    /// намеренно не маршалятся — дотянуться оттуда до <see cref="GameTicker"/> нельзя. Поэтому
+    /// значение кладётся сюда там, где мы и так на главном потоке, а тулы читают только это поле:
+    /// чтение volatile int безопасно с любого потока и никого не блокирует.
+    /// </summary>
+    private volatile int _roundId;
 
     /// <summary>Логировать паузу один раз на переход, а не каждый тик.</summary>
     private bool _notedPause;
@@ -147,6 +158,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // so keeping both subscriptions would have delivered console announcements twice.
         SubscribeLocalEvent<StationAnnouncementEvent>(OnAnnouncement);
 
+        // Люди, приходящие на смену.
+        //
+        // Без этой подписки агент не имел НИКАКОГО способа узнать, что кто-то пришёл: в наблюдения
+        // попадали только речь, рация и объявления, поэтому молчаливый игрок для него не
+        // существовал. 15 августа так прошли все четыре захода подряд — четыре человека отыграли
+        // смену на станции, которую агент всё это время считал пустой.
+        SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawned);
+
         // Carding moves the brain between the core and an intellicard; the mode gate follows it.
         //
         // These are the "Got" variants, raised on the entity being moved rather than on the
@@ -204,6 +223,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (ev.New != GameRunLevel.InRound)
             return;
 
+        // Снять номер раунда, пока мы на главном потоке. Делается ДО проверок ниже: штамп нужен
+        // заметкам независимо от того, займём ли мы ядро сами.
+        CacheRoundId();
+
         if (!_cfg.GetCVar(AiCVars.Enabled) || !_cfg.GetCVar(AiCVars.AutoClaim))
             return;
 
@@ -217,21 +240,17 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         ReleaseAll("round restart");
         ResetLlmClient();
 
-        // Знание о людях умирает вместе со сменой, знание о станции — нет.
+        // Здесь стирался CREW.md — память о людях своей смены. Его больше нет, и стирать нечего.
         //
-        // Каждый раунд SS14 — новая вселенная с теми же именами персонажей. Запись «Иван Петров —
-        // предатель», приехавшая из прошлой смены, даёт агенту то, чего он знать не может, и это
-        // метагейминг. MEMORY.md остаётся: там факты о станции и о собственных граблях, ради
-        // накопления которых память и существует.
-        var cleared = Memory.Clear(Content.Server.AiAgent.Skills.MemoryTarget.Crew);
-
-        // Промпт читает ЗАМОРОЖЕННЫЙ снимок, а не живые записи, поэтому без пересборки следующий
-        // раунд стартовал бы со старым экипажем в системном сообщении — то есть очистка была бы
-        // видна только в файле и нигде больше.
-        Memory.RefreshSnapshot();
-
-        if (cleared.Ok)
-            _sawmill.Info($"память об экипаже сброшена на разборе раунда: {cleared.Message}");
+        // Замысел был против метагейминга: каждый раунд SS14 это новая вселенная с теми же именами,
+        // и запись «Иван Петров — предатель» из прошлой смены давала агенту то, чего он знать не
+        // может. Вышло наоборот. Агент перестал писать в файл, который всё равно сотрут, и сложил
+        // людей в MEMORY.md, переживающий раунды, — тот упёрся в лимит и перестал принимать что бы
+        // то ни было вообще, включая факты о станции.
+        //
+        // Теперь люди живут в PlayerNoteStore, по файлу на человека, и переживают смену намеренно.
+        // От метагейминга защищает не стирание, а штамп раунда у каждой записи: агент видит, что
+        // знание из другой смены, и промпт запрещает предъявлять его как улику сегодня.
     }
 
     /// <summary>
@@ -629,6 +648,35 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         var speaker = GetVoiceName(args.MessageSource);
 
         session.Queue.Push(Observation.Radio(args.Channel.ID, speaker, args.Message, RoundTime()));
+        HintAboutNote(session, speaker, RoundTime());
+    }
+
+    /// <summary>
+    /// Если о заговорившем есть заметка, а напоминания за эту смену ещё не было — положить строку
+    /// NOTE следом за его репликой.
+    ///
+    /// Зачем вообще: заметки поданы лениво, в системный промпт не вклеиваются, и без напоминания
+    /// агент про них попросту не вспомнит — знакомый человек ничем не отличался бы от нового.
+    ///
+    /// Лишнего хода не будит. Строка уезжает в ту же очередь и в том же вызове обработчика, что и
+    /// сама реплика, а <c>Woken</c> ёмкостью один схлопывает второй сигнал в уже висящий.
+    /// </summary>
+    private void HintAboutNote(AgentSession session, string speaker, TimeSpan now)
+    {
+        if (string.IsNullOrWhiteSpace(speaker))
+            return;
+
+        // Имя станции и имя агента совпадают, и заметка «о самом себе» — гарантированная путаница.
+        if (string.Equals(speaker, AgentName, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        // Первым делом — множество, и только потом хранилище: имя запоминается и когда заметки
+        // нет, поэтому болтун стоит одного обращения к локу за смену, а не одного на реплику.
+        if (!session.FirstUtteranceOf(speaker))
+            return;
+
+        if (_notes != null && _notes.TryPeek(speaker, out var display, out var entries))
+            session.Queue.Push(Observation.Note(display, entries, now));
     }
 
     private void OnEntitySpoke(EntitySpokeEvent args)
@@ -684,6 +732,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             // "ядро", not "core": the prompt tells the model this field reads in Russian, and the
             // formatter puts it on the wire verbatim.
             session.Queue.Push(Observation.Speech("ядро", speaker, text, now));
+
+            // За тем пушем, который РЕАЛЬНО состоялся: ветка AlreadyHeardOnRadio выше пуш
+            // пропускает, и подсказка, повешенная до неё, приезжала бы к реплике, которой нет.
+            HintAboutNote(session, speaker, now);
         }
     }
 
@@ -739,6 +791,55 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 continue;
 
             session.Queue.Push(Observation.Announce(args.Sender, args.Message, RoundTime()));
+        }
+    }
+
+    /// <summary>
+    /// Человек заступил на смену.
+    /// </summary>
+    /// <remarks>
+    /// Ловится спавн, а не подключение к серверу, и это разные вещи: между «зашёл на сервер» и
+    /// «появился на станции» игрок сидит в лобби, где для станции его ещё нет. Само подключение
+    /// вообще не событие игрового мира — человек в роли ИИ о нём не знает и знать не может, так что
+    /// строить наблюдение на нём значило бы выдать агенту метагейм.
+    ///
+    /// Обратной строки нет намеренно. Уход в крио, гибель и разрыв связи выглядят для станции
+    /// по-разному, а сводить их в одно «ушёл» — это придумывать событие, которого движок не даёт.
+    /// Кто на станции ПРЯМО СЕЙЧАС, отвечает crew_status; ARRIVAL отвечает только на «кто пришёл».
+    ///
+    /// На старте раунда строк не будет, и это не упущение: GameTicker спавнит готовых игроков
+    /// раньше, чем переводит рун-левел в InRound, а ядро мы занимаем как раз по этому переходу —
+    /// то есть в момент их спавна сессии ещё нет. Заодно это снимает вопрос о залпе из тридцати
+    /// строк одним наблюдением: сюда попадают только опоздавшие, а они приходят поодиночке.
+    /// </remarks>
+    private void OnPlayerSpawned(PlayerSpawnCompleteEvent args)
+    {
+        if (_sessions.Count == 0)
+            return;
+
+        // Тихий спавн — это администратор, который не хочет, чтобы станция заметила прибытие: тем
+        // же флагом выше по стеку гасится и объявление о нём. Агент не должен быть дыркой в этом
+        // решении, иначе админ, спрятавший человека от всех, обнаружит его в эфире у нейросети.
+        if (args.Silent)
+            return;
+
+        // Имя тела, а не имя профиля: на манифесте, в записях и в чужих чат-строках стоит именно
+        // оно, и расхождение читалось бы как знание о человеке, которого у ИИ нет.
+        var name = Name(args.Mob);
+
+        var job = args.JobId != null && _protoMan.TryIndex<JobPrototype>(args.JobId, out var proto)
+            ? proto.LocalizedName
+            : string.Empty;
+
+        var now = RoundTime();
+
+        foreach (var (brain, session) in _sessions)
+        {
+            // Соседняя станция на той же карте — не его смена, ровно как в обработчике тревоги.
+            if (_station.GetOwningStation(brain) != args.Station)
+                continue;
+
+            session.Queue.Push(Observation.Arrival(name, job, now));
         }
     }
 
@@ -971,6 +1072,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         _curator ??= new Skills.Curator(EnsureClient()!, _sawmill);
         Memory.ResetTurnCounters();
+        Notes.ResetTurnCounters();
 
         await _curator.ReviewAsync(
             session.Conv,
@@ -1072,6 +1174,24 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _ticker ??= EntityManager.SystemOrNull<GameTicker>();
         return _ticker?.RoundDuration() ?? TimeSpan.Zero;
     }
+
+    /// <summary>Обновить <see cref="_roundId"/>. Только с главного потока.</summary>
+    private void CacheRoundId()
+    {
+        _ticker ??= EntityManager.SystemOrNull<GameTicker>();
+        _roundId = _ticker?.RoundId ?? 0;
+    }
+
+    /// <summary>
+    /// Штамп для новой записи в заметке о человеке.
+    ///
+    /// Ставит его стор, а не модель: модель забудет, и наполовину проштампованное хранилище хуже
+    /// непроштампованного — по нему нельзя отличить прошлую смену от сегодняшней. А смысл штампа
+    /// именно в этом: другой раунд это другая вселенная с теми же именами.
+    /// </summary>
+    public string NoteStamp() =>
+        string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[раунд {_roundId} · {DateTime.Now:dd.MM}]");
 
     /// <summary>
     /// The session is the single source of truth for the generation counter; the copy on the

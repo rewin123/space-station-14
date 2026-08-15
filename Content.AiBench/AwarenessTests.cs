@@ -1,8 +1,14 @@
+using System;
 using System.Threading.Tasks;
 using Content.Shared.AlertLevel;
+using Content.Shared.GameTicking;
+using Content.Shared.Preferences;
+using Content.Shared.Roles;
 using Content.Shared.Silicons.Laws;
 using Content.Shared.Silicons.Laws.Components;
 using NUnit.Framework;
+using Robust.Shared.GameObjects;
+using Robust.Shared.Prototypes;
 
 namespace Content.AiBench;
 
@@ -149,5 +155,133 @@ public sealed class AwarenessTests
 
         Assert.That(observation, Does.Not.Contain("проверка связи"),
             "своё же объявление не должно возвращаться наблюдением: " + observation);
+    }
+
+    /// <summary>
+    /// Поднять спавн так, как это делает GameTicker.
+    /// </summary>
+    /// <remarks>
+    /// <c>lateJoin: false</c> здесь не про смысл сценария, а про соседей по событию: на этом
+    /// событии сидят ещё AntagSelectionSystem и ArrivalsSystem, и обе первым делом проверяют
+    /// именно этот флаг. С ним false они выходят сразу, и тест остаётся тестом нашего обработчика,
+    /// а не всей цепочки поздних заходов. Наш обработчик на LateJoin не смотрит вовсе.
+    /// Профиль пустой, но не null: TraitSystem читает у него список черт без проверки.
+    /// </remarks>
+    private static async Task Spawn(AiWorld w, EntityUid mob, string jobId, bool silent = false)
+    {
+        await w.Post(() =>
+        {
+            var ev = new PlayerSpawnCompleteEvent(
+                mob, null, jobId, lateJoin: false, silent, joinOrder: 1, w.Station,
+                new HumanoidCharacterProfile());
+
+            w.Ent.EventBus.RaiseLocalEvent(mob, ev, true);
+        });
+
+        await w.Pair.Server.WaitRunTicks(5);
+    }
+
+    [Test]
+    public async Task CrewArrival_ReachesTheAgent()
+    {
+        // Найдено на живом сервере: за 15 августа четыре человека отыграли смену, и агент не узнал
+        // ни об одном. В наблюдения попадали только речь, рация и объявления, так что молчаливый
+        // игрок не существовал для него вовсе — он вёл смену, обращаясь к пустой станции.
+        await using var w = await AiWorld.Create();
+        await Freeze(w);
+
+        var mob = await w.Spawn("MobHuman");
+        await w.Post(() => w.Pair.Server.System<MetaDataSystem>().SetEntityName(mob, "Иван Петров"));
+
+        await Spawn(w, mob, "Passenger");
+
+        // Должность сверяем с прототипом, а не с «Пассажиром» строкой: локаль тестового сервера
+        // не обязана быть русской, и захардкоженное слово ловило бы язык, а не проводку.
+        //
+        // Через Read, потому что LocalizedName идёт в Loc, а тот резолвится через IoC — с потока
+        // NUnit его контекста нет, и обращение падает ассертом ещё до проверки.
+        var job = await w.Read(() => w.Pair.Server.ResolveDependency<IPrototypeManager>()
+            .Index<JobPrototype>("Passenger").LocalizedName);
+
+        var observation = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        Assert.That(observation, Does.Contain("ARRIVAL").And.Contain("Иван Петров").And.Contain(job),
+            "приход человека на смену агент обязан заметить: " + observation);
+    }
+
+    [Test]
+    public async Task SilentSpawn_IsNotReported()
+    {
+        // Тихий спавн — это администратор, спрятавший появление от станции: тем же флагом выше по
+        // стеку гасится и объявление о прибытии. Агент, объявляющий такого человека в эфир, сводит
+        // на нет всё решение админа.
+        await using var w = await AiWorld.Create();
+        await Freeze(w);
+
+        var mob = await w.Spawn("MobHuman");
+        await w.Post(() => w.Pair.Server.System<MetaDataSystem>().SetEntityName(mob, "Иван Петров"));
+
+        await Spawn(w, mob, "Passenger", silent: true);
+
+        var observation = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        Assert.That(observation, Does.Not.Contain("ARRIVAL"),
+            "тихий спавн станция не замечает, и агент тоже: " + observation);
+    }
+
+    /// <summary>
+    /// Реплика от одноразового техника; имя говорящего — «Тестовый Техник».
+    ///
+    /// Binary, а не Common: это тот канал, на котором ядро в этой обвязке гарантированно слушает,
+    /// и на нём же построены остальные тесты рации.
+    /// </summary>
+    private static async Task Say(AiWorld w, string text)
+    {
+        await w.Post(() =>
+        {
+            if (!w.System.InjectRadio("Binary", text, out var why))
+                throw new InvalidOperationException($"реплику не удалось передать: {why}");
+        });
+
+        await w.Pair.Server.WaitRunTicks(5);
+    }
+
+    [Test]
+    public async Task NoteHint_FollowsTheFirstUtteranceOnlyOnce()
+    {
+        // Заметки поданы лениво: в системный промпт они не вклеиваются, и без этой строки знакомый
+        // человек ничем не отличался бы для агента от нового.
+        await using var w = await AiWorld.Create();
+        await Freeze(w);
+
+        await w.Post(() => w.System.Notes.Add(
+            "Тестовый Техник", "Раньше просил открыть атмос.", "[раунд 1 · 01.01]"));
+
+        await Say(w, "первая реплика");
+        var first = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        await Say(w, "вторая реплика");
+        var second = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Does.Contain("NOTE").And.Contain("Тестовый Техник"),
+                "на первой реплике знакомого агенту обязаны напомнить: " + first);
+            Assert.That(second, Does.Not.Contain("NOTE"),
+                "напоминание приходит один раз за смену, а не на каждую реплику: " + second);
+        });
+    }
+
+    [Test]
+    public async Task NoteHint_StaysSilentForSomeoneWithoutANote()
+    {
+        await using var w = await AiWorld.Create();
+        await Freeze(w);
+
+        await Say(w, "здравствуйте");
+        var observation = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
+
+        Assert.That(observation, Does.Not.Contain("NOTE"),
+            "про незнакомого напоминать нечего: " + observation);
     }
 }

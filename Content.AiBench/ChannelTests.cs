@@ -139,73 +139,39 @@ public sealed class ChannelTests
 }
 
 /// <summary>
-/// Что переживает раунд, а что нет.
+/// Что переживает раунд.
 ///
-/// Разделение принципиальное. MEMORY.md — факты о станции и о собственных граблях, ради накопления
-/// которых механика памяти и существует. CREW.md — люди, и каждая смена SS14 это новая вселенная с
-/// теми же именами: запись «Иван Петров — предатель» из прошлого раунда даёт агенту то, чего он
-/// знать не может.
+/// Раньше здесь проверялось, что CREW.md стирается на разборе смены, а MEMORY.md — нет. Второго
+/// файла больше нет: замысел был против метагейминга, а на живом сервере дал обратное — агент
+/// перестал писать в то, что всё равно сотрут, сложил людей в MEMORY.md и упёр его в лимит.
+///
+/// Теперь переживает всё: память о станции остаётся памятью о станции, а люди живут по файлу на
+/// человека в PlayerNoteStore, со штампом раунда у каждой записи. Здесь пинается новый инвариант —
+/// память НИЧЕМ не стирается и целиком доезжает до диска.
 /// </summary>
 [TestFixture]
 [Category("AiContext")]
-public sealed class CrewMemoryLifetimeTests
+public sealed class MemoryLifetimeTests
 {
-    private static ISawmill Sawmill => new LogManager().GetSawmill("crew-memory-test");
+    private static ISawmill Sawmill => new LogManager().GetSawmill("memory-lifetime-test");
 
     [Test]
-    public void ClearWipesCrewAndLeavesStationMemory()
+    public void StationMemorySurvivesAReload()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "aibench-crew-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "aibench-memlife-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
 
         try
         {
             var memory = new MemoryStore(dir, Sawmill);
             memory.LoadFromDisk();
+            memory.Add("APC ядра виден в look, но недоступен для move_camera");
 
-            memory.Add(MemoryTarget.Memory, "APC ядра виден в look, но недоступен для move_camera");
-            memory.Add(MemoryTarget.Crew, "Иван Петров — предатель, видела как резал провода");
-
-            var cleared = memory.Clear(MemoryTarget.Crew);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(cleared.Ok, Is.True, cleared.Message);
-                Assert.That(memory.Entries(MemoryTarget.Crew), Is.Empty,
-                    "знание о людях обязано умирать вместе со сменой");
-                Assert.That(memory.Entries(MemoryTarget.Memory), Has.Count.EqualTo(1),
-                    "знание о станции обязано переживать раунд — ради него память и заводилась");
-            });
-
-            // И на диске тоже: иначе следующая загрузка вернёт предателя.
             var reloaded = new MemoryStore(dir, Sawmill);
             reloaded.LoadFromDisk();
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(reloaded.Entries(MemoryTarget.Crew), Is.Empty,
-                    "очистка не доехала до диска — перезапуск воскресит метагейминг");
-                Assert.That(reloaded.Entries(MemoryTarget.Memory), Has.Count.EqualTo(1));
-            });
-        }
-        finally
-        {
-            Directory.Delete(dir, recursive: true);
-        }
-    }
-
-    [Test]
-    public void ClearOnEmptyIsNotAnError()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "aibench-crew-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-
-        try
-        {
-            var memory = new MemoryStore(dir, Sawmill);
-            memory.LoadFromDisk();
-
-            Assert.That(memory.Clear(MemoryTarget.Crew).Ok, Is.True);
+            Assert.That(reloaded.Entries(), Has.Count.EqualTo(1),
+                "знание о станции обязано переживать перезапуск — ради него память и заводилась");
         }
         finally
         {

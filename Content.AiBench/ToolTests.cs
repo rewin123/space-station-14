@@ -387,4 +387,77 @@ public sealed class ToolTests
 
         Assert.That(bolted, Is.False, "в режиме dry_run мир меняться не должен");
     }
+
+    // ------------------------------------------------------------ заметки о людях
+
+    [Test]
+    public async Task PlayerNote_ToolsRoundTripThroughTheRealDispatcher()
+    {
+        // Через настоящий диспетчер: это проверяет регистрацию, схему, разбор аргументов и то, что
+        // хендлер не маршалится на игровой поток.
+        await using var w = await AiWorld.Create();
+
+        var written = await w.Invoke("edit_player_related_memory",
+            """{"name":"Иван Петров","new":"Инженер, просил открыть атмос."}""");
+        Assert.That(written.Ok, Is.True, written.ToJson());
+
+        var read = await w.Invoke("read_player_related_memory", """{"name":"иван петров"}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Ok, Is.True, read.ToJson());
+            Assert.That(read.ToJson(), Does.Contain("просил открыть атмос"), read.ToJson());
+            Assert.That(read.ToJson(), Does.Contain("[раунд"), "штамп обязан стоять: " + read.ToJson());
+        });
+    }
+
+    [Test]
+    public async Task PlayerNote_ReadOfAnUnknownName_SuggestsTheNearest()
+    {
+        await using var w = await AiWorld.Create();
+        await w.Invoke("edit_player_related_memory", """{"name":"Иван Петров","new":"Инженер."}""");
+
+        var result = await w.Invoke("read_player_related_memory", """{"name":"Иван Птров"}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Ok, Is.False);
+            Assert.That(result.Alternatives, Does.Contain("Иван Петров"),
+                "промах в одну букву обязан чиниться за один ход: " + result.ToJson());
+        });
+    }
+
+    [Test]
+    public async Task PlayerNote_SearchOnGarbage_IsSuccessNotFailure()
+    {
+        // «Никого похожего нет» — законный ответ. Отказ научил бы модель, что искать было ошибкой.
+        await using var w = await AiWorld.Create();
+        await w.Invoke("edit_player_related_memory", """{"name":"Иван Петров","new":"Инженер."}""");
+
+        var result = await w.Invoke("search_player_related_notes", """{"approx_name":"кхзщыв"}""");
+
+        Assert.That(result.Ok, Is.True, result.ToJson());
+        Assert.That(result.ToJson(), Does.Contain("ни на одно похожее"), result.ToJson());
+    }
+
+    [Test]
+    public async Task PlayerNote_ToolsWorkDuringReviewAndWhileCarded()
+    {
+        // Это то, что делает возможной работу куратора: он разбирает отрезок в режиме Review, и
+        // если кто-нибудь припишет тулам GameAction, разбор молча перестанет записывать людей.
+        await using var w = await AiWorld.Create();
+
+        await w.Post(() => w.System.GetSession(w.Brain)!.Mode = Content.Server.AiAgent.AgentMode.Review);
+        var inReview = await w.Invoke("edit_player_related_memory",
+            """{"name":"Иван Петров","new":"Записано на разборе."}""");
+
+        await w.Post(() => w.System.GetSession(w.Brain)!.Mode = Content.Server.AiAgent.AgentMode.Carded);
+        var carded = await w.Invoke("read_player_related_memory", """{"name":"Иван Петров"}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(inReview.Ok, Is.True, "на разборе заметки обязаны писаться: " + inReview.ToJson());
+            Assert.That(carded.Ok, Is.True, "из интелликарты заметки обязаны читаться: " + carded.ToJson());
+        });
+    }
 }

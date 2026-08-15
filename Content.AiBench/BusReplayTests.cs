@@ -266,7 +266,7 @@ public sealed class BusReplayTests
         var bus = new AgentEventBus(64);
         var sink = bus.ForProcess();
 
-        sink.MemoryUpdated(MemoryTarget.Memory, new[] { "первая запись", "вторая запись" });
+        sink.MemoryUpdated(new[] { "первая запись", "вторая запись" });
         sink.SkillUpdated(new Skill("restore-core-power", "когда ядро обесточено", "тело скилла"));
 
         var events = bus.Read(bus.Instance, 0).Events;
@@ -276,7 +276,6 @@ public sealed class BusReplayTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(memory.RootElement.GetProperty("target").GetString(), Is.EqualTo("memory"));
             Assert.That(memory.RootElement.GetProperty("entries").GetArrayLength(), Is.EqualTo(2));
 
             Assert.That(skill.RootElement.GetProperty("name").GetString(), Is.EqualTo("restore-core-power"));

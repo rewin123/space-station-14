@@ -15,6 +15,9 @@ export interface AgentStateSnapshot {
   session: AgentSession | null
   memory: AgentMemory
   skills: AgentSkill[]
+  notes: AgentPlayerNote[]
+  /** Потолок ОДНОЙ заметки в символах — общий на хранилище. */
+  note_limit: number
 }
 
 export interface AgentSession {
@@ -36,15 +39,27 @@ export interface AgentMemory {
   memory_live: string[]
   memory_frozen: string
   memory_limit: number
-  crew_live: string[]
-  crew_frozen: string
-  crew_limit: number
 }
 
 export interface AgentSkill {
   name: string
   when: string
   body: string
+}
+
+/**
+ * Заметка об одном человеке.
+ *
+ * Замороженного двойника, в отличие от памяти, нет: заметки в системный промпт не вклеиваются
+ * вовсе — агент узнаёт о них строкой NOTE и читает инструментом. Показывать здесь нечего, кроме
+ * живого содержимого.
+ *
+ * Ключ — `slug`, а не `name`: два написания одного имени дают один файл.
+ */
+export interface AgentPlayerNote {
+  slug: string
+  name: string
+  entries: string[]
 }
 
 export interface AgentMessage {
@@ -115,6 +130,8 @@ export type AgentEventType =
   | 'memory.updated'
   | 'skill.updated'
   | 'skills.reloaded'
+  | 'note.updated'
+  | 'notes.reloaded'
   | 'stats'
 
 export interface AgentEventFrame {
@@ -164,7 +181,6 @@ export interface PrefixReplacedPayload {
 }
 
 export interface MemoryUpdatedPayload {
-  target: 'memory' | 'crew'
   entries: string[]
 }
 
@@ -172,6 +188,13 @@ export type SkillUpdatedPayload = AgentSkill
 
 export interface SkillsReloadedPayload {
   skills: AgentSkill[]
+}
+
+/** Пустой `entries` — надгробие: заметки больше нет, ключ надо удалить. */
+export type PlayerNoteUpdatedPayload = AgentPlayerNote
+
+export interface PlayerNotesReloadedPayload {
+  notes: AgentPlayerNote[]
 }
 
 export type StatsPayload = AgentStats
@@ -195,7 +218,6 @@ export type AgentCommand =
   | { type: 'message.send'; text: string }
   | {
       type: 'memory.change'
-      target: 'memory' | 'crew'
       action: 'add' | 'replace' | 'remove'
       match?: string
       content?: string

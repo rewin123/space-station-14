@@ -5,6 +5,7 @@ import { useSettings } from './stores/settings'
 import BusView from './views/BusView.vue'
 import ConversationView from './views/ConversationView.vue'
 import MemoryView from './views/MemoryView.vue'
+import NotesView from './views/NotesView.vue'
 import SkillsView from './views/SkillsView.vue'
 import PromptView from './views/PromptView.vue'
 import StatsView from './views/StatsView.vue'
@@ -17,6 +18,7 @@ const TABS = [
   { id: 'conversation', title: 'Разговор' },
   { id: 'memory', title: 'Память' },
   { id: 'skills', title: 'Скиллы' },
+  { id: 'notes', title: 'Люди' },
   { id: 'prompt', title: 'Промпт' },
   { id: 'stats', title: 'Статистика' },
   { id: 'bus', title: 'Шина' },
@@ -88,6 +90,7 @@ const STATUS_TEXT: Record<string, string> = {
       <ConversationView v-show="tab === 'conversation'" />
       <MemoryView v-show="tab === 'memory'" />
       <SkillsView v-show="tab === 'skills'" />
+      <NotesView v-show="tab === 'notes'" />
       <PromptView v-show="tab === 'prompt'" />
       <StatsView v-show="tab === 'stats'" />
       <BusView v-show="tab === 'bus'" />

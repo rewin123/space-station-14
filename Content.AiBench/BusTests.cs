@@ -271,7 +271,7 @@ public sealed class BusTests
         var bus = Bus();
 
         bus.ForSession("current").PrefixReplaced("hash", "промпт", "[]");
-        bus.ForProcess().MemoryUpdated(Content.Server.AiAgent.Skills.MemoryTarget.Crew, new[] { "запись" });
+        bus.ForProcess().MemoryUpdated(new[] { "запись" });
 
         var events = bus.Read(bus.Instance, 0).Events;
 
@@ -283,7 +283,6 @@ public sealed class BusTests
             Assert.That(events[1].SessionId, Is.Empty,
                 "память и скиллы процессные — они переживают сессию и не принадлежат ей");
             Assert.That(events[1].Kind, Is.EqualTo(AgentEventKind.MemoryUpdated));
-            Assert.That(events[1].PayloadJson, Does.Contain("\"target\":\"crew\""));
             Assert.That(events[1].PayloadJson, Does.Contain("запись"),
                 "кириллица обязана уходить как UTF-8, а не как \\uXXXX");
         });

@@ -48,7 +48,7 @@ public sealed class BusServerTests
         var memory = new MemoryStore(dir, Sawmill);
         memory.AttachSink(bus.ForProcess());
         memory.LoadFromDisk();
-        memory.Add(MemoryTarget.Crew, "Иван Петров — инженер");
+        memory.Add("Иван Петров — инженер");
 
         var skills = new SkillStore(dir, Sawmill);
         skills.AttachSink(bus.ForProcess());
@@ -59,9 +59,10 @@ public sealed class BusServerTests
             () => null,
             () => memory,
             () => skills,
+            () => new PlayerNoteStore(dir, Sawmill),
             () => 7,
             _ => (false, "нет активного агента"),
-            (t, _, _, c) => memory.Add(t, c),
+            (_, _, c) => memory.Add(c),
             (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
 
         // A free port, found by binding one and letting go. HttpListener has no port-0 mode, so
@@ -86,7 +87,7 @@ public sealed class BusServerTests
             {
                 Assert.That((int)state.StatusCode, Is.EqualTo(200));
                 Assert.That(doc.RootElement.GetProperty("instance").GetString(), Is.EqualTo(bus.Instance));
-                Assert.That(doc.RootElement.GetProperty("memory").GetProperty("crew_live")[0].GetString(),
+                Assert.That(doc.RootElement.GetProperty("memory").GetProperty("memory_live")[0].GetString(),
                     Is.EqualTo("Иван Петров — инженер"),
                     "кириллица не пережила круг через сокет");
                 Assert.That(doc.RootElement.GetProperty("session").ValueKind, Is.EqualTo(JsonValueKind.Null),
@@ -101,7 +102,7 @@ public sealed class BusServerTests
 
             // A command with a body, to prove the request stream is read correctly.
             var command = await http.PostAsync($"{baseUrl}/command", new StringContent(
-                "{\"type\":\"memory.change\",\"target\":\"crew\",\"action\":\"add\",\"content\":\"Мария Сидорова — врач\"}",
+                "{\"type\":\"memory.change\",\"action\":\"add\",\"content\":\"Мария Сидорова — врач\"}",
                 Encoding.UTF8, "application/json"));
 
             using var commandBody = JsonDocument.Parse(await command.Content.ReadAsStringAsync());
@@ -111,7 +112,7 @@ public sealed class BusServerTests
                 Assert.That((int)command.StatusCode, Is.EqualTo(200));
                 Assert.That(commandBody.RootElement.GetProperty("visible_to_model").GetString(),
                     Is.EqualTo("next_compaction"));
-                Assert.That(memory.Entries(MemoryTarget.Crew), Does.Contain("Мария Сидорова — врач"));
+                Assert.That(memory.Entries(), Does.Contain("Мария Сидорова — врач"));
             });
         }
         finally
@@ -149,8 +150,9 @@ public sealed class BusServerTests
             var skills = new SkillStore(dir, Sawmill);
 
             var router = new AgentDebugRouter(
-                bus, "", "current", () => null, () => memory, () => skills, () => 7,
-                _ => (false, ""), (t, _, _, c) => memory.Add(t, c),
+                bus, "", "current", () => null, () => memory, () => skills,
+                () => new PlayerNoteStore(dir, Sawmill), () => 7,
+                _ => (false, ""), (_, _, c) => memory.Add(c),
                 (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
 
             var server = AgentDebugServer.TryStart($"127.0.0.1:{FreePort()}", "", router, Sawmill);

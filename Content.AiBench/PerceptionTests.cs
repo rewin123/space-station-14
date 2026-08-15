@@ -79,4 +79,34 @@ public sealed class PerceptionTests
 
         Assert.That(q.AlreadyHeardOnRadio("Иван Петров", "ИИ, открой мостик", t), Is.False);
     }
+
+    [Test]
+    public void Arrival_RendersNameAndJob()
+    {
+        var line = ObservationFormatter.FormatLine(
+            Observation.Arrival("Иван Петров", "инженер", TimeSpan.FromMinutes(3)));
+
+        Assert.That(line, Is.EqualTo("ARRIVAL Иван Петров (инженер)"));
+    }
+
+    [Test]
+    public void Note_RendersTheNameAndHowToOpenIt()
+    {
+        var line = ObservationFormatter.FormatLine(
+            Observation.Note("Иван Петров", 3, TimeSpan.FromMinutes(3)));
+
+        Assert.That(line, Is.EqualTo(
+            "NOTE о «Иван Петров» есть заметки (3) — read_player_related_memory, если пригодится"));
+    }
+
+    [Test]
+    public void Arrival_WithoutAJob_LeavesNoEmptyBrackets()
+    {
+        // Роль без должности в прототипе — не редкость, а пустые скобки читаются как «должность
+        // есть, но её от тебя скрыли», то есть выдуманный факт там, где данных просто нет.
+        var line = ObservationFormatter.FormatLine(
+            Observation.Arrival("Иван Петров", "", TimeSpan.FromMinutes(3)));
+
+        Assert.That(line, Is.EqualTo("ARRIVAL Иван Петров"));
+    }
 }

@@ -43,9 +43,10 @@ public sealed class AgentDebugRouter
     private readonly Func<AgentSession?> _session;
     private readonly Func<MemoryStore> _memory;
     private readonly Func<SkillStore> _skills;
+    private readonly Func<PlayerNoteStore> _notes;
     private readonly Func<int> _round;
     private readonly Func<string, (bool Ok, string Reason)> _sendUserMessage;
-    private readonly Func<MemoryTarget, string, string, string, MemoryResult> _changeMemory;
+    private readonly Func<string, string, string, MemoryResult> _changeMemory;
     private readonly Func<string, string?, string?, string?, string?, SkillResult> _changeSkill;
     private readonly string _token;
     private readonly string _sessionId;
@@ -57,9 +58,10 @@ public sealed class AgentDebugRouter
         Func<AgentSession?> session,
         Func<MemoryStore> memory,
         Func<SkillStore> skills,
+        Func<PlayerNoteStore> notes,
         Func<int> round,
         Func<string, (bool Ok, string Reason)> sendUserMessage,
-        Func<MemoryTarget, string, string, string, MemoryResult> changeMemory,
+        Func<string, string, string, MemoryResult> changeMemory,
         Func<string, string?, string?, string?, string?, SkillResult> changeSkill)
     {
         _bus = bus;
@@ -68,6 +70,7 @@ public sealed class AgentDebugRouter
         _session = session;
         _memory = memory;
         _skills = skills;
+        _notes = notes;
         _round = round;
         _sendUserMessage = sendUserMessage;
         _changeMemory = changeMemory;
@@ -148,7 +151,7 @@ public sealed class AgentDebugRouter
     }
 
     private AgentDebugResponse State() =>
-        AgentDebugResponse.Ok(AgentDebugState.Capture(_bus, _session(), _memory(), _skills(), _sessionId, _round()));
+        AgentDebugResponse.Ok(AgentDebugState.Capture(_bus, _session(), _memory(), _skills(), _notes(), _sessionId, _round()));
 
     private async Task<AgentDebugResponse> Events(IReadOnlyDictionary<string, string> query, CancellationToken ct)
     {
@@ -234,19 +237,8 @@ public sealed class AgentDebugRouter
 
     private AgentDebugResponse ChangeMemory(JsonElement root)
     {
-        var targetName = (Str(root, "target") ?? "memory").ToLowerInvariant();
-
-        var target = targetName switch
-        {
-            "memory" => MemoryTarget.Memory,
-            "crew" => MemoryTarget.Crew,
-            _ => (MemoryTarget?)null,
-        };
-
-        if (target == null)
-            return AgentDebugResponse.Error(400, $"неизвестный target '{targetName}' — ожидалось memory или crew");
-
-        var result = _changeMemory(target.Value, Str(root, "action") ?? "add", Str(root, "match") ?? "",
+        // Параметра target больше нет: хранилище одно. Заметки о людях правятся своей ручкой.
+        var result = _changeMemory(Str(root, "action") ?? "add", Str(root, "match") ?? "",
             Str(root, "content") ?? "");
 
         if (!result.Ok)
