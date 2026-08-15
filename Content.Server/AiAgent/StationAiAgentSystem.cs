@@ -274,7 +274,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _curator = null;
     }
 
-    /// <summary>Find an empty AI core and put an LLM-driven brain in it.</summary>
+    /// <summary>Find an empty AI core ON A STATION and put an LLM-driven brain in it.</summary>
     public bool TryClaimAnyCore(out string reason)
     {
         if (_sessions.Count >= _cfg.GetCVar(AiCVars.MaxAgents))
@@ -283,9 +283,38 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return false;
         }
 
+        var offStation = 0;
+
         var query = EntityQueryEnumerator<StationAiCoreComponent>();
         while (query.MoveNext(out var coreUid, out var core))
         {
+            // Ядро обязано стоять на станции, и это не придирка к чистоте — без этого агент
+            // оказывается глухонемым.
+            //
+            // В мире каждый раунд ДВА ядра: станционное (packed.yml, `PlayerStationAi`) и
+            // второе, которым укомплектован сам Центком (centcomm.yml, `PlayerStationAiEmpty`
+            // в позиции -0.5,-2.5). Перебор шёл по нефильтрованному запросу и брал первое
+            // подходящее, то есть какое достанется. 13 августа доставалось станционное, 14 и 15
+            // подряд — центкомовское.
+            //
+            // Цена ошибки не «агент стоит не в той комнате». RadioSystem.cs:150 отбрасывает
+            // получателя, чья карта не совпадает с картой говорящего, а Центком — отдельная
+            // карта (EmergencyShuttleSystem.AddCentcomm грузит его на свою и в состав станции
+            // НЕ включает). Значит агент не слышит ни одной реплики экипажа, а его собственные
+            // передачи не долетают ни до кого. Снаружи это выглядит как «ИИ перестал отвечать
+            // в рацию»: он честно отвечает, просто в пустоту. За 15 августа — 222 наблюдения,
+            // из них RADIO ровно ноль, и единственное, что он слышал, это торговые автоматы,
+            // стоящие рядом с ним на Центкоме.
+            //
+            // Проверка именно на принадлежность станции, а не «не Центком»: карт вне станции
+            // может быть сколько угодно (сальваж, руины, планеты), и на любой из них ядро
+            // сломает агента ровно так же.
+            if (_station.GetOwningStation(coreUid) == null)
+            {
+                offStation++;
+                continue;
+            }
+
             // Занятое ядро больше не пропускается вслепую: если там наш же мозг от прошлой
             // сессии, TryClaimCore его переиспользует. Иначе агента было невозможно вернуть в
             // раунд после `aiagent release` или смерти — ядро оставалось занято навсегда.
@@ -296,7 +325,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 return true;
         }
 
-        reason = "no unoccupied AI core found";
+        // Отказ теперь возможен там, где раньше был молчаливый провал на Центком: если
+        // станционное ядро занял человек, агент не приходит вовсе. Так и надо — не занятое
+        // ядро лучше занятого не того, — но причина обязана быть видна в логе, иначе это
+        // «агент почему-то не появился».
+        reason = offStation > 0
+            ? $"no unoccupied AI core on a station ({offStation} off-station core(s) skipped)"
+            : "no unoccupied AI core found";
+
         return false;
     }
 
