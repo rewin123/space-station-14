@@ -217,8 +217,14 @@ public sealed partial class StationAiAgentSystem
     // Ярлык двери берётся готовым, а не склеивается: двери на станции щёлкают десятками в секунду,
     // и собирать строку на каждый щелчок ради события, которое почти всегда за пределами кадра, —
     // это мусор в тике на ровном месте.
-    private void OnWitnessDoor(Entity<DoorComponent> ent, ref DoorStateChangedEvent args) =>
-        Witness(DoorLabel(args.State), ent.Owner, ent.Owner);
+    private void OnWitnessDoor(Entity<DoorComponent> ent, ref DoorStateChangedEvent args)
+    {
+        var label = DoorLabel(args.State);
+        if (label == null)
+            return;
+
+        Witness(label, ent.Owner, ent.Owner);
+    }
 
     private static string StateRu(MobState state) => state switch
     {
@@ -228,14 +234,33 @@ public sealed partial class StationAiAgentSystem
         _ => "?",
     };
 
-    /// <summary>Готовый ярлык на каждое состояние двери — ни одной склейки строк в горячем пути.</summary>
-    private static string DoorLabel(DoorState state) => state switch
+    /// <summary>
+    /// Готовый ярлык на каждое состояние двери — ни одной склейки строк в горячем пути.
+    /// <c>null</c> значит «не докладывать вовсе».
+    ///
+    /// <para>
+    /// <b>Промежуточные состояния молчат, и это починка, а не экономия.</b> Дверь проходит
+    /// <c>Closed → Opening → Open</c>, то есть <see cref="DoorStateChangedEvent"/> прилетает на
+    /// один проход дважды. Раньше <c>Opening</c> и <c>Open</c> давали ОДИН И ТОТ ЖЕ ярлык, и агент
+    /// получал две неотличимые строки подряд. В боевой сессии 16 августа это стоило семи ходов из
+    /// сорока двух: агент честно отвечал «повторное событие, уже учтено» — семь запросов к модели,
+    /// потраченных на пересказ самому себе.
+    /// </para>
+    /// <para>
+    /// Оставлено конечное состояние, а не начальное, хотя начальное приходит на полсекунды раньше.
+    /// Причина: дверь можно перевести в <c>Open</c> без анимации — вскрытие, обесточивание,
+    /// принудительная установка состояния, — и тогда <c>Opening</c> не приходит вообще. Ставка на
+    /// промежуточное состояние теряла бы ровно те события, ради которых зрение и заводилось.
+    /// </para>
+    /// </summary>
+    private static string? DoorLabel(DoorState state) => state switch
     {
-        DoorState.Open or DoorState.Opening => LabelDoor + ": открывается",
-        DoorState.Closed or DoorState.Closing => LabelDoor + ": закрывается",
+        DoorState.Open => LabelDoor + ": открылась",
+        DoorState.Closed => LabelDoor + ": закрылась",
         DoorState.Denying => LabelDoor + ": отказ",
         DoorState.Emagging => LabelDoor + ": взлом",
-        _ => LabelDoor,
+        DoorState.Welded => LabelDoor + ": заварена",
+        _ => null,
     };
 
     // ------------------------------------------------------------------ воронка

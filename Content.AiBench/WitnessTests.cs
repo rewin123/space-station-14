@@ -6,6 +6,7 @@ using Content.Server.AiAgent;
 using Content.Shared.Damage;
 using Content.Shared.Damage.Prototypes;
 using Content.Shared.Damage.Systems;
+using Content.Shared.Doors.Systems;
 using Content.Shared.FixedPoint;
 using Content.Shared.Interaction;
 using Content.Shared.Mobs;
@@ -164,6 +165,44 @@ public sealed class WitnessTests
 
         Assert.That(observation, Does.Not.Contain("OBSERVED урон"),
             "лечение — не урон, и путать их в одной строке нельзя: " + observation);
+    }
+
+    [Test]
+    public async Task OpeningDoor_ReportsOnce_NotTwice()
+    {
+        // Регрессия по боевой сессии 16 августа. Дверь идёт Closed → Opening → Open, событие
+        // прилетает дважды, а ярлык у обоих состояний был один — агент получал две неотличимые
+        // строки и честно тратил ход на «повторное событие, уже учтено». Семь ходов из сорока двух
+        // ушли на этот пересказ самому себе, и заметить это можно было только в логе живого раунда.
+        await using var w = await AiWorld.Create();
+        await Freeze(w);
+
+        var door = await w.Spawn("Airlock", dx: 2);
+        await Drain(w);
+
+        await w.Post(() => w.Pair.Server.System<SharedDoorSystem>().StartOpening(door));
+
+        // Достаточно тиков, чтобы анимация доиграла до конца: ловим ОБА события, а не только первое.
+        await w.Pair.Server.WaitRunTicks(60);
+
+        var observation = await Observation(w);
+        var lines = 0;
+
+        foreach (var line in observation.Split('\n'))
+        {
+            if (line.StartsWith("OBSERVED дверь", StringComparison.Ordinal))
+                lines++;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lines, Is.EqualTo(1),
+                "один проход двери — одна строка; промежуточное состояние докладывать нельзя: "
+                + observation);
+            Assert.That(observation, Does.Contain("дверь: открылась"),
+                "докладывается конечное состояние, а не начальное: дверь можно перевести в Open "
+                + "без анимации, и тогда Opening не придёт вовсе: " + observation);
+        });
     }
 
     [Test]
