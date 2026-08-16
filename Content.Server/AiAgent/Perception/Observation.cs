@@ -33,6 +33,18 @@ public enum ObsKind : byte
     /// значило бы обесценить обе строки. В конец — по правилу выше.
     /// </summary>
     Note,
+
+    /// <summary>
+    /// Агент увидел, как что-то произошло рядом с его глазом.
+    ///
+    /// Единственная категория, которая приходит потоком: остальные — редкие сообщения, эта — все
+    /// действия всех людей в кадре. Поэтому у неё отдельный потолок в очереди, см.
+    /// <see cref="ObservationQueue"/>: без него долгая возня в кадре вытеснила бы из очереди
+    /// рацию, то есть агент оглох бы ровно тогда, когда к нему обращаются чаще всего.
+    ///
+    /// В конец перечисления — по тому же правилу, что и три предыдущие.
+    /// </summary>
+    Observed,
 }
 
 /// <summary>
@@ -95,4 +107,20 @@ public sealed record Observation(
     public static Observation Note(string name, int entries, TimeSpan t) =>
         new(ObsKind.Note, string.Empty, name,
             entries.ToString(System.Globalization.CultureInfo.InvariantCulture), t);
+
+    /// <summary>
+    /// Агент это увидел. <paramref name="label"/> — что произошло, <paramref name="what"/> — кто
+    /// участвовал и где.
+    ///
+    /// Ярлык живёт в <see cref="Channel"/>, а не внутри текста, и это не украшение: по нему строку
+    /// можно посчитать в журнале и отфильтровать через <c>ai.observe_kinds</c>, не разбирая её
+    /// обратно регуляркой.
+    ///
+    /// Участники приходят сюда уже строкой — хендлами и именами, снятыми на главном потоке в момент
+    /// события. Это тот же уговор, что и у остальных категорий: <c>EntityUid</c> в наблюдении не
+    /// живёт, потому что читают наблюдения с другого потока и через несколько секунд, когда uid уже
+    /// может ни на что не указывать.
+    /// </summary>
+    public static Observation Observed(string label, string what, TimeSpan t) =>
+        new(ObsKind.Observed, label, string.Empty, what, t);
 }

@@ -177,6 +177,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         SubscribeLocalEvent<LlmStationAiComponent, EntGotInsertedIntoContainerMessage>(OnBrainInserted);
         SubscribeLocalEvent<LlmStationAiComponent, EntGotRemovedFromContainerMessage>(OnBrainRemoved);
 
+        // Зрение как поток, а не как опрос: всё, что происходит рядом с глазом, приходит строкой
+        // OBSERVED. См. StationAiAgentSystem.Witness.cs — там же объяснено, почему список событий
+        // не отфильтрован по «важности».
+        SubscribeWitness();
+
         _sawmill.Info(
             $"agent system initialised enabled={_cfg.GetCVar(AiCVars.Enabled)} " +
             $"endpoint={_cfg.GetCVar(AiCVars.Endpoint)} model={_cfg.GetCVar(AiCVars.Model)}");
@@ -415,7 +420,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return false;
         }
 
-        var queue = new ObservationQueue(_cfg.GetCVar(AiCVars.ObsBuffer));
+        var queue = new ObservationQueue(
+            _cfg.GetCVar(AiCVars.ObsBuffer),
+            _cfg.GetCVar(AiCVars.ObserveBuffer));
         var registry = new AiToolRegistry();
 
         // Closed over by the delegates below instead of looking the session up in _sessions.
@@ -596,6 +603,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         AutoSaveSessions(frameTime);
         PruneHandles(frameTime);
+        ResetWitnessTick(frameTime);
     }
 
     private float _sincePrune;

@@ -111,6 +111,16 @@ public sealed partial class StationAiAgentSystem
             session.Queue.Push(obs);
     }
 
+    /// <summary>
+    /// Сколько строк наблюдения выпущено с начала процесса.
+    ///
+    /// Существует ради ОТРИЦАТЕЛЬНОГО теста, и это главное. Проверять, что далёкое событие не
+    /// попало в наблюдение, по тексту сообщения — значит проверять формат: строки может не быть и
+    /// потому, что она не построилась. Ноль в счётчике означает, что ворота отказали до всякой
+    /// работы, а это ровно то утверждение, которое защищает паритет.
+    /// </summary>
+    public int WitnessedCount() => _witnessed;
+
     /// <summary>Worst main-thread call observed, for the "never stalls the tick" benchmark.</summary>
     public (string What, double Ms) SlowestMainThreadCall() => (_dispatcher.Slowest, _dispatcher.SlowestMs);
 

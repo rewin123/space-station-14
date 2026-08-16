@@ -32,6 +32,7 @@ public static class ObservationFormatter
             : $"ARRIVAL {o.Speaker} ({o.Text})",
         ObsKind.Note => $"NOTE о «{o.Speaker}» есть заметки ({o.Text}) — " +
                         "read_player_related_memory, если пригодится",
+        ObsKind.Observed => $"OBSERVED {o.Channel} | {o.Text}",
         _ => $"EVENT {o.Text}",
     };
 
@@ -81,6 +82,12 @@ public static class ObservationFormatter
         ObsKind.Timer,
         ObsKind.Arrival,
         ObsKind.Note,
+
+        // Последними, и это не безразличие к порядку. Строк этой категории бывает много, а
+        // остальные — по одной; поставь их выше, и обращение по рации уедет под сотню строк про
+        // то, кто что куда положил, в самый конец сообщения. Реплика, на которую надо ответить,
+        // должна лежать сверху.
+        ObsKind.Observed,
     };
 
     /// <summary>T+H:MM:SS since round start.</summary>

@@ -15,14 +15,38 @@ namespace Content.Server.AiAgent.Perception;
 public sealed class ObservationQueue
 {
     private readonly object _lock = new();
-    private readonly Queue<Observation> _items = new();
+
+    /// <summary>
+    /// Связный список, а не <c>Queue</c>, ради одной операции: выбросить старейшую строку
+    /// ОПРЕДЕЛЁННОЙ категории, не трогая остальные. У очереди такого действия нет вовсе — пришлось
+    /// бы пересобирать её целиком на каждый лишний элемент, а лишние элементы приходят потоком.
+    /// </summary>
+    private readonly LinkedList<Observation> _items = new();
+
     private int _dropped;
+    private int _observed;
 
     public int Capacity { get; set; }
 
-    public ObservationQueue(int capacity)
+    /// <summary>
+    /// Сколько строк <see cref="ObsKind.Observed"/> очередь держит одновременно.
+    ///
+    /// Отдельный потолок нужен потому, что общий выбрасывает СТАРЕЙШЕЕ безотносительно вида. Все
+    /// прочие категории — редкие сообщения, а эта приходит потоком: любое оживление в кадре
+    /// вытолкнуло бы из очереди реплику по рации, то есть агент переставал бы слышать просьбы ровно
+    /// в тот момент, когда их больше всего. Здесь подрезается старейшая OBSERVED, и только она.
+    /// </summary>
+    public int ObservedCapacity { get; set; }
+
+    /// <param name="observedCapacity">
+    /// По умолчанию без потолка: голая очередь ведёт себя ровно как до появления наблюдений, и
+    /// тесты, которым нужна очередь как таковая, не обязаны знать про эту ручку. Живая сессия
+    /// значение задаёт всегда — см. <c>ai.observe_buffer</c>.
+    /// </param>
+    public ObservationQueue(int capacity, int observedCapacity = int.MaxValue)
     {
         Capacity = capacity;
+        ObservedCapacity = observedCapacity;
     }
 
     public int Count
@@ -48,10 +72,24 @@ public sealed class ObservationQueue
     {
         lock (_lock)
         {
-            _items.Enqueue(obs);
+            _items.AddLast(obs);
+
+            if (obs.Kind == ObsKind.Observed)
+                _observed++;
+
+            // Сначала свой потолок, потом общий. Порядок важен: если поток OBSERVED уже упёрся в
+            // свой лимит, до общего дело не дойдёт, и речь останется в очереди нетронутой.
+            while (_observed > ObservedCapacity && TrimOldest(ObsKind.Observed))
+            {
+            }
+
             while (_items.Count > Capacity)
             {
-                _items.Dequeue();
+                var first = _items.First!;
+                if (first.Value.Kind == ObsKind.Observed)
+                    _observed--;
+
+                _items.RemoveFirst();
                 _dropped++;
             }
         }
@@ -59,6 +97,32 @@ public sealed class ObservationQueue
         // Outside the lock. The handler wakes the agent thread, and holding a perception lock while
         // another thread starts a turn is how a deadlock gets written.
         Arrived?.Invoke();
+    }
+
+    /// <summary>
+    /// Выбросить самую старую строку заданного вида. Возвращает false, если такой в очереди нет.
+    ///
+    /// Считается в общий счётчик потерь, а не в свой: агенту сообщается «столько-то строк ты не
+    /// увидел», и делить эту потерю по видам ему незачем — вернуть их всё равно нечем. Вызывается
+    /// под уже взятым локом.
+    /// </summary>
+    private bool TrimOldest(ObsKind kind)
+    {
+        for (var node = _items.First; node != null; node = node.Next)
+        {
+            if (node.Value.Kind != kind)
+                continue;
+
+            _items.Remove(node);
+            _dropped++;
+
+            if (kind == ObsKind.Observed)
+                _observed--;
+
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Take everything buffered and reset the drop counter.</summary>
@@ -69,6 +133,7 @@ public sealed class ObservationQueue
             var items = _items.ToList();
             var dropped = _dropped;
             _items.Clear();
+            _observed = 0;
             _dropped = 0;
             return (items, dropped);
         }
@@ -81,18 +146,60 @@ public sealed class ObservationQueue
     /// multi-step turn it is otherwise deaf, and a bot that answers a question it never heard
     /// reads as broken. Reporting a bare count is not enough — the agent needs the actual lines to
     /// react to "wait, not that one".
+    ///
+    /// <para>
+    /// <b>Слова берутся раньше увиденного, и это не предпочтение, а починка.</b> Раньше здесь брался
+    /// просто хвост очереди, и пока в ней лежали одни реплики, хвост и был репликами. С появлением
+    /// строк <see cref="ObsKind.Observed"/> очередь наполняется потоком: любая возня в кадре — и
+    /// последние шесть строк это шесть чужих движений, а обращение по рации, ради которого окно и
+    /// заведено, из него вытеснено. Получалось бы ровно то, что оно должно было предотвратить:
+    /// агент отвечает на вопрос, которого не слышал.
+    /// </para>
+    /// <para>
+    /// Порядок в ответе — исходный, очередной. Выбор «что взять» не должен переставлять строки:
+    /// одинаковое состояние мира обязано давать одинаковые байты.
+    /// </para>
     /// </summary>
     public List<string> PeekUnread(int max)
     {
         lock (_lock)
         {
-            if (_items.Count == 0)
+            if (_items.Count == 0 || max <= 0)
                 return new List<string>();
 
-            return _items
-                .Skip(Math.Max(0, _items.Count - max))
-                .Select(ObservationFormatter.FormatLine)
-                .ToList();
+            var spoken = new List<int>();
+            var seen = new List<int>();
+            var at = 0;
+
+            foreach (var item in _items)
+            {
+                (item.Kind == ObsKind.Observed ? seen : spoken).Add(at);
+                at++;
+            }
+
+            var takeSpoken = Math.Min(max, spoken.Count);
+            var takeSeen = Math.Min(max - takeSpoken, seen.Count);
+
+            var chosen = new HashSet<int>(takeSpoken + takeSeen);
+
+            for (var i = spoken.Count - takeSpoken; i < spoken.Count; i++)
+                chosen.Add(spoken[i]);
+
+            for (var i = seen.Count - takeSeen; i < seen.Count; i++)
+                chosen.Add(seen[i]);
+
+            var result = new List<string>(chosen.Count);
+            at = 0;
+
+            foreach (var item in _items)
+            {
+                if (chosen.Contains(at))
+                    result.Add(ObservationFormatter.FormatLine(item));
+
+                at++;
+            }
+
+            return result;
         }
     }
 
@@ -154,6 +261,7 @@ public sealed class ObservationQueue
         {
             _items.Clear();
             _selfAnnounced = null;
+            _observed = 0;
             _dropped = 0;
         }
     }

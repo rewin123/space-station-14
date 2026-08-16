@@ -150,9 +150,16 @@ public sealed class AiCVars
     public static readonly CVarDef<int> MaxToolCallsPerTurn =
         CVarDef.Create("ai.max_tool_calls_per_turn", 90, CVar.SERVERONLY);
 
-    /// <summary>Observations buffered before the oldest are dropped (and the drop is reported).</summary>
+    /// <summary>
+    /// Observations buffered before the oldest are dropped (and the drop is reported).
+    ///
+    /// Поднято с 200 под поток строк OBSERVED: наблюдение видит каждое действие каждого человека в
+    /// кадре, и при двухстах строках на всё про всё разговорчивый отсек за один ход агента выбирал
+    /// бы очередь целиком. Контекст модели — 256k, сотня строк в сообщении наблюдения ничего не
+    /// ломает; ломала бы потеря реплики, а от неё защищает <see cref="ObserveBuffer"/>.
+    /// </summary>
     public static readonly CVarDef<int> ObsBuffer =
-        CVarDef.Create("ai.obs_buffer", 200, CVar.SERVERONLY);
+        CVarDef.Create("ai.obs_buffer", 600, CVar.SERVERONLY);
 
     /// <summary>
     /// Сколько будильников агент может держать одновременно.
@@ -251,6 +258,74 @@ public sealed class AiCVars
     /// </summary>
     public static readonly CVarDef<bool> LookFast =
         CVarDef.Create("ai.look_fast", true, CVar.SERVERONLY);
+
+    // ------------------------------------------------------------- наблюдение
+
+    /// <summary>
+    /// Видит ли агент, что происходит рядом с его глазом.
+    ///
+    /// Общий рубильник над всеми подписками наблюдения. Сервер публичный, и если поток строк
+    /// окажется вреднее пользы, <c>cvar ai.observe false</c> из админ-консоли стоит секунды и ноль
+    /// киков — в отличие от пересборки с перезапуском.
+    /// </summary>
+    public static readonly CVarDef<bool> Observe =
+        CVarDef.Create("ai.observe", true, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Полурамка поля зрения глаза, в тайлах.
+    ///
+    /// Совпадает с <c>look {"expand":0}</c> намеренно: это одно и то же поле, и расхождение значило
+    /// бы, что агент видит событие там, где обзор ничего не покажет, — или наоборот.
+    /// </summary>
+    public static readonly CVarDef<float> ObserveRange =
+        CVarDef.Create("ai.observe_range", 8.5f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Какие ярлыки наблюдений включены. Пусто — все.
+    ///
+    /// Список через запятую (<c>урон,выстрел,вложил</c>), ручка на случай, если в бою окажется, что
+    /// какой-то вид событий даёт поток без пользы. Сужается командой из консоли, а не выкаткой:
+    /// решать это по журналу живого сервера правильнее, чем угадывать заранее, а угадывать заранее
+    /// и вырезать кодом — значит подменять модель таблицей глаголов.
+    /// </summary>
+    public static readonly CVarDef<string> ObserveKinds =
+        CVarDef.Create("ai.observe_kinds", string.Empty, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Учитывать ли стены при наблюдении.
+    ///
+    /// Выключено, и это осознанная уступка. Строгая проверка — <c>StationAiVisionSystem.IsAccessible</c>,
+    /// а она разворачивает три сотни тайлов и делает broadphase-запрос на каждый. На редком вызове
+    /// (одна дверь, один клик) это незаметно; на потоке событий это возврат к тому, из-за чего
+    /// <c>look</c> держал тик секунду.
+    ///
+    /// Цена выключенного состояния названа прямо: в пределах <see cref="ObserveRange"/> агент
+    /// заметит происходящее за стеной, тогда как человек на его месте увидел бы стену. Включённое
+    /// добавляет третью ступень ворот с мемо по тайлу на один тик и потолком проверок за тик.
+    /// </summary>
+    public static readonly CVarDef<bool> ObserveOcclusion =
+        CVarDef.Create("ai.observe_occlusion", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Сколько строк наблюдения очередь держит одновременно.
+    ///
+    /// Не про экономию, а про порядок вытеснения: общий потолок очереди выбрасывает старейшее
+    /// безотносительно вида, и поток OBSERVED вытолкнул бы из неё обращение по рации. Этот потолок
+    /// подрезает старейшую OBSERVED и только её, поэтому заглушить агента вознёй в кадре нельзя.
+    /// </summary>
+    public static readonly CVarDef<int> ObserveBuffer =
+        CVarDef.Create("ai.observe_buffer", 400, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Потолок строгих проверок видимости за тик; работает только при <see cref="ObserveOcclusion"/>.
+    ///
+    /// Страховка, а не настройка. Мемо по тайлу уже схлопывает драку на одном тайле в одну проверку,
+    /// но выдумать нагрузку, где событий в кадре десятки за тик, ничего не стоит — а каждая
+    /// проверка это сотни broadphase-запросов. Сверх потолка события пропускаются, и число
+    /// пропущенных уходит в журнал: молча терять наблюдения хуже, чем терять их громко.
+    /// </summary>
+    public static readonly CVarDef<int> ObserveMaxChecksPerTick =
+        CVarDef.Create("ai.observe_max_checks_per_tick", 4, CVar.SERVERONLY);
 
     /// <summary>Self-evolution: the review that writes skills and memory. Step 1 of compaction.</summary>
     public static readonly CVarDef<bool> CuratorEnabled =
