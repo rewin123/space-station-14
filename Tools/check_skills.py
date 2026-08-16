@@ -26,7 +26,14 @@ MAX_WHEN = 60
 # Запас нужен куратору: skill_edit с пустым match дописывает в конец и отказывает, если результат
 # вылезет за 5000. Статья, упёршаяся в самый лимит, — это статья, к которой агент больше никогда
 # не сможет добавить ни строчки из своего опыта.
-MAX_BODY = 4800
+#
+# Но это порог ЗАПАСА, а не корректности, и валить на нём прогон оказалось неверно. Ровно так
+# растут статьи, которые агент дописал сам за смену: он писал через skill_edit, SkillStore принял,
+# на диске лежит 4988 — и снимок этого опыта не проходил бы собственную проверку. Поэтому выше
+# 4800 это предупреждение (запас кончился, пора делить статью надвое), а ошибка — только выше
+# кодового потолка, где файл уже не примет и сам агент.
+SOFT_BODY = 4800
+MAX_BODY = 5000
 
 ROOT_SKILL = "справочник"
 LINK = re.compile(r"\[\[([^\[\]\n]{1,64})\]\]")
@@ -66,7 +73,7 @@ def main():
         print(f"нет каталога {root}")
         return 1
 
-    skills, problems = {}, []
+    skills, problems, crowded = {}, [], []
 
     for path in sorted(root.glob("*.md")):
         # README рядом со скиллами — документация каталога, а не статья. SkillStore его тоже
@@ -90,7 +97,9 @@ def main():
         if len(when) > MAX_WHEN:
             problems.append(f"{name}: 'когда' {len(when)} символов, предел {MAX_WHEN}")
         if len(body) > MAX_BODY:
-            problems.append(f"{name}: тело {len(body)} символов, предел {MAX_BODY}")
+            problems.append(f"{name}: тело {len(body)} символов, потолок кода {MAX_BODY}")
+        elif len(body) > SOFT_BODY:
+            crowded.append(f"{name}: тело {len(body)} — запаса на дописку почти нет")
         if name in skills:
             problems.append(f"{name}: дубликат имени")
 
@@ -122,6 +131,9 @@ def main():
 
     if outside:
         print(f"вне дерева '{ROOT_SKILL}' ({len(outside)}): {', '.join(outside)}")
+
+    for c in crowded:
+        print(f"  тесно  {c}")
 
     for p in problems:
         print(f"  ОШИБКА {p}")

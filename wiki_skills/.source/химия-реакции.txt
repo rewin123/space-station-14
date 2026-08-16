@@ -1,0 +1,348 @@
+РЕАКЦИИ ХИМИЧЕСКОГО ДИСПЕНСЕРА И ЁМКОСТЕЙ
+Читать так: продукт ×сколько ← из чего. Числа — части, а не миллилитры:
+рецепт 1+1 в стакане на 100 ед. даёт 50 и 50.
+
+## biological
+Water ×11, Iron ×0.5, Sugar ×2, CarbonDioxide ×3, Protein ×4 ← Blood 20   [нужен миксер: Centrifuge]
+Water ×14, Sodium ×3, Chlorine ×1.5, CarbonDioxide ×5.5, Protein ×6 ← InsectBlood 30   [нужен миксер: Centrifuge]
+Water ×4, Nitrogen ×1 ← Slime 5   [нужен миксер: Centrifuge]
+Water ×9, Sugar ×1 ← Sap 10   [нужен миксер: Centrifuge]
+Water ×11, Copper ×0.5, Sugar ×2, CarbonDioxide ×3, Protein ×4 ← CopperBlood 20   [нужен миксер: Centrifuge]
+Water ×17, Nitrogen ×4.5, Chlorine ×2.5, Protein ×6 ← AmmoniaBlood 30   [нужен миксер: Centrifuge]
+Water ×10, Sulfur ×2, Hydrogen ×1, CarbonDioxide ×3, Protein ×4 ← SulfurBlood 20   [нужен миксер: Centrifuge]
+Mold ×2, Protein ×1, Toxin ×1 ← ZombieBlood 4   [нужен миксер: Centrifuge]
+
+## botany
+EZNutrient ×3 ← Nitrogen 1 + Phosphorus 1 + Potassium 1
+RobustHarvest ×1 ← EZNutrient 1 + SulfuricAcid 1 (катализатор, не тратится)
+Sedin ×1 ← Cryoxadone 1 + RobustHarvest 3 + Diethylamine 3
+Left4Zed ×1 ← EZNutrient 1 + Radium 1 (катализатор, не тратится)
+PlantBGone ×5 ← Toxin 1 + Water 4
+Ethanol ×2, Mercury ×1.5, Chlorine ×1.5 ← PestKiller 5   [нужен миксер: Centrifuge]
+
+## chemicals
+Ammonia ×4 ← Hydrogen 3 + Nitrogen 1   [от 370 K]
+Hydrogen ×3, Nitrogen ×1 ← Ammonia 4   [нужен миксер: Electrolysis]
+Sugar ×2, Carbon ×1 ← Cellulose 3   [нужен миксер: Electrolysis]
+Diethylamine ×2 ← Ammonia 1 + Ethanol 1
+Phenol ×2 ← Hydroxide 1 + Benzene 1
+Acetone ×2 ← Oil 1 + WeldingFuel 1 + Oxygen 1
+FoamingAgent ×2 ← Lithium 1 + Hydrogen 1
+PolytrinicAcid ×3 ← SulfuricAcid 1 + Plasma 1 + Potassium 1
+SulfuricAcid ×3 ← Hydrogen 1 + Sulfur 1 + Oxygen 2
+FluorosulfuricAcid ×4 ← Fluorine 1 + Hydrogen 1 + Potassium 1 + SulfuricAcid 1
+(без продукта) ← Water 1 + Potassium 1   [ВЗРЫВ]
+(без продукта) ← Phosphorus 1 + Potassium 1 + Sugar 1   [облако по площади]
+(без продукта) ← Fluorosurfactant 1 + Water 1   [облако по площади]
+(без продукта) ← Iron 3 + FoamingAgent 1 + FluorosulfuricAcid 1   [облако по площади]
+(без продукта) ← Aluminium 3 + FoamingAgent 1 + FluorosulfuricAcid 1   [облако по площади]
+(без продукта) ← Iron 1 + Uranium 1 + Aluminium 1   [ЭМИ-импульс]
+(без продукта) ← Aluminium 1 + Potassium 1 + Sulfur 1   [вспышка]
+TableSalt ×2 ← Chlorine 1 + Sodium 1   [от 370 K]
+Chlorine ×1, Sodium ×1 ← TableSalt 2   [нужен миксер: Electrolysis]
+Thermite ×3 ← Iron 1 + Aluminium 1 + Oxygen 1
+UnstableMutagen ×3 ← Radium 1 + Phosphorus 1 + Chlorine 1
+Oil ×3 ← WeldingFuel 1 + Hydrogen 1 + Carbon 1
+Fluorosurfactant ×5 ← Carbon 2 + Fluorine 2 + SulfuricAcid 1
+Desoxyephedrine ×4 ← Ephedrine 1 + Carbon 1 + Iodine 1 + Phosphorus 1   [от 370 K]
+Stimulants ×2 ← Ephedrine 1 + Vestine 1 + Oxygen 2   [от 370 K]
+Ephedrine ×4 ← Oil 1 + Hydrogen 1 + Sugar 1 + Diethylamine 1
+MuteToxin ×2 ← Vestine 2 + SpaceGlue 2   [от 370 K]
+ChloralHydrate ×1 ← Chlorine 3 + Ethanol 1 + Water 1
+Pax ×3 ← MindbreakerToxin 1 + Synaptizine 1 + Water 1
+Charcoal ×1 ← Carbon 1 + Ash 1
+NorepinephricAcid ×2 ← Uranium 1 + Epinephrine 1
+Ethyloxyephedrine ×2 ← Desoxyephedrine 1 + Stellibinin 1
+Diphenylmethylamine ×3 ← Ethyloxyephedrine 1 + SodiumCarbonate 1 + Coffee 1
+SodiumCarbonate ×4 ← Ammonia 1 + TableSalt 1 + Carbon 1 + Oxygen 1
+Benzene ×1 ← Hydrogen 1 + Carbon 1   [от 310 K]
+Hydroxide ×2 ← Oxygen 1 + Hydrogen 1   [от 310 K]
+SodiumHydroxide ×2 ← Hydroxide 1 + Sodium 1
+Fersilicite ×2 ← Iron 1 + Silicon 1   [от 310 K]
+SodiumPolyacrylate ×4 ← Oxygen 2 + Sodium 1 + Nitrogen 1
+Nocturine ×1 ← Impedrezene 2 + Vestine 1
+Tazinide ×1 ← Licoxide 1 + Vestine 1
+ArtifactGlue ×2 ← SpaceGlue 1 + Artifexium 1
+Lye ×2 ← Water 1 + Ash 1
+
+## cleaning
+Bleach ×5 ← TableSalt 2 + SpaceCleaner 2 + SodiumHydroxide 1
+Ammonia ×1 ← AmmoniaBlood 2   [от 370 K; нужен миксер: Stir]
+SpaceCleaner ×2 ← Ammonia 1 + Water 1
+SpaceLube ×5 ← Water 1 + Fersilicite 1 + Oxygen 1
+
+## drinks
+AcidSpit ×3 ← Wine 2 + SulfuricAcid 1
+AlienBrainHemorrhage ×3 ← IrishCream 1 + BlueCuracao 1 + Grenadine 1
+AlliesCocktail ×3 ← Martini 2 + Vodka 1   [нужен миксер: Shake]
+Amasec ×5 ← Wine 2 + Vodka 2 + Iron 1   [нужен миксер: Shake]
+Andalusia ×3 ← Rum 1 + Whiskey 1 + JuiceLemon 1   [нужен миксер: Stir]
+Antifreeze ×4 ← Cream 1 + Ice 1 + Vodka 2
+ArnoldPalmer ×2 ← IcedTea 1 + Lemonade 1
+AtomicBomb ×10 ← B52 10 + Uranium 1
+B52 ×3 ← Cognac 1 + IrishSlammer 1 + CoffeeLiqueur 1
+BudgetInsulsDrink ×4 ← Tequila 1 + VodkaRedBool 3
+BlueHawaiian ×5 ← CoconutRum 2 + JuicePineapple 1 + JuiceLemon 1 + BlueCuracao 1   [нужен миксер: Shake]
+CogChamp ×3 ← Cognac 1 + ScrewdriverCocktail 1 + WeldingFuel 1
+BahamaMama ×6 ← Ice 1 + JuiceOrange 1 + JuicePineapple 1 + Rum 1 + CoconutRum 1 + Grenadine 1   [нужен миксер: Shake]
+Barefoot ×3 ← Cream 1 + Vermouth 1 + JuiceBerry 1
+BananaHonk ×3 ← Cream 1 + JuiceBanana 1 + Sugar 1
+BeepskySmash ×2 ← Iron 1 + JuiceLime 1 + Whiskey 1   [нужен миксер: Shake]
+BlackRussian ×3 ← CoffeeLiqueur 1 + Vodka 2
+BloodyMary ×6 ← JuiceLime 1 + JuiceTomato 3 + Vodka 2   [нужен миксер: Stir]
+Booger ×5 ← Cream 2 + JuiceBanana 1 + JuiceWatermelon 1 + Rum 1
+BraveBull ×3 ← CoffeeLiqueur 1 + Tequila 2
+Bronx ×3 ← Gin 1 + Vermouth 1 + JuiceOrange 1   [нужен миксер: Shake]
+CafeLatte ×2 ← Coffee 1 + Milk 1
+CoconutRum ×3 ← Rum 2 + CoconutWater 1
+Cosmopolitan ×3 ← Vodka 1 + JuiceBerry 1 + JuiceLime 1
+CreamOfCoconut ×3 ← CoconutWater 1 + Sugar 1 + Milk 1
+CrushDepth ×2 ← RootBeerFloat 1 + Rum 1
+CubaLibre ×3 ← Cola 2 + Rum 1
+DarkandStormy ×2 ← SolDry 1 + Rum 1
+DemonsBlood ×4 ← Rum 1 + Blood 1 + DrGibb 1 + SpaceMountainWind 1   [нужен миксер: Stir]
+DevilsKiss ×3 ← Rum 1 + Blood 1 + CoffeeLiqueur 1   [нужен миксер: Stir]
+DoctorsDelight ×6 ← Cream 2 + JuiceLime 1 + JuiceOrange 1 + JuiceTomato 1 + Tricordrazine 1   [нужен миксер: Stir]
+DriestMartini ×2 ← Gin 1 + Nothing 1   [нужен миксер: Shake]
+Eggnog ×10 ← Egg 1 + Milk 4 + Rum 5   [нужен миксер: Shake]
+ElectricShark ×6 ← DarkandStormy 4 + BlueCuracao 1 + JuicePineapple 1   [нужен миксер: Shake]
+ErikaSurprise ×6 ← Ale 2 + Ice 1 + JuiceBanana 1 + JuiceLime 1 + Whiskey 1   [нужен миксер: Shake]
+Hydrogen ×6, Carbon ×2, Oxygen ×1 ← Ethanol 9   [нужен миксер: Electrolysis]
+FourteenLoko ×3 ← Coffee 1 + JuiceLime 1 + Vodka 1
+GargleBlaster ×5 ← Cognac 1 + Gin 1 + JuiceLime 1 + Vodka 1 + Whiskey 1   [нужен миксер: Shake]
+GinFizz ×3 ← Gin 1 + JuiceLime 1 + SodaWater 1
+GinTonic ×3 ← Gin 1 + TonicWater 2
+Gildlager ×10 ← Gold 1 + Vodka 10   [нужен миксер: Shake]
+Grog ×4 ← Rum 1 + Water 2 + Sugar 1
+HippiesDelight ×2 ← GargleBlaster 1 + THC 1
+Hooch ×3 ← Ethanol 2 + WeldingFuel 1 + Enzyme 1
+HotCocoa ×2 ← Water 1 + CocoaPowder 1   [от 350 K]
+IceCream ×3 ← Cream 1 + Ice 1 + Sugar 1
+IcedBeer ×5 ← Beer 5 + Ice 1
+IcedBeer ×10 ← Beer 10 + FrostOil 1
+IcedCoffee ×3 ← Coffee 2 + Ice 1
+IcedGreenTea ×3 ← GreenTea 2 + Ice 1
+IcedTea ×3 ← Ice 1 + Tea 2
+IrishBool ×2 ← EnergyDrink 1 + IrishSlammer 1
+IrishSlammer ×2 ← Ale 1 + IrishCream 1
+IrishCoffee ×2 ← Coffee 1 + IrishCream 1   [нужен миксер: Stir]
+IrishCream ×3 ← Cream 1 + Whiskey 2
+JackRose ×4 ← JuiceApple 1 + Cognac 1 + Grenadine 1 + JuiceLemon 1   [нужен миксер: Shake]
+JungleBird ×6 ← Rum 3 + JuicePineapple 1 + Grenadine 1 + JuiceLime 1   [нужен миксер: Shake]
+Kalimotxo ×2 ← Cola 1 + Wine 1
+OrangeLimeSoda ×3 ← JuiceLime 1 + JuiceOrange 1 + SodaWater 1   [нужен миксер: Stir]
+Lemonade ×3 ← JuiceLemon 1 + Sugar 1 + Water 1   [нужен миксер: Stir]
+LemonLime ×3 ← JuiceLemon 1 + JuiceLime 1 + SodaWater 1   [нужен миксер: Stir]
+LongIslandIcedTea ×6 ← CubaLibre 3 + Gin 1 + Tequila 1 + Vodka 1   [нужен миксер: Stir]
+Manhattan ×3 ← Whiskey 2 + Vermouth 1   [нужен миксер: Shake]
+ManhattanProject ×10 ← Whiskey 10 + Uranium 1
+ManlyDorf ×3 ← Ale 2 + Beer 1
+Margarita ×3 ← Tequila 2 + JuiceLime 1
+Martini ×3 ← Gin 2 + Vermouth 1   [нужен миксер: Shake]
+Mead ×2 ← Sugar 1 + Enzyme 1
+Mojito ×4 ← JuiceLime 1 + Rum 1 + SodaWater 1 + Sugar 1   [нужен миксер: Shake]
+MonkeyBusiness ×4 ← Gin 1 + JuiceOrange 1 + Grenadine 1 + Absinthe 1   [нужен миксер: Shake]
+Moonshine ×3 ← Tequila 1 + Vodka 1 + Whiskey 1
+NuclearCola ×5 ← Cola 5 + Uranium 1
+Ipecac ×2, Water ×2, Sugar ×2, Uranium ×1 ← NuclearCola 10   [нужен миксер: Centrifuge]
+Patron ×10 ← Tequila 10 + Silver 1   [нужен миксер: Shake]
+Painkiller ×6 ← JuicePineapple 3 + CoconutRum 1 + JuiceOrange 1 + CreamOfCoconut 1   [нужен миксер: Shake]
+PinaColada ×6 ← JuicePineapple 3 + JuiceLime 1 + Rum 1 + CreamOfCoconut 1
+Posca ×3 ← TableSalt 1 + Vinegar 1 + Water 1
+Radler ×2 ← Lemonade 1 + Beer 1
+RedMead ×2 ← Mead 1 + Blood 1   [нужен миксер: Stir]
+Rewriter ×2 ← Coffee 1 + SpaceMountainWind 1
+RootBeerFloat ×3 ← RootBeer 2 + IceCream 1
+RoyRogers ×3 ← Cola 2 + Grenadine 1
+Rubberneck ×4 ← EnergyDrink 2 + Moonshine 1 + Sugar 1
+Sbiten ×2 ← Vodka 1 + CapsaicinOil 1
+ScrewdriverCocktail ×3 ← JuiceOrange 2 + Vodka 1   [нужен миксер: Shake]
+ShirleyTemple ×3 ← SolDry 2 + Grenadine 1
+Silencer ×3 ← Nothing 1 + Cream 1 + Sugar 1
+SnowWhite ×2 ← Beer 1 + LemonLime 1
+SodaWater ×6 ← Water 5 + CarbonDioxide 1   [нужен миксер: Shake]
+SoyLatte ×2 ← Coffee 1 + MilkSoy 1
+Starkist ×3 ← Cola 1 + JuiceOrange 2
+SuiDream ×3 ← SpaceUp 1 + BlueCuracao 1 + MelonLiquor 1
+SyndicateBomb ×2 ← Beer 1 + WhiskeyCola 1
+Tea ×6 ← TeaPowder 1 + Water 5
+TequilaSunrise ×3 ← JuiceOrange 1 + Tequila 2
+ThreeMileIsland ×10 ← LongIslandIcedTea 10 + Uranium 1
+Tortuga ×2 ← IcedTea 1 + Sugar 1   [нужен миксер: Stir]
+ToxinsSpecial ×5 ← Rum 2 + Vermouth 1 + Plasma 2   [нужен миксер: Shake]
+Vampiro ×6 ← TequilaSunrise 3 + BloodyMary 1 + Hotsauce 1 + LemonLime 1   [нужен миксер: Shake]
+VodkaMartini ×3 ← Vermouth 1 + Vodka 2   [нужен миксер: Shake]
+VodkaRedBool ×3 ← Vodka 1 + EnergyDrink 2
+VodkaTonic ×3 ← Vodka 1 + TonicWater 2
+WhiskeyCola ×3 ← Cola 2 + Whiskey 1
+WatermelonWakeup ×3 ← JuiceWatermelon 1 + Whiskey 1 + EnergyDrink 1
+WhiteRussian ×2 ← BlackRussian 1 + Cream 1
+WhiskeySoda ×3 ← SodaWater 2 + Whiskey 1
+XenoBasher ×3 ← ManlyDorf 2 + EnergyDrink 1
+HotRamen ×6 ← DryRamen 5 + Water 2   [от 323.15 K]
+Pilk ×2 ← Cola 1 + Milk 1
+TheMartinez ×6 ← Cola 2 + Vodka 2 + Ice 1 + JuiceLemon 1
+Vodka ×2 ← Ethanol 1 + Water 1   [нужен миксер: Stir]
+Hydrogen ×2, Oxygen ×1 ← Water 3   [нужен миксер: Electrolysis]
+WhiteGilgamesh ×3 ← Beer 2 + Milk 1
+Cola ×4 ← Ipecac 1 + Oxygen 1 + Water 1 + Sugar 1
+Caipirinha ×4 ← Rum 1 + JuiceLime 1 + Sugar 1 + Ice 1   [нужен миксер: Shake]
+Daiquiri ×6 ← Rum 4 + Sugar 1 + JuiceLime 1   [нужен миксер: Stir]
+DeathInTheAfternoon ×3 ← Absinthe 2 + Champagne 1
+Empress75 ×6 ← Champagne 2 + Gin 2 + JuiceLime 1 + Grenadine 1   [нужен миксер: Shake]
+EspressoMartini ×2 ← BlackRussian 1 + Coffee 1   [нужен миксер: Shake]
+Mayojito ×2 ← Mojito 1 + Mayo 1
+Mimeosa ×3 ← Mimosa 2 + Nothing 1
+Mimosa ×3 ← JuiceOrange 2 + Champagne 1
+MoscowMule ×6 ← Vodka 4 + JuiceLime 1 + SolDry 1   [нужен миксер: Stir]
+TheSunAlsoRises ×6 ← Absinthe 1 + Daiquiri 5
+WhiskeySour ×6 ← Whiskey 2 + Sugar 1 + JuiceLemon 2 + Egg 1   [нужен миксер: Shake]
+ZombieCocktail ×4 ← Rum 2 + Grenadine 1 + ZombieBlood 1
+BacchusBlessing ×4 ← Hooch 1 + Absinthe 1 + ManlyDorf 1 + SyndicateBomb 1
+Carbon ×2, Fluorine ×2, Hydrogen ×0.5, Oxygen ×0.5 ← TeaPowder 5   [нужен миксер: Electrolysis]
+
+## food
+FoodCheese (предмет) ← Milk 40 + Enzyme 5 (катализатор, не тратится)
+FoodChevre (предмет) ← MilkGoat 10 + Enzyme 5 (катализатор, не тратится)
+FoodDough (предмет) ← Flour 45 + Water 15
+FoodDoughCornmeal (предмет) ← Cornmeal 15 + Milk 10 + Egg 6
+FoodDoughTortilla (предмет) ← Cornmeal 15 + Water 10
+FoodDoughCotton (предмет) ← Fiber 40 + Flour 5 + Water 15
+FoodCakeBatter (предмет) ← Flour 20 + Butter 10 + Egg 6 + Sugar 10 + Milk 10
+FoodButter (предмет) ← Cream 30 + TableSalt 1
+FoodDoughPie (предмет) ← Flour 40 + Butter 10 + Water 5 + Sugar 5
+FoodCakeBatter (предмет) ← Flour 15 + MilkSoy 15 + Sugar 5
+FoodTofu (предмет) ← MilkSoy 55 + Enzyme 5 (катализатор, не тратится)
+FoodMeatMeatball (предмет) ← UncookedAnimalProteins 5 + Flour 5 + Egg 6
+FoodSnackChocolateBar (предмет) ← CocoaPowder 4 + Milk 2 + Sugar 2
+Ketchup ×3 ← JuiceTomato 2 + Sugar 1
+Mayo ×15 ← Vinegar 5 + Oil 5 + Egg 6
+Mayo ×15 ← JuiceLemon 5 + Oil 5 + Egg 6
+Mustard ×2 ← Bleach 1 + Ammonia 1
+Ketchunaise ×2 ← Ketchup 1 + Mayo 1
+BbqSauce ×3 ← Ketchup 1 + Vinegar 1 + Sugar 1
+Hotsauce ×3 ← JuiceTomato 1 + TableSalt 1 + CapsaicinOil 1
+Coldsauce ×3 ← JuiceTomato 1 + TableSalt 1 + FrostOil 1
+Vinegar ×2 ← Ethanol 1 + Oxygen 1
+Soysauce ×3 ← MilkSoy 2 + SulfuricAcid 1
+Vinaigrette ×3 ← Vinegar 1 + OilOlive 1 + Blackpepper 1
+Sugar ×5, Potassium ×5 ← JuiceBanana 10   [нужен миксер: Centrifuge]
+Fat ×6, Water ×3, Protein ×1 ← Oil 10   [нужен миксер: Centrifuge]
+Sulfur ×2, Carbon ×1, Water ×1 ← Allicin 4   [нужен миксер: Centrifuge]
+Water ×2, Carbon ×2, Sugar ×1 ← Nutriment 5   [нужен миксер: Centrifuge]
+Carbon ×5, Hydrogen ×10, Oxygen ×1 ← Fat 15   [нужен миксер: Electrolysis]
+Carbon ×2, Hydrogen ×4, Phosphorus ×3, Oxygen ×1 ← UncookedAnimalProteins 10   [нужен миксер: Electrolysis]
+Carbon ×2, Hydrogen ×4, Phosphorus ×3, Oxygen ×1 ← Protein 10   [нужен миксер: Electrolysis]
+Carbon ×1, Water ×1, Nitrogen ×2 ← Vitamin 4   [нужен миксер: Centrifuge]
+Cream ×1 ← Milk 2   [от 320 K; нужен миксер: Shake]
+
+## fun
+Carpetium ×3 ← SpaceDrugs 1 + Fiber 2
+BuzzochloricBees ×3 ← Brass 1 + Fiber 1 + GroundBee 1 + Chlorine 1 + UnstableMutagen 1
+FoodMeat (предмет) ← Fat 25 + Nutriment 5 + Blood 10 + Carbon 10
+SpaceGlue ×2 ← SpaceLube 1 + Slime 1   [от 370 K; нужен миксер: Stir]
+Licoxide ×1 ← Lithium 1 + Zinc 1
+Brass ×10 ← Zinc 3.3 + Copper 6.7   [от 1358 K]
+Zinc ×3.3, Copper ×6.7 ← Brass 10   [от 693 K; нужен миксер: Centrifuge]
+SheetPlastic1 (предмет) ← Oil 5 + Ash 3 + SulfuricAcid 2   [от 374 K]
+Ice ×5 ← Fresium 1 + Water 1   [выделяет газ Frezon]
+Fresium ×5 ← Frezon 3 + Plasma 1 (катализатор, не тратится) + Nitrogen 2 + Cryoxadone 0.22 + TableSalt 0.08 + Water 1.5   [до 300 K; выделяет газ Nitrogen]
+Carbon ×3, Sugar ×2 ← Fiber 5 + Water 10 (катализатор, не тратится)   [нужен миксер: Centrifuge]
+Laughter ×2 ← JuiceBanana 1 + Sugar 1
+ShardCrystalRandom (предмет) ← Sugar 15 + Water 15 + Ethanol 5   [от 374 K]
+MaterialGunpowder (предмет) ← Potassium 6 + Sulfur 2 + Charcoal 2   [от 374 K]
+IngotGold1 (предмет) ← Gold 10 + FrostOil 5
+IngotSilver1 (предмет) ← Silver 10 + FrostOil 5
+SheetBrass1 (предмет) ← Brass 10 + FrostOil 5
+(без продукта) ← JuiceThatMakesYouWeh 1 + JuiceThatMakesYouHew 1   [ВЗРЫВ]
+Felinase ×2 ← Haloperidol 3 + Psicodine 2 + CarpoToxin 2 + Enzyme 1
+Caninase ×2 ← Haloperidol 3 + Psicodine 2 + Happiness 2 + Enzyme 1
+Razorium ×2 ← Caninase 1 + Felinase 1   [ВЗРЫВ]
+
+## gas
+Carbon ×1, Oxygen ×2 ← CarbonDioxide 3   [нужен миксер: Electrolysis]
+Nitrogen ×2, Oxygen ×1 ← NitrousOxide 3   [нужен миксер: Electrolysis]
+
+## medicine
+Dylovene ×3 ← Silicon 1 + Nitrogen 1 + Potassium 1
+Ethylredoxrazine ×3 ← Oxygen 1 + Dylovene 1 + Carbon 1
+Cryptobiolin ×3 ← Potassium 1 + Oxygen 1 + Sugar 1
+Arithrazine ×2 ← Hyronalin 1 + Hydrogen 1
+Bicaridine ×2 ← Inaprovaline 1 + Carbon 1
+Cryoxadone ×3 ← Dexalin 1 + Water 1 + Oxygen 1
+Doxarubixadone ×2 ← Cryoxadone 1 + UnstableMutagen 1
+Epinephrine ×4 ← Phenol 1 + Acetone 1 + Chlorine 1 + Hydroxide 1
+Dermaline ×3 ← Kelotane 1 + Oxygen 1 + Phosphorus 1
+Dexalin ×3 ← Oxygen 2 + Plasma 1 (катализатор, не тратится)
+DexalinPlus ×3 ← Dexalin 1 + Carbon 1 + Iron 1
+Hyronalin ×2 ← Radium 1 + Dylovene 1
+Inaprovaline ×3 ← Oxygen 1 + Carbon 1 + Sugar 1
+Ipecac ×2 ← Potassium 1 + Nitrogen 1 + Ammonia 1
+TranexamicAcid ×3 ← Inaprovaline 1 + SulfuricAcid 1 + Sugar 1
+Kelotane ×2 ← Silicon 1 + Carbon 1
+Leporazine ×2 ← Copper 1 + Fersilicite 1 + Plasma 1 (катализатор, не тратится)
+Phalanximine ×3 ← Hyronalin 1 + Ethanol 1 + UnstableMutagen 1
+Ambuzol ×4 ← Dylovene 1 + Ammonia 1 + ZombieBlood 2
+AmbuzolPlus ×10 ← Ambuzol 5 + Omnizine 5
+Synaptizine ×3 ← Lithium 1 + Sugar 1 + Water 1
+Tricordrazine ×2 ← Inaprovaline 1 + Dylovene 1
+HeartbreakerToxin ×2 ← DexalinPlus 1 + MindbreakerToxin 1
+Impedrezene ×1 ← Mercury 1 + Oxygen 1 + Water 1   [от 370 K]
+Lexorin ×2 ← HeartbreakerToxin 1 + Plasma 1 + Vestine 1
+Lipozine ×3 ← TableSalt 1 + Ethanol 1 + Radium 1
+Mannitol ×3 ← Hydrogen 1 + Water 1 + Sugar 1
+MindbreakerToxin ×3 ← Silicon 1 + Hydrogen 1 + Dylovene 1   [от 370 K]
+SpaceDrugs ×3 ← Mercury 1 + Sugar 1 + Lithium 1
+Ultravasculine ×2 ← Histamine 2 + Plasma 1 (катализатор, не тратится)
+Oculine ×4 ← TableSalt 1 + Blood 1 + Hydroxide 2
+Siderlac ×2 ← Aloe 1 + Stellibinin 1
+Cognizine ×1 ← CarpoToxin 1 + Siderlac 1 + Acetone 1
+Sigynate ×4 ← SodiumCarbonate 1 + SodiumHydroxide 1 + Kelotane 1 + Water 1 + Sugar 1   [от 370 K]
+Saline ×5 ← Water 4 + TableSalt 1
+Lacerinol ×2 ← Bicaridine 1 + Benzene 1   [от 335 K]
+Puncturase ×2 ← Bicaridine 1 + Hydroxide 1   [от 325 K]
+Bruizine ×2 ← Bicaridine 1 + Lithium 0.9 + Sugar 1
+Razorium ×1 ← Lacerinol 1 + Bicaridine 1
+Razorium ×1 ← Puncturase 1 + Bicaridine 1
+Razorium ×1 ← Bruizine 1 + Bicaridine 1
+Razorium ×1 ← Lacerinol 1 + Bruizine 1
+Razorium ×1 ← Puncturase 1 + Bruizine 1
+Razorium ×1 ← Lacerinol 1 + Puncturase 1
+Diphenhydramine ×3 ← Diethylamine 1 + Oil 1 + TableSalt 1 + Carbon 1 + Ethanol 1   [от 377.59 K]
+Pyrazine ×3 ← Leporazine 1 + Dermaline 1 + Carbon 1   [от 540 K]
+Insuzine ×3 ← Leporazine 1 + Kelotane 1 + Silicon 1   [от 433 K]
+Opporozidone ×3 ← Cognizine 1 + Plasma 2 + Doxarubixadone 1   [от 400 K]
+Opporozidone ×6 ← LivingTissue 2 + Plasma 2 + Doxarubixadone 2   [от 400 K]
+Arcryox ×3 ← Lithium 1 + Tricordrazine 1 + Cryoxadone 1   [от 370 K]
+Aloxadone ×4 ← Cryoxadone 2 + Aloe 1 + Leporazine 2
+Psicodine ×4 ← Mannitol 2 + Impedrezene 1 + Water 2
+Lipolicide ×3 ← Ephedrine 1 + Diethylamine 1 + Mercury 1
+Happiness ×4 ← Laughter 2 + Epinephrine 1 + Ethanol 1 + Plasma 5 (катализатор, не тратится)
+PotassiumIodide ×2 ← Potassium 1 + Iodine 1
+Haloperidol ×5 ← Aluminium 1 + Chlorine 1 + Fluorine 1 + Oil 1 + PotassiumIodide 1
+Heparin ×2 ← SulfuricAcid 1 + Nitrogen 1 + Sodium 1
+Hemorrhinol ×2 ← Heparin 2 + Razorium 2 + Plasma 1
+
+## pyrotechnic
+Napalm ×3 ← Oil 1 + WeldingFuel 1 + Ethanol 1
+Phlogiston ×3 ← Phosphorus 1 + SulfuricAcid 1 + Plasma 1   [выделяет газ Plasma]
+ChlorineTrifluoride ×4 ← Chlorine 1 + Fluorine 3   [от 370 K; ВЗРЫВ]
+Ash ×1 ← Oil 1   [от 520 K]
+Ethanol ×5, Hydrogen ×3, Sulfur ×2 ← WeldingFuel 10   [нужен миксер: Centrifuge]
+
+## single_reagent
+Protein ×0.5 ← UncookedAnimalProteins 0.5   [от 347 K]
+EggCooked ×0.5 ← Egg 0.5   [от 344 K]
+Syrup ×0.5 ← Sap 1   [от 377 K; нужен миксер: Stir; выделяет газ WaterVapor]
+Wine ×1 ← Blood 1   [нужен миксер: Holy]
+Holywater ×1 ← Water 1   [нужен миксер: Holy]
+Hivarol ×1 ← LivingTissue 1 + Licoxide 1 + Impedrezene 1   [от 370 K; нужен миксер: Electrolysis]
+
+## soap
+Soap (предмет) ← Oil 20 + Lye 30 + TableSalt 10   [от 373 K]
+SoapNT (предмет) ← Oil 20 + Lye 25 + TableSalt 10 + Plasma 5   [от 373 K]
+SoapDeluxe (предмет) ← Oil 20 + Lye 25 + TableSalt 10 + JuiceBerry 5   [от 373 K]
+SoapHomemade (предмет) ← Fat 15 + Lye 25 + TableSalt 10 + Blood 10   [от 373 K]
+SoapSyndie (предмет) ← Oil 20 + Lye 25 + TableSalt 10 + Stimulants 5   [от 373 K]
+SoapOmega (предмет) ← Oil 5 + Fat 5 + Lye 10 + TableSalt 5 + Honk 10 + SpaceLube 5 + SpaceDrugs 3 + THC 2 + Bananadine 2 + Omnizine 2 + Amatoxin 1   [от 373 K]
+

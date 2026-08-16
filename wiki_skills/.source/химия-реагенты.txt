@@ -1,0 +1,902 @@
+РЕАГЕНТЫ: что это, что делает в организме, с какой дозы вредит
+Читать так: имя (id в игре) — эффекты по тактам метаболизма.
+«от N ед.» — порог: пока в крови меньше N, этого не происходит. Это и есть передоз.
+
+## alcohol
+Absinthe — A anise-flavoured spirit derived from botanicals.
+    от 10 ед. ModifyStatusEffect (Digestion)
+Ale — A dark alchoholic beverage made by malted barley and yeast.
+Beer — An alcoholic beverage made from malted grains, hops, yeast, and water.
+blue Curaçao (BlueCuracao) — Exotically blue, fruity drink, distilled from oranges.
+Cognac — A sweet and strongly alcoholic drink, twice distilled and left to mature for several years. Classy as fornication.
+DeadRum — Distilled alcoholic drink made from saltwater.
+Ethanol — A simple alcohol, makes you drunk if consumed, flammable.
+    от 15 ед. вредит Poison 0.1 (Metabolites)
+    от 15 ед. вредит Poison 0.02 (Metabolites)
+    от 15 ед. лечит Brute 0.1 (Metabolites)
+    от 12 ед. рвота 4% (Metabolites)
+    опьянение (Metabolites)
+Gin — A distilled alcoholic drink that derives its predominant flavour from juniper berries.
+coffee liqueur (CoffeeLiqueur) — Liquor flavoured with cold brewed coffee and spices.
+melon liquor (MelonLiquor) — A relatively sweet and fruity 46 proof liquor.
+NeoTheology Cahors wine (NTCahors) — Fortified dessert wine made from cabernet sauvignon, saperavi and other grapes.
+poison wine (PoisonWine) — Is this even wine? Toxic! Hallucinogenic! Probably consumed in boatloads by your superiors!
+    SatiateThirst (Digestion)
+    вредит Poison 1 (Digestion)
+Rum — Distilled alcoholic drink made from sugarcane byproducts.
+Sake — Alcoholic beverage made by fermenting rice that has been polished.
+Tequila — A strong and mildly flavoured, mexican produced spirit.
+Vermouth — Aromatized, fortified white wine flavored with various botanicals.
+Vodka — Clear distilled alcoholic beverage that originates from Poland and Russia.
+Whiskey — A type of distilled alcoholic beverage made from fermented grain mash.
+Wine — A premium alcoholic beverage made from distilled grape juice.
+Champagne — A premium sparkling wine
+    SatiateThirst (Digestion)
+AcidSpit — A drink for the daring, can be deadly if incorrectly prepared!
+alien brain hemorrhage (AlienBrainHemorrhage) — You might want to get that checked out at Med.
+allies cocktail (AlliesCocktail) — A drink made from your allies, not as sweet as when made from your enemies.
+Aloe — So very, very, very good.
+Amasec — Official drink of the Gun Club!
+Andalusia — A nice, strangely named drink.
+Antifreeze — Ultimate refreshment.
+Atomic Bomb (AtomicBomb) — Nuclear proliferation never tasted so good.
+B-52 (B52) — Coffee, irish cream, and cognac. You will get bombed.
+Bahama Mama (BahamaMama) — Tropical cocktail.
+Banana Honk (BananaHonk) — A drink from Clown Heaven.
+Barefoot — A cassis milkshake, made from cream, fruit juice, and vermouth wine.
+Beepsky smash (BeepskySmash) — Deny drinking this and prepare for THE LAW.
+Black Russian (BlackRussian) — For the lactose-intolerant. Still as classy as a White Russian.
+Bloody Mary (BloodyMary) — A strange yet pleasurable mixture made of vodka, tomato, and lime juice.
+Booger — Ewww...
+Brave Bull (BraveBull) — It's just as effective as Dutch-Courage!
+Bronx — The orange-flavoured cousin of the Manhattan and Martini.
+coconut rum (CoconutRum) — Rum with coconut for that tropical feel.
+Cosmopolitan — Even in the worst situations, nothing beats a fresh cosmopolitan.
+crush depth (CrushDepth) — A stygian drink, harkening back to the abyssopelagic. Dark and Cold, it serves as a reminder that the most ancient emotion is fear, and the strongest type of fear is that of the unknown.
+Cuba libre (CubaLibre) — Rum, mixed with cola. Viva la revolucion.
+dark & stormy (DarkandStormy) — You can almost hear the thunder.
+Demon's Blood (DemonsBlood) — AHHHH!!!!
+Devil's Kiss (DevilsKiss) — Creepy time!
+The Doctor's Delight (DoctorsDelight) — A gulp a day keeps the MediBot away. That's probably for the best.
+    SatiateThirst (Digestion)
+    SatiateHunger (Digestion)
+    лечит Burn 1, Brute 1, Airloss 1, Toxin 1 (Digestion)
+driest martini (DriestMartini) — Only for the experienced. You think you see sand floating in the glass.
+Eggnog — Not enough egg.
+electric shark (ElectricShark) — Fun Shark fact: Selachians make up 20% of Space Station 16’s Engineering staff!
+Erika surprise (ErikaSurprise) — The surprise is, it's green!
+Pan-Galactic Gargle Blaster (GargleBlaster) — Whoah, this stuff looks volatile!
+gin fizz (GinFizz) — Refreshingly lemony, deliciously dry.
+gin and tonic (GinTonic) — An all time classic, mild cocktail.
+Gildlager — 100 proof cinnamon schnapps, made for alcoholic teen girls on spring break.
+Grog — Watered-down rum, pirate approved!
+Hippie's Delight (HippiesDelight) — You just don't get it maaaan.
+Hooch — Either someone's failure at cocktail making or attempt in alchohol production. In any case, do you really want to drink that?
+iced beer (IcedBeer) — A beer which is so cold the air around it freezes.
+Grenade Penguin (IrishSlammer) — What's black and white and red all over?
+Irish cream (IrishCream) — Whiskey-imbued cream. What else could you expect from the Irish.
+Irish coffee (IrishCoffee) — Coffee served with irish cream. Regular cream just isn't the same!
+Jack rose (JackRose) — Excessively Red.
+jungle bird (JungleBird) — Despite the name, it’s not exceptionally popular among Voxes.
+Kalimotxo — A high-class Cuba Libre, for the discerning alcoholic.
+Long Island iced tea (LongIslandIcedTea) — The liquor cabinet, brought together in a delicious mix. Intended for middle-aged alcoholic women only.
+Manhattan — The Detective's undercover drink of choice. He never could stomach gin...
+Manhattan Project (ManhattanProject) — A scientist's drink of choice, for pondering ways to blow up the ship.
+Manly Dorf (ManlyDorf) — Beer and Ale, brought together in a delicious mix. Intended for stout dwarves only.
+Margarita — On the rocks with salt on the rim. Arriba~!
+classic martini (Martini) — Vermouth with Gin. Not quite how 007 enjoyed it, but still delicious.
+Mead — A Viking's drink, though a cheap one.
+Mojito — If it's good enough for Spesscuba, it's good enough for you.
+monkey business (MonkeyBusiness) — You’ve got to wonder how the monkeys feel about this drink.
+Moonshine — Artisanal homemade liquor. What could go wrong?
+Neurotoxin — A strong neurotoxin that puts the subject into a death-like state.
+    SatiateThirst (Digestion)
+    вредит Poison 1 (Digestion)
+Painkiller — A cure for what ails you.
+Patrón (Patron) — Tequila with silver in it, a favorite of alcoholic women in the club scene.
+red mead (RedMead) — The true Viking's drink! Even though it has a strange red color.
+Piña Colada (PinaColada) — For getting lost in the rain.
+Radler — A simple but staple classic, straight out of Space-Germany.
+Sbiten — A spicy Vodka! Might be a little hot for the little guys!
+screwdriver (ScrewdriverCocktail) — Vodka, mixed with plain ol' orange juice. The result is surprisingly delicious.
+CogChamp — Not even Ratvar's Four Generals could withstand this! Qevax Jryy!
+    ModifyStatusEffect (Digestion)
+    SatiateThirst (Digestion)
+Silencer — A drink from Mime Heaven.
+    ModifyStatusEffect (Digestion)
+    SatiateThirst (Digestion)
+Singulo — A blue-space beverage!
+Snow White (SnowWhite) — A cold refreshment.
+sui dream (SuiDream) — 'Comprised of: White soda, blue Curaçao, melon liquor.'
+syndicate bomb (SyndicateBomb) — Somebody set us up the bomb!
+tequila sunrise (TequilaSunrise) — Tequila and orange juice. Much like a Screwdriver, only Mexican.
+The Martinez (TheMartinez) — The edgerunner legend. Remembered by a drink, forgotten by a drunk.
+Three Mile Island iced tea (ThreeMileIsland) — "Made for a woman, strong enough for a man."
+toxins special (ToxinsSpecial) — This thing is ON FIRE! CALL THE DAMN SHUTTLE!
+Vampiro — Popular in Mexico and Transylvania.
+vodka martini (VodkaMartini) — Vodka instead of Gin. Not quite how 007 enjoyed it, but still delicious.
+vodka tonic (VodkaTonic) — For when a gin and tonic isn't russian enough.
+whiskey cola (WhiskeyCola) — Whiskey, mixed with cola. Surprisingly refreshing.
+whiskey soda (WhiskeySoda) — For the more refined griffon.
+White Gilgamesh (WhiteGilgamesh) — A sickening mixture of milk and beer. Makes you feel like you're made of wood.
+White Russian (WhiteRussian) — That's just, like, your opinion, man...
+vodka red bool (VodkaRedBool) — Because heart failure and liver failure go hand in hand.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+Xeno Basher (XenoBasher) — The perfect drink before an expedition.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+Irish bool (IrishBool) — Like a bool in a Ireland shop.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+budget insuls (BudgetInsulsDrink) — A tider's preferred drink.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+watermelon wakeup (WatermelonWakeup) — If you want to be awake, this will do it... Also sweet.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+Rubberneck — A popular drink amongst those adhering to an all synthetic diet.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+Blue Hawaiian (BlueHawaiian) — Aloha! Does that mean hello or goodbye?
+Caipirinha — The São Paulo special, straight from old Brazil.
+moscow mule (MoscowMule) — A surpsingly strong and refreshing mixed drink, served in an iconic copper mug.
+Mimeosa — It has an orange tang so sour you just can't describe it.
+    ModifyStatusEffect (Digestion)
+    SatiateThirst (Digestion)
+Mimosa — Perfect for a lively brunch out with the girls.
+Mayojito — An affront to god and man. Do not drink it.
+    от 5 ед. рвота 50% (Digestion)
+    вредит Poison 0.5 (Digestion)
+    SatiateThirst (Digestion)
+death in the afternoon (DeathInTheAfternoon) — "Pour one jigger absinthe into a Champagne glass. Add iced Champagne until it attains the proper opalescent milkiness. Drink three to five of these slowly." - Ernest Hemingway
+empress 75 (Empress75) — A more refined take on the mimosa. Just the thing Marie Antoinette might've sipped on before the revolution.
+espresso martini (EspressoMartini) — To wake you up and wind you down. Garnished with coffee beans and icy-cold.
+Daiquiri — A classic rum cocktail which remains popular even in the cold reaches of space.
+the sun also rises (TheSunAlsoRises) — A strong cocktail mixed into a murky blend. A secret favorite of tortured authors.
+whiskey sour (WhiskeySour) — What's the secret ingredient? Eggs. It's eggs.
+Zombie (ZombieCocktail) — It gets in your head. Your he-eyeh-ead.
+bacchus's blessing (BacchusBlessing) — You didn't think it was possible for a liquid to be so utterly revolting. Are you sure about this...?
+    SatiateThirst (Digestion)
+    опьянение (Digestion)
+    от 6 ед. вредит Poison 0.2 (Digestion)
+    от 6 ед. вредит Poison 0.04 (Digestion)
+    от 8 ед. рвота 10% (Digestion)
+
+## base_drink
+BaseDrink
+    SatiateThirst (Digestion)
+BaseSoda
+    SatiateThirst (Digestion)
+BaseAlcohol
+    SatiateThirst (Digestion)
+BaseJuice
+
+## drinks
+Coffee — A drink made from brewed coffee beans. Contains a moderate amount of caffeine.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+hot cocoa (HotCocoa) — Smells like the holidays!
+Cream — The fatty, still liquid part of milk. Why don't you mix this with sum scotch, eh?
+    SatiateThirst (Digestion)
+coconut water (CoconutWater) — A favorite of survivors on deserted islands.
+    SatiateThirst (Digestion)
+cream of coconut (CreamOfCoconut) — Sweet, syrupy version of coconut cream with added sugar.
+    SatiateThirst (Digestion)
+cafe latte (CafeLatte) — A nice, strong and tasty beverage while you are reading.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+green tea (GreenTea) — Tasty green tea.
+Grenadine — Not cherry flavored!
+iced coffee (IcedCoffee) — Coffee and ice, refreshing and cool.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+iced green tea (IcedGreenTea) — Cold green tea.
+iced tea (IcedTea) — No relation to a certain rap artist/actor.
+poison berry juice (JuiceBerryPoison) — A surprisingly tasty juice blended from various kinds of very deadly and toxic berries.
+    SatiateThirst (Digestion)
+    вредит Poison 1 (Digestion)
+Lemonade — Drink using lemon juice, water, and a sweetener such as cane sugar or honey.
+    SatiateThirst (Digestion)
+Milk — An opaque white liquid produced by the mammary glands of mammals.
+    SatiateThirst (Digestion)
+goats milk (MilkGoat) — An opaque white liquid produced by a goat. High buttermilk content.
+sheep's milk (MilkSheep) — An opaque white liquid produced by a sheep. High in fat.
+oat milk (MilkOat) — Surprisingly tasty.
+    SatiateThirst (Digestion)
+soy milk (MilkSoy) — Consumers favorite.
+spoiled milk (MilkSpoiled) — This milk has gone rancid.
+    SatiateThirst (Digestion)
+Nothing — Absolutely nothing.
+    SatiateThirst (Digestion)
+nuclear cola (NuclearCola) — Cola, cola never changes.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+    вредит Poison 1 (Digestion)
+soda water (SodaWater) — A container of club soda. Why not make a scotch and soda?
+soy latte (SoyLatte) — A coffee drink made with espresso and steamed soy milk.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+Tea — A drink made by boiling leaves of the tea tree, Camellia sinensis.
+tonic water (TonicWater) — It tastes strange but at least the quinine keeps the Space Malaria at bay.
+Water — A colorless liquid that humans need in order to survive.
+    SatiateThirst (Digestion)
+    вредит Heat 3 (Respiration)
+Ice — Frozen water.
+    SatiateThirst (Digestion)
+dry ramen (DryRamen) — Dry noodles and salt.
+    SatiateHunger (Digestion)
+hot ramen (HotRamen) — Hot noodles.
+    SatiateHunger (Digestion)
+Arnold Palmer (ArnoldPalmer) — Now watch this drive.
+    SatiateThirst (Digestion)
+Pilk — A sickening mixture of milk and cola.
+    SatiateThirst (Digestion)
+Posca — Poor warriors' drink from a forgotten era.
+citrus bikeshed (OrangeLimeSoda) — The soda should be orange! No, it should be lemon-lime!
+Rewriter — The secret of the sanctuary of the Librarian...
+Mopwata — Dirty, stagnant mop water.
+    SatiateThirst (Digestion)
+Tortuga — Perfect for pirates who’ve been selected as the designated driver. Yarr!
+
+## juice
+apple juice (JuiceApple) — It's a little piece of Eden.
+banana juice (JuiceBanana) — The raw essence of a banana. HONK.
+berry juice (JuiceBerry) — A delicious blend of several different kinds of berries.
+blue pumpkin juice (JuiceBluePumpkin) — The juice of a blue pumpkin. Smells like pool water.
+bungo juice (JuiceBungo) — The juice of a bungo fruit. Exotic!
+carrot juice (JuiceCarrot) — It's like a carrot, but less crunchy.
+grape juice (JuiceGrape) — Freshly squeezed juice from red grapes. Quite sweet.
+lemon juice (JuiceLemon) — This juice is VERY sour.
+lime juice (JuiceLime) — The sweet-sour juice of limes.
+orange juice (JuiceOrange) — Both delicious AND rich in Vitamin C. What more do you need?
+pineapple juice (JuicePineapple) — The delicious juice of a pineapple.
+tomato juice (JuiceTomato) — Tomatoes made into juice. What a waste of good tomatoes, huh?
+watermelon juice (JuiceWatermelon) — The delicious juice of a watermelon.
+cherry juice (JuiceCherry) — Tasty cherry juice, sweet and tangy.
+
+## soda
+Space Cola (Cola) — A sweet, carbonated soft drink.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+Roy Rogers (RoyRogers) — Solid proof that there IS something known as too sweet.
+    SatiateThirst (Digestion)
+Changeling Sting (ChangelingSting) — You take a tiny sip and feel a burning sensation...
+Dr. Gibb (DrGibb) — A delicious blend of 42 different flavours.
+Red Bool (EnergyDrink) — A dose of energy! Nanotrasen is not responsible if you grow avian appendages.
+    SatiateThirst (Digestion)
+    ModifyStatusEffect (Digestion)
+grape soda (GrapeSoda) — It's Graaaaaape!
+ice cream (IceCream) — It was either this or the microwave, and nobody wants ice cream soup!
+Smite (LemonLime) — Tangy lime and lemon soda.
+Smite Cranberry (LemonLimeCranberry) — Tart cranberry, Christmas, and a hint of lemon and lime.
+PWR Game (PwrGame) — The only drink with the PWR that true gamers crave. When a gamer talks about gamerfuel, this is what they're literally referring to.
+root beer (RootBeer) — A very sweet, carbonated drink reminiscent of sarsaparilla. Goes well with ice cream.
+root beer float (RootBeerFloat) — Root beer, but now with ice cream on top. It truly is the magnum opus of Canadian summertime drinks.
+Sol Dry (SolDry) — Sweet ginger soda from outer space!
+Shirley Temple (ShirleyTemple) — A favorite amongst younger members of the crew.
+    SatiateThirst (Digestion)
+Space Solar Wind (SpaceMountainWind) — Blows right through you like a solar wind.
+Space-Up (SpaceUp) — Tastes like a hull breach in your mouth.
+Starkist — A sweet, orange flavored soft drink.
+Fourteen Loko (FourteenLoko) — A highly processed liquid substance barely-passing intergalatic health standards for a soft drink.
+    SatiateThirst (Digestion)
+    вредит Poison 1 (Digestion)
+Shambler's Juice (ShamblersJuice) — ~Shake me up some of that Shambler's Juice!~
+
+## condiments
+Astrotame — The sweetness of a thousand sugars but none of the calories.
+BBQ sauce (BbqSauce) — Hand wipes not included.
+Coldsauce — Leaves the tongue numb in its passage.
+corn oil (Cornoil) — Corn oil, A delicious oil used in cooking. Made from corn.
+horseradish sauce (HorseradishSauce) — Smelly horseradish sauce.
+Hotsauce — Burns so good.
+Ketchup — Made from pureed tomatoes and flavored with spices.
+Ketchunaise — So-called Russian dressing, popular among Space Americans.
+laughin' syrup (LaughinSyrup) — The product of juicing Laughin' Peas. Fizzy, and seems to change flavour based on what it's used with!
+mayonnaise (Mayo) — Creamy sauce, made from oil, egg, and some (edible) acid.
+Mustard — Basic yellow mustard, made from the seeds of the mustard plant.
+Vinaigrette — A basic salad dressing made with oil, vinegar and seasoning.
+soy sauce (Soysauce) — A salty soy-based flavoring.
+    SatiateHunger (Digestion)
+    SatiateThirst (Digestion)
+table salt (TableSalt) — Commonly known as salt, Sodium Chloride is often used to season food or kill borers instantly.
+    SatiateThirst (Digestion)
+Syrup — Delicious syrup made from tree sap, somehow stickier than glue.
+    SatiateHunger (Digestion)
+
+## food
+Nutriment — All the vitamins, minerals, and carbohydrates the body needs in pure form.
+    SatiateHunger (Metabolites)
+Vitamin — Found in healthy, complete meals.
+    лечит Brute 0.5, Burn 0.5 50% (Metabolites)
+    ModifyBleed (Metabolites)
+    SatiateHunger (Metabolites)
+Protein — Found in certain meals, good for bodily health.
+    лечит Brute 0.4 50% (Metabolites)
+    ModifyBloodLevel (Metabolites)
+    SatiateHunger (Metabolites)
+Sugar — Tasty spacey sugar!
+    от 0.1 ед. SatiateHunger (Metabolites)
+pumpkin flesh (PumpkinFlesh) — The mushy, sweet remains of a pumpkin.
+
+## ingredients
+Flour — Used for baking.
+    SatiateThirst (Digestion)
+Cornmeal — Used for baking.
+    SatiateThirst (Digestion)
+Oats — Used for a variety of tasty purposes.
+universal enzyme (Enzyme) — Used in cooking various dishes.
+raw egg (Egg) — Used for baking.
+cooked egg (EggCooked) — Cooked chicken embryo, delicious.
+black pepper (Blackpepper) — Often used to flavor food or make people sneeze.
+Vinegar — Often used to flavor food.
+    от 6 ед. рвота 10% (Digestion)
+Rice — Hard, small white grains.
+olive oil (OilOlive) — Viscous and fragrant.
+Oil — Used by chefs to cook.
+Capsaicin Oil (CapsaicinOil) — Capsaicin Oil is the ingredient found in different types of hot peppers.
+    AdjustTemperature (Digestion)
+    от 5 ед. вредит Caustic 1 (Digestion)
+cocoa powder (CocoaPowder) — From the best varieties of cocoa beans
+    от 0.1 ед. SatiateHunger (Digestion)
+Butter — You can believe it!
+tea powder (TeaPowder) — Finely ground tea leaves, used for making tea.
+    SatiateThirst (Digestion)
+Frost Oil (FrostOil) — Frost Oil is the ingredient found in chilly peppers, a rare pepper mutation.
+    AdjustTemperature (Digestion)
+    от 5 ед. вредит Cold 1 (Digestion)
+
+## biological
+Blood — I hope this is ketchup.
+    SatiateThirst (Digestion)
+    лечит Brute 3, Burn 1.25 (Digestion)
+    вредит Poison 0.2
+insect blood (InsectBlood) — Okay, this is really gross. It almost looks.. alive?
+Slime — You thought this was gradient blood at first, but you were mistaken.
+    SatiateHunger (Digestion)
+    ModifyBloodLevel (Digestion)
+Sap — Sticky, sweet tree blood.
+    SatiateHunger (Digestion)
+    SatiateThirst (Digestion)
+blue blood (CopperBlood) — Contains copper as opposed to iron which gives it a distinct blue color.
+anaerobic blood (AmmoniaBlood) — Nothing else in the entire galaxy smells quite so appalling.
+sulfuric blood (SulfurBlood) — Feels almost acidic.
+zombie blood (ZombieBlood) — Would not advise eating. Can be used to create an inoculation against the infection.
+    SatiateThirst (Digestion)
+    вредит Poison 4
+    рвота 25%
+Ichor — An extremely potent regenerative chemical, perfected by space fauna evolution. Produced in the dragon's digestive system, it is seen as an exotic commodity due to the gargantuan effort of hunting for it.
+    SatiateThirst
+    ModifyBloodLevel
+    лечит Burn 3, Brute 3, Toxin 2
+    лечит Bloodloss 3
+    ModifyBleed
+Fat — No matter how it was obtained, its application is important.
+Vomit — You can see a few chunks of someone's last meal in it.
+    SatiateThirst (Digestion)
+grey matter (GreyMatter) — Thought juice, the stuff that leaks out of your ears.
+    SatiateHunger (Digestion)
+    вредит Cellular 2 (Digestion)
+living tissue (LivingTissue) — A mix of visceral matter from an alien species. You can feel it staring at you.
+
+## botany
+EZ nutrient (EZNutrient) — Give your plants some of those EZ nutrients! Dionas find this delicious.
+    SatiateHunger (Digestion)
+left-4-zed (Left4Zed) — A cocktail of mutagenic compounds that gives nutrients, harms and affects plant life's genome.
+    SatiateHunger
+    вредит Poison 1
+pest killer (PestKiller) — A mixture that targets pests. While useful it slowly poisons plants with toxins, be careful when using it.
+    вредит Poison 3
+plant-B-gone (PlantBGone) — A harmful toxic mixture to kill plantlife. Very effective against kudzu.
+    лечит Poison 4; вредит Blunt 2, Slash 1, Piercing 1
+robust harvest (RobustHarvest) — A highly effective fertilizer with a limited potency-boosting effect on plants. Use it cautiously, as excessive application can reduce plant yield. It has a particularly beneficial effect on dionas.
+    лечит Poison 2, Blunt 3, Slash 3, Piercing 3
+    от 30 ед. вредит Asphyxiation 1, Heat 2, Poison 1
+    от 80 ед. Polymorph
+Sedin — A modified version of diethylamine that can restore seeds on plants at the cost of potency.
+weed killer (WeedKiller) — A mixture that targets weeds. Very effective against kudzu. While useful it slowly poisons plants with toxins, be careful when using it.
+    вредит Poison 4
+Ammonia — An effective fertilizer, it gives your plants some nutrients.
+    вредит Caustic 1
+    от 1 ед. вредит Poison 1 (Respiration)
+    от 0.8 ед. рвота 12% (Respiration)
+    от 1 ед. лечит Brute 2.5, Burn 2.5, Airloss 5 (Respiration)
+    от 1 ед. ModifyBloodLevel (Respiration)
+    Oxygenate (Respiration)
+Diethylamine — A very potent fertilizer, treats plants with nutrients, eliminates pests, and sometimes it can even speed up growth.
+    вредит Caustic 1
+
+## chemicals
+Acetone — A slick, slightly carcinogenic liquid. Has a multitude of mundane uses in everyday life.
+Phenol — An aromatic ring of carbon with a hydroxyl group. A useful precursor to some medicines, but has no healing properties on its own.
+    вредит Caustic 1, Poison 2
+Charcoal — A black, porous solid
+    лечит Poison 1
+    CleanBloodstream
+Ash — A light grey powdery residue
+Lye — A translucent, orange, alkaline solution used in traditional soap production.
+    вредит Caustic 1
+sodium carbonate (SodiumCarbonate) — A white, odorless, water-soluble salt that yields an alkaline solution in water.  Also known as soda ash.
+Artifexium — A lavender mixture of microscopic artifact fragments and a strong acid. It has the ability to activate artifacts.
+    вредит Caustic 2
+artifact glue (ArtifactGlue) — Mixture of glue and artifexium. It can restore durability of nodes in artifact on touch.
+Benzene — An aromatic, slightly carcinogenic, ring of carbon, forming a base for many organic compounds.
+    вредит Cellular 1
+Hydroxide — A strong alkaline chemical, forming a base for many organic compounds.
+sodium hydroxide (SodiumHydroxide) — A white, odorless, water-soluble salt that yields an strong alkaline solution in water. Causes burns and vomiting when ingested.
+    вредит Heat 1.5
+    от 5 ед. рвота 10%
+Fersilicite — An intermetallic compound with unusual magnetic properties at low temperatures.
+sodium polyacrylate (SodiumPolyacrylate) — A super-absorbent polymer with assorted industrial uses.
+    SatiateThirst
+cellulose fibers (Cellulose) — A crystaline polydextrose polymer, plants swear by this stuff.
+Rororium — A strange substance which fills the cores of the hivelords that roam the mining asteroid. Thought to be the source of their regenerative powers.
+    лечит Brute 4
+    ModifyStatusEffect
+
+## cleaning
+Bleach — Heavy duty cleaner that can clean tiles better than Space Cleaner. Extremely toxic when ingested.
+    вредит Poison 2, Caustic 2
+space cleaner (SpaceCleaner) — This is able to clean almost all surfaces of almost anything that may dirty them. The janitor is likely to appreciate refills.
+soap (SoapReagent) — I wouldn't clean my mouth out with this if I were you.
+    от 6 ед. рвота 20% (Digestion)
+space lube (SpaceLube) — Space Lube is a high performance lubricant intended for maintenance of extremely complex mechanical equipment (and certainly not used to make people slip).
+space glue (SpaceGlue) — Space Glue is a high performance glue intended for maintenance of extremely complex mechanical equipment (and certainly not used to make people stick to the floor).
+    ModifyStatusEffect
+    ModifyStatusEffect (Digestion)
+
+## elements
+Aluminium — A silver, soft, non-magnetic, and ductile metal.
+Carbon — A black, crystalline solid.
+Chlorine — A yellow-green gas which is toxic to humans.
+    вредит Poison 2
+Copper — A soft, malleable, and ductile metal with very high thermal and electrical conductivity.
+    вредит Poison 0.1
+    ModifyBloodLevel
+Fluorine — A highly toxic pale yellow gas. Extremely reactive.
+    вредит Caustic 0.5, Poison 0.5
+Gold — Gold is a dense, soft, shiny metal and the most malleable and ductile metal known.
+Hydrogen — A light, flammable gas.
+Iodine — Commonly added to table salt as a nutrient. On its own it tastes far less pleasing.
+Iron — A silvery-grey metal which forms iron oxides (rust) with contact with air. Commonly alloyed with other elements to create alloys such as steel.
+    вредит Poison 0.1
+    ModifyBloodLevel
+Lithium — A soft, silvery-white alkali metal. It's highly reactive, and ignites if it makes contact with water.
+    вредит Poison 0.05
+Mercury — A silver metal which is liquid at room temperature. It's highly toxic to humans.
+    вредит Poison 1
+    ModifyStatusEffect
+Potassium — A soft, shiny grey metal. Even more reactive than lithium.
+Phosphorus — A reactive metal used in pyrotechnics and weapons.
+Radium — A radioactive metal, silvery-white in its pure form. It glows due to its radioactivity and is highly toxic.
+Silicon — A hard and brittle crystalline solid with a blue-grey color.
+    вредит Poison 1.5
+Silver — A soft, white, lustrous transition metal, it has the highest electrical conductivity of any element and the highest thermal conductivity of any metal.
+Sulfur — A yellow, crystalline solid.
+    вредит Caustic 0.1
+Sodium — A silvery-white alkali metal. Highly reactive in its pure form.
+Uranium — A grey metallic chemical element in the actinide series, weakly radioactive.
+    вредит Radiation 2
+Zinc — A silvery, brittle metal, often used in batteries to carry charge.
+
+## fun
+Carpetium — A mystical chemical, usually outsourced from the Clown Planet, that covers everything it touches in carpet. Somehow filters out carpotoxin from the blood stream.
+    от 1 ед. AdjustReagent
+Fiber — A raw material, usually extracted from wool or other fabric products.
+    SatiateHunger (Digestion)
+buzzochloric bees (BuzzochloricBees) — Liquid bees. Oh god it's LIQUID BEES NO-
+    вредит Poison 2, Piercing 2
+ground Bee (GroundBee) — Bee grounds. Gross.
+Brass — Smells like clockwork.
+Licoxide — A synthetic battery acid. It looks... electrifying.
+    Electrocute 50%
+Razorium — A strange, non-newtonian chemical. It is produced when two conflicting brute medications are combined. When force is applied to it, it temporarily hardens creating millions of tiny, sharp edges. Very painful.
+    вредит Slash 9
+Fresium — A mysterious compound that slows the vibration of atoms and molecules... somehow. In layman's terms, it makes things cold... REALLY cold. Can cause long-lasting movement issues if ingested.
+    лечит Heat 3; вредит Cold 0.01
+    AdjustTemperature
+    до 40 ед. MovementSpeedModifier
+    от 40 ед. MovementSpeedModifier
+Laughter — Some say that this is the best medicine, but recent studies have proven that to be untrue.
+juice that makes you Weh (JuiceThatMakesYouWeh) — Pure essence of lizard plush. Makes you Weh!
+    от 50 ед. Polymorph
+    от 50 ед. AdjustReagent
+juice that makes you Hew (JuiceThatMakesYouHew) — Pure essence of inversed lizard plush. Makes you Hew!
+    от 50 ед. Polymorph
+    от 50 ед. AdjustReagent
+Felinase — A type of carcinogenic enzyme known to break down proteins found within the vocal cords of most animals. Mixing is NOT recommended.
+    от 15 ед. вредит Radiation 0.5
+    от 30 ед. AdjustReagent
+    от 10 ед. ModifyStatusEffect
+Caninase — A type of carcinogenic enzyme known to break down proteins found within the vocal cords of most animals. Mixing is NOT recommended.
+    от 15 ед. вредит Radiation 0.5
+    от 30 ед. AdjustReagent
+    от 10 ед. ModifyStatusEffect
+
+## gases
+Oxygen — An oxidizing, colorless gas.
+    Oxygenate
+    ModifyLungGas
+    вредит Poison 1.5
+    AdjustAlert
+    Oxygenate (Respiration)
+    ModifyLungGas (Respiration)
+    вредит Poison 0.7 (Respiration)
+    AdjustAlert (Respiration)
+Plasma — Funky, space-magic pixie dust. You probably shouldn't eat this, but we both know you will anyways.
+    вредит Poison 1.5
+    AdjustReagent
+    вредит Poison 0.1 (Respiration)
+    AdjustAlert (Respiration)
+Tritium — Radioactive space-magic pixie dust.
+    вредит Radiation 1.5
+    вредит Radiation 1 (Respiration)
+    AdjustAlert (Respiration)
+carbon dioxide (CarbonDioxide) — You have genuinely no idea what this is.
+    Oxygenate
+    вредит Poison 0.4
+    Oxygenate (Respiration)
+    вредит Poison 0.8 (Respiration)
+Nitrogen — A colorless, odorless unreactive gas. Highly stable.
+    вредит Cold 0.5
+    Oxygenate (Respiration)
+    ModifyLungGas (Respiration)
+nitrous oxide (NitrousOxide) — You know how everything seems funnier when you're tired? Well...
+    вредит Poison 1
+    MovementSpeedModifier (Respiration)
+    ModifyStatusEffect (Respiration)
+    вредит Poison 1 (Respiration)
+Frezon — A highly effective coolant.. and hallucinogenic.
+    вредит Cellular 0.5
+    ModifyStatusEffect
+    опьянение
+    вредит Cellular 0.05 (Respiration)
+    ModifyStatusEffect (Respiration)
+    опьянение (Respiration)
+
+## medicine
+Cryptobiolin — Causes confusion and dizziness.
+    ModifyStatusEffect
+Dylovene — A broad-spectrum anti-toxin, which treats toxin damage in organisms. Overdosing will cause vomiting, dizzyness and pain.
+    лечит Poison 1
+    от 20 ед. вредит Blunt 2
+    от 20 ед. тряска
+    от 20 ед. рвота 2%
+    от 15 ед. опьянение
+Diphenhydramine — Rapidly purges the body of histamine, reduces jitteriness, causes drowsiness, and treats poison damage. Often included in sleep medication.
+    AdjustReagent
+    GenericStatusEffect
+    ModifyStatusEffect
+    лечит Poison 3
+Ethylredoxrazine — Neutralises the effects of alcohol in the blood stream. Though it is commonly needed, it is rarely requested.
+    ModifyStatusEffect
+    лечит Poison 0.5
+Arithrazine — A mildly unstable medication used for the most extreme case of radiation poisoning. Exerts minor stress on the body.
+    лечит Radiation 3; вредит Blunt 1.5
+Bicaridine — An analgesic which is highly effective at treating brute damage. It's useful for stabilizing people who have been severely beaten, as well as treating less life-threatening injuries.
+    лечит Brute 1.5
+    от 15 ед. вредит Asphyxiation 0.5, Poison 1.5
+    от 30 ед. рвота 2%
+    от 15 ед. тряска
+    опьянение
+Cryoxadone — Required for the proper function of cryogenics. Heals all standard types of damage, but only works in temperatures under 213K. It can treat and rejuvenate plants when applied in small doses.
+    AdjustTemperature
+    лечит Airloss 3, Brute 2, Burn 2, Toxin 2
+Doxarubixadone — A cryogenics chemical. Heals cellular damage caused by dangerous gasses and chemicals.
+    лечит Cellular 2
+Dermaline — An advanced chemical that is more effective at treating burn damage than kelotane.
+    лечит Heat 1.5, Shock 1.5, Cold 1.5
+    от 10 ед. вредит Asphyxiation 1, Cold 2, Blunt 0.5
+    от 10 ед. тряска
+Dexalin — Used for treating minor oxygen deprivation and bloodloss. A required reagent for dexalin plus.
+    лечит Asphyxiation 1, Bloodloss 0.5
+    от 20 ед. вредит Asphyxiation 3, Cold 1
+dexalin plus (DexalinPlus) — Used in treatment of extreme cases of oxygen deprivation and bloodloss. Flushes heartbreaker toxin out of the blood stream.
+    лечит Asphyxiation 3.5, Bloodloss 3
+    от 1 ед. AdjustReagent
+    от 25 ед. вредит Asphyxiation 5, Cold 3
+Epinephrine — An effective stabilizing chemical used to keep a critical person from dying to asphyxiation while patching up minor damage during crit. Flushes heartbreaker toxin out the blood stream at the cost of more epinephrine, but may add histamine. Helps reduce stun time. Commonly found in the form of emergency medipens.
+    от 45 ед. AdjustReagent
+    до 20 ед. лечит Asphyxiation 3, Poison 0.5
+    до 20 ед. лечит Brute 0.5, Burn 0.5
+    от 20 ед. вредит Asphyxiation 1, Poison 1
+    AdjustReagent
+    от 1 ед. AdjustReagent
+    от 1 ед. AdjustReagent 10%
+    ModifyStatusEffect
+    ModifyKnockdown
+Hyronalin — A weak treatment for radiation damage. A precursor to arithrazine and phalanximine. Can cause vomiting.
+    лечит Radiation 1
+    рвота 2%
+    от 30 ед. вредит Heat 2
+    от 30 ед. тряска
+Ipecac — A rapid-acting emetic. Useful for stopping unmetabolized poisons, or mass-vomiting sessions.
+    от 4 ед. рвота 30%
+Inaprovaline — Inaprovaline is a synaptic stimulant and cardiostimulant, commonly used to treat asphyxiation damage caused during critical states and reduce bleeding. Used in many advanced medicines.
+    лечит Asphyxiation 2
+    ModifyBleed
+Kelotane — Treats burn damage. Overdosing greatly reduces the body's ability to retain water.
+    лечит Heat 0.33, Shock 0.33, Cold 0.33
+    от 30 ед. SatiateThirst
+Leporazine — A chemical used to stabilize body temperature and rapidly cure cold damage. Great for unprotected EVA travel, but prevents the use of cryogenic tubes.
+    лечит Cold 4
+    AdjustTemperature
+    AdjustReagent
+Barozine — A potent chemical that prevents pressure damage. Causes extreme stress on the body.
+    вредит Heat 0.5 30%
+    от 30 ед. вредит Poison 3
+    от 30 ед. рвота 15%
+    ModifyStatusEffect
+    GenericStatusEffect
+    тряска
+Phalanximine — An advanced chemical used in the treatment of cancer. Causes moderate radiation poisoning, acid burns, and vomiting on organics. Can potentially remove the death gene on plants.
+    лечит Cellular 0.3; вредит Radiation 0.15, Caustic 0.15
+    от 11 ед. вредит Radiation 0.2
+    от 1 ед. вредит Caustic 0.3
+Polypyrylium Oligomers (PolypyryliumOligomers) — A purple mixture of short polyelectrolyte chains not easily synthesized in the laboratory. Heals asphyxiation and brute damage. Stops bleeding over time.
+    лечит Brute 1.75, Airloss 1
+    от 30 ед. вредит Asphyxiation 3.5
+    ModifyBleed
+Ambuzol — A highly engineered substance able to halt the progression of a zombie infection.
+    от 10 ед. CureZombieInfection
+    от 10 ед. CureZombieInfection (Digestion)
+ambuzol plus (AmbuzolPlus) — Further engineered with omnizine, inoculates the living against the infection.
+    от 5 ед. CureZombieInfection
+    от 5 ед. CureZombieInfection (Digestion)
+pulped banana peel (PulpedBananaPeel) — Pulped banana peels have some effectiveness against bleeding.
+    ModifyBleed
+Saline — A mixture of salt and water. Commonly used to treat dehydration or low fluid presence in blood.
+    SatiateThirst
+    ModifyBloodLevel
+Siderlac — A powerful anti-caustic medicine derived from plants.
+    лечит Caustic 5
+Stellibinin — A natual anti-toxin with particular effectiveness against amatoxin.
+    лечит Poison 4
+    от 1 ед. AdjustReagent
+Synaptizine — A toxic chemical that halves the duration of stuns and knockdowns.
+    вредит Poison 2
+    ModifyStatusEffect
+    ModifyKnockdown
+tranexamic acid (TranexamicAcid) — A blood-clotting medicine used to prevent profuse bleeding. Causes heavier bleeding on overdose. Commonly found in small doses within emergency medipens.
+    ModifyBleed
+    от 15 ед. вредит Bloodloss 3
+Tricordrazine — A wide-spectrum stimulant, originally derived from cordrazine. Treats minor damage of all basic health types as long as the user is not heavily wounded. Best used as an additive to other chemicals.
+    лечит Brute 1, Burn 1
+    лечит Poison 0.5
+Lipozine — A chemical that accelerates metabolism, causing the user to hunger faster.
+    SatiateHunger
+Omnizine — A soothing milky liquid with an iridescent gleam. A well known conspiracy theory says that its origins remain a mystery because revealing the secrets of its production would render most commercial pharmaceuticals obsolete.
+    лечит Burn 2, Toxin 2, Airloss 2, Brute 2
+Ultravasculine — A complicated anti-toxin solution that quickly flushes out toxin while causing minor stress on the body. Reacts with histamine, duplicating itself while flushing it out. Overdose causes extreme pain.
+    при 0-20 ед. лечит Toxin 6
+    при 0-20 ед. вредит Blunt 1.5
+    от 20 ед. лечит Toxin 2
+    от 20 ед. вредит Blunt 6
+    от 1 ед. AdjustReagent
+Oculine — A simple saline compound used to treat the eyes via ingestion.
+    EyeDamage
+Cognizine — A mysterious chemical which is able to make any non-sentient creature sentient.
+    от 5 ед. MakeSentient
+Ethyloxyephedrine — A mildly unstable medicine derived from desoxyephedrine, primarily used to combat narcolepsy.
+    тряска
+    GenericStatusEffect
+    ModifyStatusEffect
+Diphenylmethylamine — A more stable medicine than ethyloxyephedrine. Useful for keeping someone awake.
+    ModifyStatusEffect
+Sigynate — A thick pink syrup useful for neutralizing acids and soothing trauma caused by acids. Tastes sweet!
+    лечит Caustic 1.25
+    от 16 ед. вредит Heat 1
+    от 20 ед. тряска
+    от 30 ед. рвота 2%
+    от 1 ед. рвота 10%
+Lacerinol — A fairly unreactive chemical that boosts collagen synthesis to incredible levels, healing slash trauma.
+    лечит Slash 2; вредит Heat 0.2
+    от 12 ед. вредит Cold 1.5
+Puncturase — A fizzy chemical that helps rebuild trauma caused by piercing damage, leaving a slight amount of tissue damage behind.
+    лечит Piercing 2.5; вредит Radiation 0.05
+    от 12 ед. вредит Blunt 3
+Bruizine — Originally developed as a cough medicine, it turns out this chemical is wildly effective at treating blunt force trauma.
+    лечит Blunt 2.25
+    SatiateHunger
+    от 10.5 ед. вредит Poison 2.5
+holy water (Holywater) — The cleanest and purest of waters straight from the hands of god, is known to magically heal wounds.
+    SatiateThirst (Digestion)
+    лечит Blunt 0.2, Poison 0.2, Heat 0.2, Shock 0.2, Cold 0.2 (Digestion)
+Pyrazine — Efficiently heals burns from the hottest of fires. Causes massive internal bleeding when overdosed.
+    лечит Heat 1
+    от 20 ед. вредит Slash 0.5, Piercing 0.5
+    от 15 ед. рвота 10%
+Insuzine — Rapidly repairs dead tissue caused by electrocution, but cools you slightly. Completely freezes the patient when overdosed.
+    лечит Shock 1.5
+    AdjustReagent
+    AdjustTemperature
+    от 12 ед. вредит Cold 1
+    от 12 ед. AdjustTemperature
+    от 12 ед. тряска
+Opporozidone — A difficult to synthesize cryogenic drug used to regenerate rotting tissue and brain matter.
+    ReduceRotting
+Arcryox — A sickeningly blue cryogenics chemical that is able to heal extreme wounds even on the dead. It has trouble stabilizing patients however.
+    AdjustTemperature
+    лечит Brute 3, Burn 3
+Aloxadone — A cryogenics chemical. Used to treat severe burns and frostbite via regeneration of the affected tissue. Works regardless of the patient being alive or dead.
+    лечит Burn 4.5
+Mannitol — Efficiently restores brain damage.
+Psicodine — Suppresses anxiety and other various forms of mental distress. Overdose causes hallucinations and minor toxin damage.
+    от 30 ед. вредит Poison 2
+    от 30 ед. ModifyStatusEffect
+    GenericStatusEffect
+    ModifyStatusEffect
+potassium iodide (PotassiumIodide) — Will reduce the damaging effects of radiation by 90%. Prophylactic use only.
+    ModifyStatusEffect
+    от 20 ед. вредит Poison 1
+Haloperidol — Removes most stimulating and hallucinogenic drugs. Reduces druggy effects and jitteriness. Causes drowsiness.
+    ModifyStatusEffect
+    GenericStatusEffect
+    AdjustReagent
+Heparin — Commonly used as an anticoagulant medication. Causes blood to have difficulty forming clots. Can cause internal bleeding when overdosed.
+    ModifyStatusEffect
+    от 15 ед. ModifyBleed
+
+## narcotics
+Desoxyephedrine — A more effective ephedrine, with more active downsides. Requires less doses to cure narcolepsy.
+    вредит Poison 0.55, Blunt 1.1
+    от 16 ед. вредит Poison 3, Asphyxiation 2
+    MovementSpeedModifier
+    ModifyStatusEffect
+    тряска
+    GenericStatusEffect
+    до 0.01 ед. ModifyStatusEffect
+Ephedrine — A caffeinated adrenaline stimulator chemical that makes you faster and harder to knock down. Also helps combat narcolepsy at dosages over thirty, at the cost of severe nerval stress.
+    MovementSpeedModifier
+    ModifyStatusEffect
+    ModifyKnockdown
+    тряска
+    от 20 ед. вредит Poison 2, Asphyxiation 2
+    до 0.01 ед. ModifyStatusEffect
+hyperzine (Stimulants) — A chemical cocktail developed by Donk Co. that allows agents to recover from stuns faster, move more quickly, and grants a small heal when you're more dead than alive. Due to the complex nature of the chemical, it is much harder for the body to purge naturally.
+    MovementSpeedModifier
+    ModifyStatusEffect
+    ModifyKnockdown
+    тряска
+    от 45 ед. вредит Poison 3
+    до 0.01 ед. ModifyStatusEffect
+    от 1 ед. AdjustReagent
+    ModifyBleed
+    лечит Burn 0.5, Brute 0.5
+    лечит Asphyxiation 2
+    SatiateHunger
+    SatiateThirst
+THC — The main psychoactive compound in cannabis.
+    ModifyStatusEffect
+Nicotine — Dangerous and highly addictive, but that's what the propaganda says.
+Impedrezene — A narcotic that impedes one's ability by slowing down the higher brain cell functions.
+    MovementSpeedModifier
+    вредит Poison 2
+    ModifyStatusEffect
+    рвота 5%
+    опьянение
+space mirage (SpaceDrugs) — An illegal compound which induces a number of effects such as loss of balance and visual artefacts.
+    ModifyStatusEffect
+Bananadine — A mild psychedelic that is found in small traces in banana peels.
+    ModifyStatusEffect
+Nocturine — A highly effective sedative and hypnotic, developed by the Syndicate for stealth operations. One-way ticket to honk-shoo town.
+    MovementSpeedModifier
+    от 8 ед. ModifyStatusEffect
+mute toxin (MuteToxin) — A thick chemical that coats the vocal cords, making the user unable to speak during metabolization.
+    ModifyStatusEffect
+norepinephric acid (NorepinephricAcid) — A smooth chemical that blocks the optical receptors, rendering the user blind during metabolization.
+    от 20 ед. ModifyStatusEffect
+tear gas (TearGas) — A chemical that causes severe irritation and crying, commonly used in riot control.
+    от 4 ед. ModifyStatusEffect
+    от 4 ед. MovementSpeedModifier
+Happiness — Fills you with ecstatic numbness and causes minor brain damage. Highly addictive. If overdosed causes sudden mood swings.
+    ModifyStatusEffect
+
+## pyrotechnic
+BasePyrotechnic
+Thermite — A mixture that becomes extremely hot when ignited.
+    вредит Heat 2, Poison 1
+Napalm — It's just a little flammable.
+    вредит Heat 2, Poison 1, Caustic 0.5
+    Flammable
+Phlogiston — Catches you on fire and makes you ignite.
+    вредит Heat 3, Poison 1
+    Flammable
+    AdjustTemperature
+    Ignite
+chlorine trifluoride (ChlorineTrifluoride) — You really, REALLY don't want to get this shit anywhere near you.
+    вредит Heat 2, Poison 1, Caustic 0.5
+    Flammable
+    AdjustTemperature
+foaming agent (FoamingAgent) — Makes foam such as that's required in metal foam grenades.
+welding fuel (WeldingFuel) — Used by welders to weld.
+    SatiateThirst
+    вредит Poison 1
+    Flammable
+xenoborg oil (XenoborgOil) — A light oil used to slip and burn organics.
+    SatiateThirst
+    вредит Poison 1
+    Flammable
+Fluorosurfactant — A perfluoronated sulfonic acid that forms a foam when mixed with water.
+
+## toxins
+Toxin — An unsurprisingly toxic chemical. Available at an emagged chem dispenser.
+    вредит Poison 4
+CarpoToxin — A highly toxic reagent found in space carps. Causes a painful burning sensation.
+    вредит Poison 4
+chloral hydrate (ChloralHydrate) — A sedative and hypnotic chemical. Commonly used to put other people to sleep, whether they want to or not.
+    MovementSpeedModifier
+    ModifyStatusEffect
+    от 20 ед. вредит Poison 1.5
+GastroToxin — A moderately toxic byproduct of decomposition. Most commonly found in spoiled food.
+    вредит Poison 2
+    от 2 ед. рвота 20%
+Mold — A fungal growth, often found in dark, humid places or on expired bread. Will cause you to develop a disease if ingested.
+    вредит Poison 1
+polytrinic acid (PolytrinicAcid) — An extremely corrosive chemical substance. Severely burns anyone who comes directly into contact with it.
+    вредит Caustic 11
+ferrochromic acid (FerrochromicAcid) — A mildy corrosive solution, unable of causing severe danger unless ingested.
+    SatiateThirst
+    вредит Heat 2.5, Caustic 1
+fluorosulfuric acid (FluorosulfuricAcid) — A highly corrosive chemical, capable of leaving quite a mark on your skin.
+    вредит Caustic 8
+sulfuric acid (SulfuricAcid) — A corrosive chemical. Keep away from your face.
+    вредит Caustic 5
+unstable mutagen (UnstableMutagen) — Causes mutations when injected into living people or plants. High doses may be lethal, especially in humans.
+    вредит Radiation 3
+heartbreaker toxin (HeartbreakerToxin) — A hallucinogenic compound derived from mindbreaker toxin. it blocks neurological signals to the respiratory system, causing asphyxiation. Dexalin plus and epinephrine will filter it out, however.
+    вредит Asphyxiation 5
+Lexorin — A fast-acting chemical used to asphyxiate people rapidly.
+    вредит Asphyxiation 5, Bloodloss 5
+mindbreaker toxin (MindbreakerToxin) — A potent hallucinogenic compound that is formerly known as LSD.
+    ModifyStatusEffect
+Histamine — A chemical caused by allergenics reacting with antibodies. Lethal at large quantities.
+    вредит Blunt 2 10%
+    от 45 ед. вредит Blunt 2, Asphyxiation 2, Poison 2
+Theobromine — A bitter alkaloid of the cacao plant, commonly found in chocolate. Do not feed to animals.
+    вредит Poison 0.4
+    рвота 4%
+Amatoxin — A deadly toxin found in some mushrooms, primarily fly amanita. Small doses can be lethal.
+    вредит Poison 3
+vent crud (VentCrud) — A jet black substance found in poorly maintained ventilation systems. Can cause vent cough.
+    вредит Poison 2
+Romerol — An otherworldly concoction able to bring the undead to life. If untreated, the effects are irreversible and will bring certain doom upon the station. Handle with care.
+    от 5 ед. CauseZombieInfection
+uncooked animal proteins (UncookedAnimalProteins) — This is very risky for the stomachs of softer lifeforms to digest.
+    рвота 10%
+    вредит Poison 1
+    вредит Poison 0.25
+    AdjustReagent
+Allicin — An organosulfur compound found in alliums like garlic, onions, and related plants.
+    от 1 ед. вредит Poison 0.06 (Digestion)
+Pax — A psychiatric chemical which prevents the patient from directly harming anyone.
+    GenericStatusEffect
+Honk — A toxin found in bananium. Causes severe honking and internal bleeding, may also cause the patient to mutate.
+    от 1 ед. вредит Poison 0.06
+Lead — A slow-acting but incredibly lethal toxin found in steel, albeit in trace amounts. Tasteless.
+    вредит Poison 0.6
+Bungotoxin — A moderately slow-acting poison found within the pit of the bungo fruit.
+    вредит Poison 1.8
+Vestine — Has an adverse reaction within the body causing major jittering. While not particularly useful on its own, it can be used to produce a small variety of chemicals.
+    от 5 ед. тряска
+    MovementSpeedModifier
+    вредит Asphyxiation 1, Bloodloss 1
+Tazinide — A highly dangerous metallic mixture which can interfere with most movement through an electrifying current.
+    Electrocute 50%
+Lipolicide — A powerful toxin that will destroy fat cells, massively reducing body weight in a short time. Deadly to those without nutriment in their body.
+    вредит Poison 2
+    SatiateHunger
+Mechanotoxin — A neurotoxin used as venom by some species of spider. Degrades movement when built up.
+    вредит Poison 1.6
+    от 2 ед. MovementSpeedModifier
+    от 4 ед. MovementSpeedModifier
+reprocessed material (ToxinTrash) — An awful-smelling slurry efficiently refined from discarded matter. It represents a perfect, zero-waste conversion of salvage into Vox sustenance, though it is a violent poison to others.
+    SatiateHunger (Digestion)
+Hemorrhinol — A toxin that causes severe damage to blood vessels, causing rapid bleeding.
+    ModifyStatusEffect
+    ModifyBleed
+Hivarol — A toxin that attacks specific types of cells in the body, damaging hivemind communication and causing severe pain if one is present.
+    от 4 ед. вредит Shock 3
+    от 4 ед. тряска
+
