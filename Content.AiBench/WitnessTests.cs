@@ -40,6 +40,12 @@ namespace Content.AiBench;
 public sealed class WitnessTests
 {
     /// <summary>
+    /// Идентификатор прототипа, а не строка в вызове: <c>Index&lt;T&gt;("Blunt")</c> запрещён
+    /// аналитиком RA0033, и запрет по делу — опечатка в литерале всплыла бы только на прогоне.
+    /// </summary>
+    private static readonly ProtoId<DamageTypePrototype> Blunt = "Blunt";
+
+    /// <summary>
     /// Остановить петлю, оставив сессию: обработчики наблюдения продолжают наполнять очередь, и
     /// никто не гонится с проверкой за право её осушить.
     /// </summary>
@@ -613,7 +619,7 @@ public sealed class WitnessTests
         {
             var protoMan = w.Pair.Server.ResolveDependency<IPrototypeManager>();
             var spec = new DamageSpecifier(
-                protoMan.Index<DamageTypePrototype>("Blunt"),
+                protoMan.Index(Blunt),
                 FixedPoint2.New(amount));
 
             w.Pair.Server.System<DamageableSystem>().TryChangeDamage(victim, spec, origin: origin);

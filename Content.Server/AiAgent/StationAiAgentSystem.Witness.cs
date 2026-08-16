@@ -371,7 +371,11 @@ public sealed partial class StationAiAgentSystem
 
         var eye = core.Comp.RemoteEntity.Value;
 
-        if (!TryComp<TransformComponent>(what, out var xform) || !TryComp<TransformComponent>(eye, out var eyeXform))
+        // Без <TransformComponent>, и это не косметика. Негенерическая перегрузка ходит через
+        // готовый TransformQuery, а не через общий словарь компонентов; на пути, который
+        // срабатывает на каждое событие станции, разница считается. Аналитик RA0030 требует
+        // ровно этого и в конфигурации Release считает генерическую форму ошибкой сборки.
+        if (!TryComp(what, out TransformComponent? xform) || !TryComp(eye, out TransformComponent? eyeXform))
             return false;
 
         // Разные сетки — разные места, даже если координаты близки. Шаттл, пролетающий мимо станции,

@@ -27,6 +27,13 @@ namespace Content.AiBench;
 public sealed class AwarenessTests
 {
     /// <summary>
+    /// Идентификатор прототипа, а не строка в вызове: <c>Index&lt;T&gt;("Passenger")</c> запрещён
+    /// аналитиком RA0033, и запрет по делу — опечатка в литерале всплыла бы только на прогоне,
+    /// а здесь её ловит компилятор.
+    /// </summary>
+    private static readonly ProtoId<JobPrototype> Passenger = "Passenger";
+
+    /// <summary>
     /// Stop the loop but keep the session: the perception handlers go on filling the queue, and
     /// nothing races the assertion to drain it.
     /// </summary>
@@ -201,7 +208,7 @@ public sealed class AwarenessTests
         // Через Read, потому что LocalizedName идёт в Loc, а тот резолвится через IoC — с потока
         // NUnit его контекста нет, и обращение падает ассертом ещё до проверки.
         var job = await w.Read(() => w.Pair.Server.ResolveDependency<IPrototypeManager>()
-            .Index<JobPrototype>("Passenger").LocalizedName);
+            .Index(Passenger).LocalizedName);
 
         var observation = await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
 

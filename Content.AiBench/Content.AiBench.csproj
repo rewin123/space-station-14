@@ -12,7 +12,19 @@
   <PropertyGroup>
     <OutputPath>..\bin\Content.AiBench\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <Nullable>disable</Nullable>
+    <!--
+      annotations, а не disable.
+
+      disable запрещает саму запись `T?`, и в Release это не придирка, а остановка сборки:
+      апстримовский Content.props включает там TreatWarningsAsErrors, и каждая аннотация в тестах
+      превращается в CS8632. Полный enable тоже не годится — он потянул бы за собой анализ
+      null-состояния по всему стенду, где половина обращений заведомо ненулевая по построению
+      сцены, и утопил бы прогон в предупреждениях, не найдя ни одной настоящей ошибки.
+
+      annotations разрешает синтаксис и не включает анализ: тесты пишутся как раньше, Release
+      собирается.
+    -->
+    <Nullable>annotations</Nullable>
   </PropertyGroup>
   <Import Project="../MSBuild/Content.props" />
   <ItemGroup>
