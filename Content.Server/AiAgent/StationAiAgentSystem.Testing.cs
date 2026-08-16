@@ -115,6 +115,47 @@ public sealed partial class StationAiAgentSystem
     public (string What, double Ms) SlowestMainThreadCall() => (_dispatcher.Slowest, _dispatcher.SlowestMs);
 
     /// <summary>
+    /// Во что обошёлся последний обзор.
+    ///
+    /// <c>Queries</c> здесь — главное, а миллисекунды приложены. Тест на «ровно один поход в
+    /// broadphase» детерминирован и не зависит ни от машины, ни от того, что за карта загружена;
+    /// тест на миллисекунды меряет сборочный агент и шумит. Поэтому сторожем ставится первый.
+    /// </summary>
+    public (int Queries, int Tiles, int Candidates, int OnScreen, int Rows,
+        double ViewMs, double GatherMs, double RowsMs) LastLookCost() =>
+        (_lastLook.Queries, _lastLook.Tiles, _lastLook.Candidates, _lastLook.OnScreen, _lastLook.Rows,
+            _lastLook.ViewMs, _lastLook.GatherMs, _lastLook.RowsMs);
+
+    /// <summary>
+    /// Оба пути сбора по одному и тому же кадру.
+    ///
+    /// Существует ради теста эквивалентности: тот требует, чтобы быстрый путь не потерял ничего из
+    /// увиденного медленным. Сравнивать по ответу инструмента нельзя — его режет
+    /// <c>ai.look_limit</c>, и пропажа на трёхсотой строке выглядела бы как обрезка.
+    ///
+    /// <b>Оба замера обязаны лежать в одном вызове, и это не удобство.</b> Первая версия теста
+    /// дёргала пути по очереди через CVar, между ними проходил тик — и на радиусе в двадцать
+    /// тайлов она нашла «потерю» одной сущности из двух с половиной тысяч. Потери не было: кто-то
+    /// успел перейти границу видимости. Тест, который ловит шаги вместо геометрии, хуже
+    /// отсутствующего: он врёт в обе стороны и приучает не верить красному.
+    /// </summary>
+    public (List<EntityUid> Slow, List<EntityUid> Fast, double SlowMs, double FastMs)
+        CompareLookPathsForTest(EntityUid brain, int expand)
+    {
+        var expansion = 8.5f + expand * 4f;
+
+        var slowProfile = new LookProfile();
+        var slow = GetVisibleEntities(brain, expansion, out _, ref slowProfile, fastOverride: false);
+
+        var fastProfile = new LookProfile();
+        var fast = GetVisibleEntities(brain, expansion, out _, ref fastProfile, fastOverride: true);
+
+        return (slow, fast,
+            slowProfile.ViewMs + slowProfile.GatherMs,
+            fastProfile.ViewMs + fastProfile.GatherMs);
+    }
+
+    /// <summary>
     /// Build zone 0 the way a session start or a compaction would.
     ///
     /// Exists so a test can build it twice and compare: an interpolated clock, counter or GUID in

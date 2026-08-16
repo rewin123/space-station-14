@@ -235,6 +235,23 @@ public sealed class AiCVars
     public static readonly CVarDef<float> MainThreadBudgetMs =
         CVarDef.Create("ai.mainthread_budget_ms", 5f, CVar.SERVERONLY);
 
+    /// <summary>
+    /// Собирать видимые сущности одним обходом дерева вместо запроса на каждый тайл.
+    ///
+    /// Рубильник, а не эксперимент. Медленный путь оставлен в дереве по двум причинам, и обе
+    /// стоят пятнадцати строк.
+    ///
+    /// Первая — доказательство: тест эквивалентности гоняет оба пути по одной станции и требует,
+    /// чтобы быстрый не потерял ничего из увиденного медленным. Утверждение «мы ничего не
+    /// сломали» либо проверяемо, либо это обещание.
+    ///
+    /// Вторая — откат. Сервер публичный, и пересборка с перезапуском выкидывает всех, кто на
+    /// нём играет. <c>cvar ai.look_fast false</c> из админ-консоли стоит секунды и ноль киков,
+    /// а разбираться можно потом.
+    /// </summary>
+    public static readonly CVarDef<bool> LookFast =
+        CVarDef.Create("ai.look_fast", true, CVar.SERVERONLY);
+
     /// <summary>Self-evolution: the review that writes skills and memory. Step 1 of compaction.</summary>
     public static readonly CVarDef<bool> CuratorEnabled =
         CVarDef.Create("ai.curator_enabled", true, CVar.SERVERONLY);

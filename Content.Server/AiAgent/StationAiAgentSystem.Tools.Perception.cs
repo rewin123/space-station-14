@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Numerics;
@@ -38,22 +39,28 @@ public sealed partial class StationAiAgentSystem
         // whole tool surface, and upstream says as much in a comment.
         return OnMainAsync(s, "look", () =>
         {
-            var seen = GetVisibleEntities(s.Brain, 8.5f + expand * 4f, out var failure);
+            var profile = new LookProfile();
+
+            var seen = GetVisibleEntities(s.Brain, 8.5f + expand * 4f, out var failure, ref profile);
             if (failure != null)
                 return ToolResult.Fail(ToolError.Internal, failure, retry: "later");
+
+            var rowsStart = Stopwatch.GetTimestamp();
 
             // Mint handles first and for everything worth naming, so the anchor can be looked up by
             // name against the same set the listing is built from. The kind filter is applied to the
             // LISTING, not here: an anchor named by the crew may well be of a different kind than
             // the things being asked about ("какие двери рядом с Иваном").
-            var interesting = new List<EntityUid>();
+            //
+            // Вид считается ОДИН раз на сущность и едет рядом с ней. Раньше KindOf звался до трёх
+            // раз: `Handles.GetOrCreate(uid, KindOf(uid))` вычисляет аргумент всегда, даже когда
+            // хендл уже есть и метод сразу выходит, — а это цепочка из тринадцати HasComp.
+            var interesting = new List<(EntityUid Uid, string Kind)>(seen.Count);
             foreach (var uid in seen)
             {
-                if (!IsOnScreen(uid))
-                    continue;
-
-                s.Handles.GetOrCreate(uid, KindOf(uid));
-                interesting.Add(uid);
+                var kindOf = KindOf(uid);
+                s.Handles.GetOrCreate(uid, kindOf);
+                interesting.Add((uid, kindOf));
             }
 
             // "Рядом со мной", "надо мной", "на которую я смотрю" are all relative to a person, not
@@ -79,21 +86,27 @@ public sealed partial class StationAiAgentSystem
 
             var rows = new List<(float Dist, string Text)>();
 
-            foreach (var uid in interesting)
+            foreach (var (uid, kindOf) in interesting)
             {
                 if (uid == anchor)
                     continue;
 
+                // Фильтр по виду — ДО построчной работы, а не после неё. Раньше `look {"kind":"door"}`
+                // платил полную цену за все шестьсот сущностей в поле зрения, чтобы напечатать
+                // двадцать девять дверей.
                 if (!string.IsNullOrWhiteSpace(kind)
-                    && !string.Equals(KindOf(uid), kind, StringComparison.OrdinalIgnoreCase))
+                    && !string.Equals(kindOf, kind, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var handle = s.Handles.GetOrCreate(uid, KindOf(uid));
+                var handle = s.Handles.GetOrCreate(uid, kindOf);
                 var pos = _xform.GetMapCoordinates(uid).Position;
                 var dist = (pos - origin).Length();
 
                 var state = ShortState(uid);
-                if (HasComp<MobStateComponent>(uid))
+
+                // Второй HasComp<MobStateComponent> тут не нужен: вид уже это знает — KindOf
+                // ставит "crew" ровно по наличию этого компонента и ставит его первым.
+                if (kindOf == "crew")
                     state += $", смотрит на {FacingRu(uid)}";
 
                 // Say which of these the AI can actually operate.
@@ -158,8 +171,39 @@ public sealed partial class StationAiAgentSystem
                     "одинаковой Δ: не прошёл после открытия — открывай вторую, а не ищи другую дверь";
             }
 
+            profile.RowsMs = Stopwatch.GetElapsedTime(rowsStart).TotalMilliseconds;
+            profile.Rows = rows.Count;
+            _lastLook = profile;
+            ReportLookCost(expand, profile);
+
             return ToolResult.Success(result);
         }, ct, TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>Профиль последнего обзора. Только для тестов и консоли — на решения не влияет.</summary>
+    private LookProfile _lastLook;
+
+    /// <summary>
+    /// Сказать, куда ушло время, если его ушло много.
+    ///
+    /// Предупреждение диспетчера называет операцию, но не фазу, а без фазы «look 496 мс» одинаково
+    /// хорошо объясняется и стенами, и содержимым чужих рюкзаков — притом что чинить это разные
+    /// вещи. Отдельная строка стоит трёх обращений к таймеру и снимает весь спор.
+    ///
+    /// Порог тот же, что у диспетчера: две строки об одном событии должны появляться вместе, иначе
+    /// в журнале заводится «предупреждение без объяснения» и наоборот.
+    /// </summary>
+    private void ReportLookCost(int expand, LookProfile p)
+    {
+        var total = p.ViewMs + p.GatherMs + p.RowsMs;
+
+        if (total <= _cfg.GetCVar(AiCVars.MainThreadBudgetMs))
+            return;
+
+        _sawmill.Warning(string.Create(CultureInfo.InvariantCulture,
+            $"look expand={expand} итого={total:F1}мс view={p.ViewMs:F1} gather={p.GatherMs:F1} " +
+            $"rows={p.RowsMs:F1} tiles={p.Tiles} cand={p.Candidates} scr={p.OnScreen} " +
+            $"rows={p.Rows} queries={p.Queries}"));
     }
 
     /// <summary>
@@ -173,21 +217,23 @@ public sealed partial class StationAiAgentSystem
     private bool TryResolveVisibleName(
         AgentSession s,
         string query,
-        List<EntityUid> visible,
+        List<(EntityUid Uid, string Kind)> visible,
         out EntityUid found,
         out ToolResult? failure)
     {
         found = default;
         failure = null;
 
-        if (s.Handles.TryResolve(query, out var byHandle) && visible.Contains(byHandle))
+        // Список приходит полным, ДО фильтра по kind, и это не оплошность: анкер может быть
+        // другого вида, чем то, о чём спрашивают («какие двери рядом с Иваном» — Иван не дверь).
+        if (s.Handles.TryResolve(query, out var byHandle) && visible.Any(v => v.Uid == byHandle))
         {
             found = byHandle;
             return true;
         }
 
         var named = visible
-            .Select(uid => (Uid: uid, Name: Identity.Name(uid, EntityManager)))
+            .Select(v => (Uid: v.Uid, Name: Identity.Name(v.Uid, EntityManager)))
             .ToList();
 
         var exact = named.Where(n => string.Equals(n.Name, query, StringComparison.OrdinalIgnoreCase)).ToList();

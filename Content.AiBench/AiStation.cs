@@ -486,6 +486,27 @@ public sealed class AiStation : IAsyncDisposable
     public async Task Post(Action act) => await Pair.Server.WaitPost(act);
 
     /// <summary>
+    /// Кто это, где стоит и какого размера — для сообщения упавшего теста.
+    ///
+    /// «Быстрый путь потерял одну сущность из 2794» — не диагноз, а повод гадать. Имя, прототип и
+    /// размах рамки в тайлах превращают ту же строку в указание, куда смотреть.
+    /// </summary>
+    public async Task<string> Describe(EntityUid uid) => await Read(() =>
+    {
+        var ent = Ent;
+        if (!ent.EntityExists(uid))
+            return $"{uid} (уже удалена)";
+
+        var meta = ent.GetComponent<MetaDataComponent>(uid);
+        var xform = ent.GetComponent<TransformComponent>(uid);
+        var aabb = Pair.Server.System<EntityLookupSystem>().GetWorldAABB(uid);
+
+        return $"{meta.EntityName} [{meta.EntityPrototype?.ID ?? "—"}] " +
+               $"поз={xform.Coordinates.Position} рамка={aabb.Width:F1}×{aabb.Height:F1} тайлов " +
+               $"якорь={xform.Anchored} родитель={ent.ToPrettyString(xform.ParentUid)}";
+    });
+
+    /// <summary>
     /// Wait, in wall-clock time, for the world to change.
     ///
     /// Not a tick budget: the agent loop sleeps <c>ai.tick_seconds</c> of REAL time between turns
