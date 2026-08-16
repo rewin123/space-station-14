@@ -1,9 +1,11 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Maths;
 
 namespace Content.Server.AiAgent.Tools;
 
@@ -209,6 +211,10 @@ public static class UiContract
             if (u == typeof(int) || u == typeof(uint) || u == typeof(long)) return "целое";
             if (u == typeof(float) || u == typeof(double)) return "число";
 
+            // The unit must be in the signature: the state the model reads back is in radians, and
+            // an unlabelled number is a guess the model will make in both directions.
+            if (u == typeof(Angle)) return "угол (градусы)";
+
             return u.Name;
         }
     }
@@ -216,36 +222,88 @@ public static class UiContract
     /// <summary>
     /// Build the callable name and parameter list for one message type.
     ///
-    /// The parameters come from the longest public constructor rather than from the fields. Field
-    /// order is meaningless and includes the base class plumbing (<c>Actor</c>, <c>UiKey</c>,
-    /// <c>Entity</c>) that the caller must never set; the constructor is the author's own statement
-    /// of what a caller has to provide.
+    /// The game has two idioms for carrying a payload, and a console is unusable if the model is
+    /// shown only one of them.
+    ///
+    /// <b>Constructor-based.</b> <c>CommunicationsConsoleAnnounceMessage(string, string)</c>. The
+    /// parameters come from the longest public constructor; it is the author's own statement of
+    /// what a caller has to provide, and it excludes the base class plumbing (<c>Actor</c>,
+    /// <c>UiKey</c>, <c>Entity</c>) that the caller must never set.
+    ///
+    /// <b>Field-based.</b> <c>SolarControlConsoleAdjustMessage</c> declares no constructor at all:
+    /// the client fills its public fields with an object initializer. Hundreds of messages in the
+    /// game are written this way. For those the parameter list is the public fields — because the
+    /// alternative is what shipped first: the action is listed with no arguments, every argument
+    /// the model guesses is dropped on the floor, and the message goes out with default values,
+    /// which for an angle is zero. The agent then calls a "no-argument" action over and over
+    /// watching the state refuse to move, and spends its turn budget guessing parameters that are
+    /// never read.
     /// </summary>
     public static UiAction? Describe(Type message)
     {
         if (!typeof(BoundUserInterfaceMessage).IsAssignableFrom(message) || message.IsAbstract)
             return null;
 
-        var ctor = message
-            .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-            .OrderByDescending(c => c.GetParameters().Length)
-            .FirstOrDefault();
-
         var pars = new List<UiParam>();
+        var ctorParams = LongestPublicCtor(message)?.GetParameters() ?? Array.Empty<ParameterInfo>();
+        var fields = ctorParams.Length == 0 ? PayloadFields(message) : null;
 
-        foreach (var p in ctor?.GetParameters() ?? Array.Empty<ParameterInfo>())
+        if (fields != null)
         {
-            var underlying = Nullable.GetUnderlyingType(p.ParameterType) ?? p.ParameterType;
+            foreach (var f in fields)
+            {
+                var underlying = Nullable.GetUnderlyingType(f.FieldType) ?? f.FieldType;
 
-            pars.Add(new UiParam(
-                Snake(p.Name ?? "arg"),
-                p.ParameterType,
-                p.HasDefaultValue || Nullable.GetUnderlyingType(p.ParameterType) != null,
-                underlying.IsEnum ? Enum.GetNames(underlying) : null));
+                pars.Add(new UiParam(
+                    Snake(f.Name),
+                    f.FieldType,
+                    underlying != f.FieldType,
+                    underlying.IsEnum ? Enum.GetNames(underlying) : null));
+            }
+        }
+        else
+        {
+            foreach (var p in ctorParams)
+            {
+                var underlying = Nullable.GetUnderlyingType(p.ParameterType) ?? p.ParameterType;
+
+                pars.Add(new UiParam(
+                    Snake(p.Name ?? "arg"),
+                    p.ParameterType,
+                    p.HasDefaultValue || underlying != p.ParameterType,
+                    underlying.IsEnum ? Enum.GetNames(underlying) : null));
+            }
         }
 
         return new UiAction(ActionName(message), message, pars);
     }
+
+    private static ConstructorInfo? LongestPublicCtor(Type type) =>
+        type.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            .OrderByDescending(c => c.GetParameters().Length)
+            .FirstOrDefault();
+
+    /// <summary>
+    /// The fields a ctorless message carries its payload in, in declaration order.
+    ///
+    /// Declaration order (metadata tokens, then name) is the order the author wrote the fields in
+    /// and is stable between calls; an order that shuffles would read to the model as the console
+    /// changing under it. The base class plumbing is excluded by name: an object initializer — the
+    /// only way the client fills these fields — cannot and must not set it.
+    /// </summary>
+    private static FieldInfo[] PayloadFields(Type message) =>
+        message
+            .GetFields(BindingFlags.Public | BindingFlags.Instance)
+            .Where(f => !f.IsInitOnly && !f.Name.Contains('<') && !Plumbing.Contains(f.Name))
+            .OrderBy(f => f.MetadataToken)
+            .ThenBy(f => f.Name)
+            .ToArray();
+
+    /// <summary>Base-class plumbing a caller must never fill.</summary>
+    private static readonly HashSet<string> Plumbing = new()
+    {
+        "Actor", "UiKey", "Entity",
+    };
 
     /// <summary>
     /// <c>CommunicationsConsoleAnnounceMessage</c> becomes
@@ -299,10 +357,7 @@ public static class UiContract
     {
         error = string.Empty;
 
-        var ctor = action.Message
-            .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-            .OrderByDescending(c => c.GetParameters().Length)
-            .FirstOrDefault();
+        var ctor = LongestPublicCtor(action.Message);
 
         if (ctor == null)
         {
@@ -311,11 +366,20 @@ public static class UiContract
         }
 
         var pars = ctor.GetParameters();
-        var values = new object?[pars.Length];
 
-        for (var i = 0; i < pars.Length; i++)
+        // The same fallback Describe used to describe this action: a ctorless message is built by
+        // invoking the default constructor and filling its payload fields. The two must never
+        // disagree, or the model would be offered a signature that cannot be called.
+        var fields = pars.Length == 0 ? PayloadFields(action.Message) : Array.Empty<FieldInfo>();
+        var fieldMode = fields.Length > 0;
+
+        var count = fieldMode ? fields.Length : pars.Length;
+        var values = new object?[count];
+
+        for (var i = 0; i < count; i++)
         {
             var spec = action.Params[i];
+            var type = fieldMode ? fields[i].FieldType : pars[i].ParameterType;
             var supplied = args is { ValueKind: JsonValueKind.Object } &&
                            args.Value.TryGetProperty(spec.Name, out var raw)
                 ? raw
@@ -323,20 +387,23 @@ public static class UiContract
 
             if (supplied == null)
             {
-                if (!spec.Optional && !pars[i].HasDefaultValue)
+                // In field mode a missing field is never forgiven silently: the handler on the
+                // other end treats any present value as "set this", so a default-filled field is
+                // not "unchanged" but a real write of zero.
+                if (!spec.Optional)
                 {
                     error = $"'{action.Name}': нужен аргумент {spec.Describe()}";
                     return null;
                 }
 
-                values[i] = pars[i].HasDefaultValue
-                    ? pars[i].DefaultValue
-                    : Default(pars[i].ParameterType);
+                values[i] = fieldMode
+                    ? Default(type)
+                    : pars[i].HasDefaultValue ? pars[i].DefaultValue : Default(pars[i].ParameterType);
 
                 continue;
             }
 
-            if (!TryConvert(supplied.Value, pars[i].ParameterType, out values[i], out var why))
+            if (!TryConvert(supplied.Value, type, out values[i], out var why))
             {
                 error = $"'{action.Name}', аргумент '{spec.Name}': {why}";
                 return null;
@@ -345,7 +412,15 @@ public static class UiContract
 
         try
         {
-            return (BoundUserInterfaceMessage)ctor.Invoke(values);
+            var message = (BoundUserInterfaceMessage)(fieldMode ? ctor.Invoke(null) : ctor.Invoke(values));
+
+            if (fieldMode)
+            {
+                for (var i = 0; i < fields.Length; i++)
+                    fields[i].SetValue(message, values[i]);
+            }
+
+            return message;
         }
         catch (Exception e)
         {
@@ -406,6 +481,25 @@ public static class UiContract
                     _ => bool.Parse(raw.ToString()),
                 };
 
+                return true;
+            }
+
+            // Angle is a readonly struct with no setters and no System.Text.Json converter: the
+            // generic path below cannot build it, and the engine's own serializer
+            // (AngleSerializer) lives on a different wire. The client's UI takes degrees, so
+            // degrees is the unit the model gets — the state it reads back is in radians, and the
+            // model converts.
+            if (type == typeof(Angle))
+            {
+                var text = raw.ValueKind == JsonValueKind.String ? raw.GetString() : raw.ToString();
+
+                if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var degrees))
+                {
+                    error = "ожидается число — угол в градусах";
+                    return false;
+                }
+
+                value = Angle.FromDegrees(degrees);
                 return true;
             }
 

@@ -2,12 +2,16 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Tools;
+using Content.Server.Solar.EntitySystems;
 using Content.Shared.Atmos.Monitor;
 using Content.Shared.Atmos.Monitor.Components;
+using Content.Shared.Atmos.Piping.Trinary.Components;
 using Content.Shared.Communications;
+using Content.Shared.Solar;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Log;
+using Robust.Shared.Maths;
 
 namespace Content.AiBench;
 
@@ -92,6 +96,81 @@ public sealed class UiContractTests
         Assert.That(mode!.Params, Has.Count.EqualTo(1));
         Assert.That(mode.Params[0].Choices, Is.Not.Null.And.Contains(nameof(AirAlarmMode.Panic)));
         Assert.That(mode.Signature, Does.Contain("Panic"));
+    }
+
+    // --------------------------------------------- field-based messages (no explicit constructor)
+
+    // The second payload idiom in the game. SolarControlConsoleAdjustMessage has no constructor:
+    // the client fills its public fields with an object initializer. Until the contract learned
+    // this idiom, the action was listed with no arguments, every argument the model guessed was
+    // dropped, and each call sent the default Angle (zero) — the live incident where the agent
+    // called solar_control_console_adjust eleven times and the panels never moved.
+
+    [Test]
+    public void Describe_ExposesTheFieldsOfACtorlessMessage()
+    {
+        var action = UiContract.Describe(typeof(SolarControlConsoleAdjustMessage));
+
+        Assert.That(action, Is.Not.Null);
+        Assert.That(action!.Name, Is.EqualTo("solar_control_console_adjust"));
+        Assert.That(action.Params, Has.Count.EqualTo(2),
+            "payload живёт в полях — без них действие снова будет безаргументным: " + action.Signature);
+        Assert.That(action.Params[0].Name, Is.EqualTo("rotation"));
+        Assert.That(action.Params[1].Name, Is.EqualTo("angular_velocity"));
+        Assert.That(action.Signature, Does.Contain("угол (градусы)"),
+            "единица измерения обязана быть в сигнатуре: состояние читается в радианах");
+        Assert.That(action.Signature, Does.Not.Contain("actor"),
+            "сантехника базового класса не должна попадать в параметры");
+    }
+
+    [Test]
+    public void Describe_KeepsCtorMessagesOnTheirConstructor()
+    {
+        // A message that has BOTH a constructor and public fields stays on the constructor: it is
+        // the author's own statement of the payload, and the fields are its backing storage.
+        var message = UiContract.Describe(typeof(GasMixerChangeOutputPressureMessage));
+
+        Assert.That(message, Is.Not.Null);
+        Assert.That(message!.Params, Has.Count.EqualTo(1));
+        Assert.That(message.Params[0].Name, Is.EqualTo("pressure"));
+    }
+
+    [Test]
+    public void Build_SetsTheFieldsOfACtorlessMessage()
+    {
+        var action = UiContract.Describe(typeof(SolarControlConsoleAdjustMessage))!;
+        var args = JsonDocument.Parse("""{"rotation":30,"angular_velocity":0.5}""").RootElement;
+
+        var msg = UiContract.Build(action, args, out var error);
+
+        Assert.That(msg, Is.Not.Null, error);
+        Assert.That(((SolarControlConsoleAdjustMessage)msg!).Rotation.Degrees, Is.EqualTo(30).Within(0.001), error);
+        Assert.That(((SolarControlConsoleAdjustMessage)msg!).AngularVelocity.Degrees, Is.EqualTo(0.5).Within(0.001), error);
+    }
+
+    [Test]
+    public void Build_RefusesAMissingField_AndNamesIt()
+    {
+        var action = UiContract.Describe(typeof(SolarControlConsoleAdjustMessage))!;
+        var args = JsonDocument.Parse("""{"rotation":30}""").RootElement;
+
+        var msg = UiContract.Build(action, args, out var error);
+
+        Assert.That(msg, Is.Null);
+        Assert.That(error, Does.Contain("angular_velocity"),
+            "отказ обязан называть недостающее поле, иначе модель снова будет угадывать");
+    }
+
+    [Test]
+    public void Build_RefusesAWordWhereAnAngleIsExpected()
+    {
+        var action = UiContract.Describe(typeof(SolarControlConsoleAdjustMessage))!;
+        var args = JsonDocument.Parse("""{"rotation":"на солнце","angular_velocity":0}""").RootElement;
+
+        var msg = UiContract.Build(action, args, out var error);
+
+        Assert.That(msg, Is.Null);
+        Assert.That(error, Does.Contain("градус"), "в отказе должна читаться единица измерения");
     }
 
     [Test]
@@ -216,6 +295,38 @@ public sealed class UiContractTests
         Assert.That(json, Does.Not.Contain("IsCut"), $"утекло состояние проводов: {json}");
         Assert.That(json, Does.Not.Contain("WireSeed"), $"утёк seed проводов: {json}");
     }
+    [Test]
+    public async Task DeviceUi_TurnsTheSolarPanelsThroughACtorlessConsole()
+    {
+        // The live incident, end to end: a player asks the AI to aim the panels at the sun. The
+        // read must now show a parameterised signature, and the call with arguments must change
+        // the real target the solar system drives the panels to — not just return success.
+        await using var w = await AiWorld.Create();
+        var console = await w.Spawn("ComputerSolarControl");
+        var handle = await w.Handle(console);
+
+        var read = await w.Invoke("device_ui", $$"""{"handle":"{{handle}}"}""");
+        var json = read.ToJson();
+
+        Assert.That(read.Ok, Is.True, json);
+        Assert.That(json, Does.Contain("solar_control_console_adjust(rotation"),
+            "действие должно показаться с параметрами: " + json);
+
+        // Not a raw string: the JSON ends in "}}", which a "$$" raw string would read as a hole.
+        // The velocity is zero on purpose: a non-zero target keeps advancing the rotation while
+        // the test is running, and a moving target cannot be asserted exactly. The velocity value
+        // itself is covered by the unit test above.
+        var result = await w.Invoke("device_ui",
+            "{\"handle\":\"" + handle + "\",\"action\":\"solar_control_console_adjust\","
+            + "\"args\":{\"rotation\":45,\"angular_velocity\":0}}");
+
+        Assert.That(result.Ok, Is.True, result.ToJson());
+
+        var target = await w.Read(() => w.Pair.Server.System<PowerSolarSystem>().TargetPanelRotation);
+        Assert.That(target.Degrees, Is.EqualTo(45).Within(0.001),
+            $"панели не повернулись: цель {target.Degrees}°, ждали 45°");
+    }
+
     [Test]
     public async Task DeviceUi_ReadsAConsoleWhoseStateLivesInAComponent()
     {
