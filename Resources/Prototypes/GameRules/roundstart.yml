@@ -180,7 +180,11 @@
   id: Traitor
   components:
   - type: GameRule
-    minPlayers: 5
+    # Апстримовые 5 на этом сервере означали «предателей не бывает никогда»: онлайн 0-4,
+    # SecretRuleSystem отсеивал Traitor до броска кубика, и все раунды 11-16 августа шли
+    # как Survival — без единого антага. 2 готовых игрока при PlayerRatio 10 и Range.Min 1
+    # дают ровно одного предателя. Возвращать апстрим — minPlayers: 5.
+    minPlayers: 2
     delay:
       min: 240
       max: 420
@@ -351,6 +355,19 @@
   components:
   - type: GameRule
     minPlayers: 5
+    # ДОБАВЛЕНО 2026-08-16. Без этой строки правило наследует умолчание true
+    # (GameRuleComponent.cs:31) и при нехватке игроков не отключается само, а
+    # отменяет ВЕСЬ пресет. На онлайне 4 это ломало старт раунда целиком:
+    # Secret выкатывал Traitor, DummyNonAntagChance с вероятностью 0.3
+    # порождал это правило, оно требовало пятерых — и раунд падал в fallback.
+    # Хуже: порождённая сущность не убиралась при очистке, и тот же самый
+    # (3/n3, DummyNonAntag) валил подряд и Traitor, и Extended, после чего
+    # шёл «Restarting round!». Лог инцидента — 16:31:15, раунд 73.
+    #
+    # false — это то, что стоит у всех соседей по subgamemodes.yml (Thief,
+    # SubWizard, SubXenoborgs): «мало игроков — просто не участвую».
+    # Апстрим здесь её забыл, потому что при пяти игроках она не видна.
+    cancelPresetOnTooFewPlayers: false
   - type: AntagSelection
     selectionTime: PrePlayerSpawn # Pre-selection before jobs; assignment doesn't really matter though, we only care about the pre-selection to block other antags.
     removeUponFailedSpawn: false
