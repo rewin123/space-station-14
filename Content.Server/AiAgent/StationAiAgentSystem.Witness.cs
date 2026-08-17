@@ -66,6 +66,57 @@ public sealed partial class StationAiAgentSystem
 
     // ------------------------------------------------------------------ подписки
 
+    // ------------------------------------------------------- настройки, снятые с горячего пути
+
+    // Все пять читались через _cfg.GetCVar на КАЖДОМ событии станции. Дорого это делало не чтение
+    // само по себе, а то, где оно стояло: `EntInsertedIntoContainerMessage` и
+    // `EntRemovedFromContainerMessage` — самый частый класс событий в игре (каждый подъём предмета,
+    // каждая смена руки, каждая деталь механизма), и на каждое из них воронка платила три обращения
+    // к IConfigurationManager ещё ДО первой проверки расстояния. `GetCVar<T>` — это
+    // `(T)GetCVar(name)`: захват ReaderWriterLockSlim, поиск в словаре и упаковка значения в object.
+    //
+    // Ровный налог на всю станцию, пока агент жив, и в статистике диспетчера он не виден вовсе —
+    // это не маршалированный вызов. Отсюда и подозрение, что «виснем из-за ИИ» относится в первую
+    // очередь сюда, а не к всплескам look.
+    //
+    // Значения остаются живыми: OnValueChanged держит их в актуальном состоянии, так что
+    // `cvar ai.observe false` из админ-консоли работает как работал.
+    private bool _observe;
+    private float _observeRange;
+    private bool _observeOcclusion;
+    private int _observeMaxChecks;
+
+    /// <summary>
+    /// Разобранный <c>ai.observe_kinds</c>. Пустой набор — все ярлыки разрешены.
+    ///
+    /// Хранится разобранным, а не строкой: прежняя форма звала <c>string.Split</c> на каждое
+    /// событие, как только список переставал быть пустым. То есть попытка приглушить одну шумную
+    /// категорию делала горячий путь дороже, а не дешевле — ровно наоборот замыслу.
+    /// </summary>
+    private readonly HashSet<string> _observeKinds = new(StringComparer.OrdinalIgnoreCase);
+
+    private void CacheWitnessCVars()
+    {
+        _cfg.OnValueChanged(AiCVars.Observe, v => _observe = v, true);
+        _cfg.OnValueChanged(AiCVars.ObserveRange, v => _observeRange = v, true);
+        _cfg.OnValueChanged(AiCVars.ObserveOcclusion, v => _observeOcclusion = v, true);
+        _cfg.OnValueChanged(AiCVars.ObserveMaxChecksPerTick, v => _observeMaxChecks = v, true);
+        _cfg.OnValueChanged(AiCVars.ObserveKinds, ParseObserveKinds, true);
+    }
+
+    private void ParseObserveKinds(string raw)
+    {
+        _observeKinds.Clear();
+
+        if (string.IsNullOrWhiteSpace(raw))
+            return;
+
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            _observeKinds.Add(part);
+    }
+
+    // ------------------------------------------------------------------ подписки
+
     /// <summary>
     /// Повесить прослушку мира. Вызывается один раз из <c>Initialize</c>.
     /// </summary>
@@ -80,6 +131,8 @@ public sealed partial class StationAiAgentSystem
     /// </remarks>
     private void SubscribeWitness()
     {
+        CacheWitnessCVars();
+
         // Широковещательные. Пару не занимают, отобрать их у нас нельзя.
         //
         // Все до одного несут своих участников ВНУТРИ объекта события, и это не совпадение, а отбор:
@@ -292,7 +345,7 @@ public sealed partial class StationAiAgentSystem
     {
         // Первым делом — есть ли вообще кому смотреть. На станции без агента этот метод зовётся на
         // каждый клик каждого игрока, и он обязан стоить одного сравнения.
-        if (_sessions.Count == 0 || !_cfg.GetCVar(AiCVars.Observe))
+        if (_sessions.Count == 0 || !_observe)
             return;
 
         if (!KindEnabled(label))
@@ -326,20 +379,13 @@ public sealed partial class StationAiAgentSystem
     /// </remarks>
     private bool KindEnabled(string label)
     {
-        var allowed = _cfg.GetCVar(AiCVars.ObserveKinds);
-        if (string.IsNullOrWhiteSpace(allowed))
+        if (_observeKinds.Count == 0)
             return true;
 
         var colon = label.IndexOf(':');
         var head = colon < 0 ? label : label[..colon];
 
-        foreach (var part in allowed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (string.Equals(part, head, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
+        return _observeKinds.Contains(head);
     }
 
     // ------------------------------------------------------------------ ворота
@@ -386,7 +432,7 @@ public sealed partial class StationAiAgentSystem
         at = _xform.GetWorldPosition(xform);
         eyeAt = _xform.GetWorldPosition(eyeXform);
 
-        var range = _cfg.GetCVar(AiCVars.ObserveRange);
+        var range = _observeRange;
         var delta = at - eyeAt;
 
         if (MathF.Abs(delta.X) > range || MathF.Abs(delta.Y) > range)
@@ -408,7 +454,7 @@ public sealed partial class StationAiAgentSystem
     /// </remarks>
     private bool TileIsVisible(EntityUid gridUid, TransformComponent xform)
     {
-        if (!_cfg.GetCVar(AiCVars.ObserveOcclusion))
+        if (!_observeOcclusion)
             return true;
 
         if (!TryComp<MapGridComponent>(gridUid, out var mapGrid) ||
@@ -420,7 +466,7 @@ public sealed partial class StationAiAgentSystem
         if (_seenTiles.TryGetValue(tile, out var known))
             return known;
 
-        if (_visionChecks >= _cfg.GetCVar(AiCVars.ObserveMaxChecksPerTick))
+        if (_visionChecks >= _observeMaxChecks)
         {
             _visionSkipped++;
             return false;
@@ -530,7 +576,7 @@ public sealed partial class StationAiAgentSystem
 
         _sawmill.Warning(
             $"наблюдение: пропущено {_visionSkipped} событий — потолок проверок видимости " +
-            $"({_cfg.GetCVar(AiCVars.ObserveMaxChecksPerTick)} за тик) выбран");
+            $"({_observeMaxChecks} за тик) выбран");
 
         _visionSkipped = 0;
         _sinceWitnessReport = 0f;

@@ -84,7 +84,17 @@ public sealed partial class StationAiAgentSystem
             var originUid = anchor ?? eye;
             var origin = _xform.GetMapCoordinates(originUid).Position;
 
-            var rows = new List<(float Dist, string Text)>();
+            // Отбор и отсечка ДО построчной работы.
+            //
+            // `ai.look_limit` (300) применялся в самом конце, к уже построенному списку: при
+            // expand=3 на живой станции строилось ~2290 строк, и 85% из них выбрасывалось
+            // немедленно. Каждая выброшенная стоила `ShortState` (а он для большинства сущностей
+            // сваливается в `_power.IsPowered`, то есть в опрос энергосети), `Identity.Name` и
+            // сборки строки — всё это на главном потоке, внутри тика.
+            //
+            // Дистанция считается по позиции, а позиция берётся одним обходом трансформа, поэтому
+            // отсортировать и обрезать можно ДО того, как платить за состояние и имена.
+            var candidates = new List<(EntityUid Uid, string Kind, Vector2 Pos, float Dist)>(interesting.Count);
 
             foreach (var (uid, kindOf) in interesting)
             {
@@ -98,9 +108,36 @@ public sealed partial class StationAiAgentSystem
                     && !string.Equals(kindOf, kind, StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var handle = s.Handles.GetOrCreate(uid, kindOf);
                 var pos = _xform.GetMapCoordinates(uid).Position;
-                var dist = (pos - origin).Length();
+                candidates.Add((uid, kindOf, pos, (pos - origin).Length()));
+            }
+
+            // Полное число — до отсечки. Оно уезжает в ответ как `count` и решает, печатать ли
+            // предупреждение об обрезке; посчитать его по обрезанному списку значило бы соврать
+            // ровно в том месте, ради которого предупреждение и заведено.
+            var total = candidates.Count;
+            var limit = _cfg.GetCVar(AiCVars.LookLimit);
+
+            // Ничьи разводятся по uid, а НЕ по тексту строки, которого здесь ещё нет.
+            //
+            // Итоговая выдача ниже по-прежнему сортируется по (дистанция, текст) — это требование
+            // префикс-кэша, см. комментарий там. Но отсечка обязана быть детерминированной сама по
+            // себе, иначе порядок обхода broadphase решал бы, кто попал в трёхсотку, и одинаковые
+            // состояния мира давали бы разные ответы. uid от порядка обхода не зависит.
+            if (total > limit)
+            {
+                candidates.Sort((a, b) => a.Dist != b.Dist
+                    ? a.Dist.CompareTo(b.Dist)
+                    : a.Uid.Id.CompareTo(b.Uid.Id));
+
+                candidates.RemoveRange(limit, total - limit);
+            }
+
+            var rows = new List<(float Dist, string Text)>(candidates.Count);
+
+            foreach (var (uid, kindOf, pos, dist) in candidates)
+            {
+                var handle = s.Handles.GetOrCreate(uid, kindOf);
 
                 var state = ShortState(uid);
 
@@ -134,22 +171,20 @@ public sealed partial class StationAiAgentSystem
                 ? a.Dist.CompareTo(b.Dist)
                 : string.CompareOrdinal(a.Text, b.Text));
 
-            // Nearest first, so a cut always removes the far half of the room rather than something
-            // standing next to the person who asked.
-            var limit = _cfg.GetCVar(AiCVars.LookLimit);
-
+            // Обрезка уже произошла выше, по расстоянию: ближнее остаётся, дальнее уходит — чтобы
+            // из ответа выпадал дальний угол комнаты, а не то, что стоит рядом со спросившим.
             var result = new Dictionary<string, object?>
             {
-                ["count"] = rows.Count,
-                ["seen"] = rows.Select(r => r.Text).Take(limit).ToList(),
+                ["count"] = total,
+                ["seen"] = rows.Select(r => r.Text).ToList(),
             };
 
             // Silent truncation is the worst of both worlds: the model reports "there is no SMES
             // here" with total confidence about a list that was cut before the SMES. If the list is
             // short, say so out loud and say what to do about it.
-            if (rows.Count > limit)
+            if (total > limit)
             {
-                result["обрезано"] = rows.Count - limit;
+                result["обрезано"] = total - limit;
 
                 // The old advice led with "expand поменьше", which is impossible: expand defaults to
                 // 0, its minimum, so in the overwhelmingly common case the first remedy offered

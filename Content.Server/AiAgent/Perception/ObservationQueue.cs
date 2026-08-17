@@ -4,9 +4,22 @@ using System.Linq;
 namespace Content.Server.AiAgent.Perception;
 
 /// <summary>
-/// Bounded buffer of perceived lines. Written from the main thread by the perception collector,
-/// drained from the main thread by the agent's marshalled call — so a plain lock is both correct
-/// and cheap; there is no contention to speak of.
+/// Bounded buffer of perceived lines.
+///
+/// <para>
+/// <b>Трогают её три потока, а не один.</b> Здесь раньше стояло «пишется с главного потока,
+/// вычитывается с главного потока — контенции нет»; это перестало быть правдой и вводило в
+/// заблуждение ровно там, где важно. Сегодня: <see cref="Push"/> — главный поток (обработчики
+/// событий, из-под клика игрока); <see cref="Drain"/> — тоже главный, внутри маршалированного
+/// вызова; а <see cref="PeekUnread"/> зовётся из <b>потока агента</b> на каждый результат
+/// инструмента, и <see cref="Count"/> читается ещё и с потока отладочного HTTP.
+/// </para>
+/// <para>
+/// Всё под одним локом, поэтому корректно. Но «контенции нет» — ложная посылка, и из неё следовал
+/// вывод, что под локом можно делать что угодно: <c>PeekUnread</c> держал его через два полных
+/// обхода до шестисот элементов вместе со сборкой строк, а главный поток в это время ждал на
+/// <c>Push</c>. Держать лок дольше, чем нужно на выбор элементов, здесь нельзя.
+/// </para>
 ///
 /// On overflow the <em>oldest</em> entries are dropped and the count is reported to the model as
 /// a "DROPPED n" line. Silently losing them would leave the agent with a blind spot it cannot
@@ -162,6 +175,16 @@ public sealed class ObservationQueue
     /// </summary>
     public List<string> PeekUnread(int max)
     {
+        // Под локом — только выбор строк; сборка текста снаружи.
+        //
+        // Метод зовётся из ПОТОКА АГЕНТА на каждый результат инструмента (`TurnRunner`), а лок тот
+        // же, что держит `Push` — а `Push` зовётся с главного потока из обработчиков событий, то
+        // есть из-под клика игрока. Пока форматирование стояло внутри, главный поток мог встать в
+        // очередь за двумя полными обходами до шестисот элементов ПЛЮС интерполяцией строк по
+        // каждой выбранной. Это не всплывало в статистике диспетчера: маршалированного вызова тут
+        // нет, тик просто ждал чужой лок.
+        List<Observation> chosenItems;
+
         lock (_lock)
         {
             if (_items.Count == 0 || max <= 0)
@@ -188,19 +211,26 @@ public sealed class ObservationQueue
             for (var i = seen.Count - takeSeen; i < seen.Count; i++)
                 chosen.Add(seen[i]);
 
-            var result = new List<string>(chosen.Count);
+            chosenItems = new List<Observation>(chosen.Count);
             at = 0;
 
             foreach (var item in _items)
             {
                 if (chosen.Contains(at))
-                    result.Add(ObservationFormatter.FormatLine(item));
+                    chosenItems.Add(item);
 
                 at++;
             }
-
-            return result;
         }
+
+        // Observation — неизменяемая запись, поэтому вынести форматирование за лок безопасно:
+        // взятые строки не могут измениться под нами, а вытеснение из очереди их уже не касается.
+        var result = new List<string>(chosenItems.Count);
+
+        foreach (var item in chosenItems)
+            result.Add(ObservationFormatter.FormatLine(item));
+
+        return result;
     }
 
     /// <summary>

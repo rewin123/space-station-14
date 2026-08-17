@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -239,7 +240,26 @@ public static class UiContract
     /// watching the state refuse to move, and spends its turn budget guessing parameters that are
     /// never read.
     /// </summary>
-    public static UiAction? Describe(Type message)
+    /// <summary>
+    /// Разбор типа сообщения кэшируется навсегда, и это безопасно по построению: ответ зависит
+    /// ТОЛЬКО от <see cref="Type"/>, а <see cref="UiAction"/> и <see cref="UiParam"/> —
+    /// неизменяемые записи со списками <c>IReadOnlyList</c>, так что один экземпляр можно отдавать
+    /// всем вызывающим.
+    ///
+    /// Без кэша каждый вызов <c>device_ui</c> заново делал <c>GetConstructors</c> и
+    /// <c>GetFields</c> по всем типам сообщений интерфейса — рефлексия на главном потоке, внутри
+    /// тика, на инструменте с замеренным максимумом в 25.9 мс. Типы за время жизни процесса не
+    /// меняются, так что вся эта работа повторялась ради одного и того же ответа.
+    ///
+    /// <c>ConcurrentDictionary</c>, а не обычный: индекс строится лениво и его могут дёрнуть и с
+    /// главного потока, и из потока агента.
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, UiAction?> DescribedMessages = new();
+
+    public static UiAction? Describe(Type message) =>
+        DescribedMessages.GetOrAdd(message, static m => DescribeUncached(m));
+
+    private static UiAction? DescribeUncached(Type message)
     {
         if (!typeof(BoundUserInterfaceMessage).IsAssignableFrom(message) || message.IsAbstract)
             return null;
