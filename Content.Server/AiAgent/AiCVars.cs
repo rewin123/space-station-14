@@ -238,9 +238,50 @@ public sealed class AiCVars
     public static readonly CVarDef<int> LookLimit =
         CVarDef.Create("ai.look_limit", 300, CVar.SERVERONLY);
 
-    /// <summary>Budget for a single marshalled main-thread call; over it we log a warning.</summary>
+    /// <summary>
+    /// Порог предупреждения для ОДНОГО среза работы в мире. Ничего не ограничивает — только пишет
+    /// в журнал и в <c>aiagent cost</c>. Ограничивает <see cref="FrameBudgetMs"/>.
+    /// </summary>
     public static readonly CVarDef<float> MainThreadBudgetMs =
         CVarDef.Create("ai.mainthread_budget_ms", 5f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Сколько миллисекунд кадра шина мира может занять под запросы агента.
+    ///
+    /// Три при тикрейте 30 — это 9% кадра. Здоровый тик на этом сервере тратит 21–26 мс из 33.3
+    /// на <c>EntitySystems</c>, так что три миллисекунды берутся из запаса, а не из чужой работы.
+    ///
+    /// Ноль не выключает шину: один срез исполняется до первой проверки дедлайна, иначе
+    /// перегруженный сервер заморозил бы агента навсегда, и тот тихо умер бы посреди раунда.
+    /// </summary>
+    public static readonly CVarDef<float> FrameBudgetMs =
+        CVarDef.Create("ai.frame_budget_ms", 3f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Возраст, после которого обычная заявка обслуживается вперёд срочных, мс.
+    ///
+    /// Сторож от голодания: без него поток срочных мог бы держать обзор в очереди неограниченно.
+    /// При нынешней глубине очереди (инструменты вызываются строго последовательно, в полёте одна
+    /// заявка) не срабатывает, и это нормально — страховка на будущее.
+    /// </summary>
+    public static readonly CVarDef<float> WorldPromoteMs =
+        CVarDef.Create("ai.world_promote_ms", 500f, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Потолок глубины очереди к миру. Обязан не срабатывать никогда — сработал, значит завёлся
+    /// параллелизм, которого в модуле нет. Отказ громкий: заявка возвращает ошибку, а не теряется.
+    /// </summary>
+    public static readonly CVarDef<int> WorldQueueMax =
+        CVarDef.Create("ai.world_queue_max", 256, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Рубильник шины. <c>false</c> — запросы уходят прямо в очередь движка, как было до неё.
+    ///
+    /// Тот же приём, что у <see cref="LookFast"/>, и по той же причине: сервер публичный, а
+    /// пересборка выкидывает всех, кто на нём играет. Откат обязан быть командой, а не выкаткой.
+    /// </summary>
+    public static readonly CVarDef<bool> WorldBusEnabled =
+        CVarDef.Create("ai.world_bus", true, CVar.SERVERONLY);
 
     /// <summary>
     /// Собирать видимые сущности одним обходом дерева вместо запроса на каждый тайл.

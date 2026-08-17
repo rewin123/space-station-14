@@ -212,6 +212,39 @@ public sealed class AgentSession : IDisposable
     public CancellationTokenSource Cts { get; } = new();
     public Task Loop { get; private set; } = Task.CompletedTask;
 
+    /// <summary>
+    /// Записать снимок диалога на диск. Вешается после конструктора — как <c>Arrived</c> у очереди
+    /// наблюдений, и по той же причине: делегат замыкается на систему, которой в момент постройки
+    /// сессии ещё нечего о ней сказать.
+    ///
+    /// Зовётся ТОЛЬКО из петли, то есть с потока агента. Всё, что ему нужно, — хранилище (свои
+    /// файлы), идентификатор (константа) и номер раунда (снятый на главном потоке
+    /// <c>volatile int</c>). Ни одного обращения к миру, иначе это пришлось бы маршалить и вся
+    /// затея потеряла бы смысл.
+    /// </summary>
+    public Action? Persist { get; set; }
+
+    /// <summary>Когда снимок последний раз лёг на диск. Читает <c>Release</c>, чтобы решить, нужен ли аварийный.</summary>
+    public DateTime LastPersistedUtc { get; private set; } = DateTime.MinValue;
+
+    private void SaveSnapshot()
+    {
+        if (Persist == null)
+            return;
+
+        try
+        {
+            Persist();
+            LastPersistedUtc = DateTime.UtcNow;
+        }
+        catch (Exception e)
+        {
+            // Не роняем ход из-за диска. Молча тоже нельзя: «агент забыл смену» — это то, что
+            // замечают через сутки и объясняют чем угодно, кроме несохранённого файла.
+            _sawmill.Warning($"снапшот не сохранён: {e.GetType().Name}: {e.Message}");
+        }
+    }
+
     /// <summary>Bumped by the owning system on every lifecycle change; marshalled calls check it.</summary>
     public int Generation;
 
@@ -384,8 +417,34 @@ public sealed class AgentSession : IDisposable
 
                 State.ConsecutiveFailures = 0;
                 LastError = null;
+
+                // Снимок пишется ЗДЕСЬ, в потоке агента, а не раз в минуту из Update.
+                //
+                // Раньше это делал главный поток: `Conv.Snapshot()` под локом, который в тот же
+                // момент держал агент, затем сериализация тела (при 83к токенов это сотни
+                // килобайт JSON) и блокирующая запись файла — всё внутри тика. Здесь ничего этого
+                // в кадре нет: тело принадлежит петле, сериализация в этом же потоке уже
+                // происходит на каждый запрос к модели, а лок никем не оспаривается.
+                //
+                // После каждого хода, а не раз в минуту: цена упала настолько, что экономить
+                // больше не на чем, а потеря при аварии сократилась с минуты до одного хода.
+                SaveSnapshot();
             }
-            catch (OperationCanceledException)
+            // ТОЛЬКО наша отмена, и это `when` — не украшение.
+            //
+            // `HttpClient.Timeout` бросает `TaskCanceledException`, а он НАСЛЕДУЕТ
+            // `OperationCanceledException`. Без фильтра один запрос, упёршийся в
+            // `ai.request_timeout` (180с), выходил сюда и убивал петлю до конца раунда — мимо
+            // всего разреженного режима ниже, написанного ровно на этот случай. В логе при этом
+            // не оставалось ни одной ошибки: `LastError` = "cancelled", как при штатном
+            // закарживании. Экипаж читал это как «ИИ закардили» и шёл искать его к ядру.
+            //
+            // Насколько близко к краю: замеренный максимум хода в бою 16.08 — 163.0с при
+            // потолке 180. Запас был семнадцать секунд, и в раунде 72 его не хватило.
+            //
+            // Теперь таймаут модели — обычный отказ: он идёт в общий обработчик, наращивает
+            // ConsecutiveFailures и уходит на backoff, как любая другая недоступность провайдера.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 LastError = "cancelled";
                 break;

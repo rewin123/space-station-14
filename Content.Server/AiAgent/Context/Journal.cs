@@ -18,7 +18,8 @@ namespace Content.Server.AiAgent.Context;
 ///
 /// Written from the agent thread, never the main thread, and appended rather than held open: a
 /// line every few seconds does not justify a file handle that would have to be closed correctly on
-/// a shutdown path that (see <c>AutoSaveSessions</c>) does not reliably run.
+/// a shutdown path that does not reliably run — <c>EntitySystem.Shutdown()</c> на выделенном
+/// сервере не зовётся вовсе, см. комментарий у <c>AgentSession.Persist</c>.
 /// </summary>
 public sealed class Journal
 {
@@ -38,6 +39,24 @@ public sealed class Journal
     {
         _dir = logDir;
         _sawmill = sawmill;
+
+        // Каталог создаётся один раз здесь, а не на каждой строке в Write.
+        //
+        // Стоил он один сисколл на событие — не тик, журнал пишется из потока агента, — но событий
+        // тысячи за смену, и все, кроме первого, заведомо холостые. Отказ здесь не фатален: Write
+        // всё равно обёрнут в try, и если каталог не создался, туда придёт та же жалоба, что и
+        // раньше, просто один раз за строку вместо одного раза за попытку.
+        if (_dir == null)
+            return;
+
+        try
+        {
+            Directory.CreateDirectory(_dir);
+        }
+        catch (Exception e)
+        {
+            _sawmill?.Warning($"каталог журнала не создан: {e.GetType().Name}: {e.Message}");
+        }
     }
 
     public bool Enabled => _dir != null;
@@ -129,8 +148,6 @@ public sealed class Journal
 
         try
         {
-            Directory.CreateDirectory(_dir);
-
             var line = new Dictionary<string, object?>(fields.Count + 2)
             {
                 ["ts"] = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),

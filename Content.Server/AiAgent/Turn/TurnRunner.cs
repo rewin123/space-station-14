@@ -88,7 +88,12 @@ public sealed class TurnRunner
         {
             await StepsAsync(ctx, ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        // Тот же фильтр, что в петле (`AgentSession`, catch по OperationCanceledException):
+        // `HttpClient.Timeout` бросает `TaskCanceledException`, наследника OperationCanceledException.
+        // Без `when` истёкший таймаут модели попадал бы в журнал как `Cancelled` — то есть как
+        // штатное закарживание, — тогда как петля в ту же секунду пишет о нём как об отказе.
+        // Разбирать потом два взаимоисключающих объяснения одного события невозможно.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             ctx.Finish(TurnExit.Cancelled, TurnDelivery.Abandoned);
             throw;

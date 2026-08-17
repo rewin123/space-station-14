@@ -122,7 +122,55 @@ public sealed partial class StationAiAgentSystem
     public int WitnessedCount() => _witnessed;
 
     /// <summary>Worst main-thread call observed, for the "never stalls the tick" benchmark.</summary>
-    public (string What, double Ms) SlowestMainThreadCall() => (_dispatcher.Slowest, _dispatcher.SlowestMs);
+    public (string What, double Ms) SlowestMainThreadCall() => (_world.Slowest, _world.SlowestMs);
+
+    /// <summary>
+    /// Во что обошёлся главный поток по каждой операции, самые дорогие сверху.
+    ///
+    /// Одного максимума для разбора не хватает: тридцать вызовов по 26 мс и один на 73 мс дают
+    /// одинаковый максимум, но отличаются по суммарной цене в двадцать раз, а чинятся по-разному —
+    /// первое дроблением, второе удешевлением. Колонка <c>Total</c> и есть та, по которой стоит
+    /// решать, что трогать.
+    /// </summary>
+    public IReadOnlyList<(string What, long Count, double P50, double P95, double Max, double Total, long Overruns)>
+        MainThreadReport() => _world.Report();
+
+    /// <summary>Сколько всего главного потока съел агент с начала процесса.</summary>
+    public double MainThreadTotalMs() => _world.TotalMs;
+
+    /// <summary>
+    /// Здоровье шины мира. Три из пяти чисел обязаны быть нулями, и это утверждение, а не надежда:
+    /// переполнение означает параллелизм, которого в модуле нет, а большое ожидание — голодание.
+    /// </summary>
+    public (int Depth, long Deferrals, long Promotions, long Overflows, double MaxWaitMs) WorldBusHealth() =>
+        (_world.Depth, _world.Deferrals, _world.Promotions, _world.Overflows, _world.MaxWaitMs);
+
+    /// <summary>Прогнать очередь мира вручную — для тестов, которые тикают сервер сами.</summary>
+    public void PumpWorldBusForTest() => _world.Pump();
+
+    /// <summary>
+    /// Поставить произвольный джоб в шину мира от имени живой сессии.
+    ///
+    /// Существует ради тестов на дробление и на устаревшее поколение: настоящие инструменты пока
+    /// все атомарные, и проверить многосрезовый путь на них нечем. Поколение берётся у сессии
+    /// по-настоящему, поэтому <c>ReleaseAll</c> в середине теста роняет заявку тем же способом,
+    /// каким её уронило бы закарживание в бою.
+    /// </summary>
+    public Task<T> SubmitWorldJobForTest<T>(Threading.IWorldJob job, Task<T> result,
+        TimeSpan? timeout = null)
+    {
+        var brain = _sessions.Keys.FirstOrDefault();
+        var generation = brain != default && _sessions.TryGetValue(brain, out var session)
+            ? session.Generation
+            : 0;
+
+        return _world.SubmitAsync(job, result, generation, () => GenerationOf(brain),
+            CancellationToken.None, timeout ?? TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>Последняя строка о длительности тика и сколько их опоздало (>1.5 периода).</summary>
+    public (string Last, long Ticks, long Overruns) FrameReport() =>
+        (_frames.Last, _frames.Ticks, _frames.Overruns);
 
     /// <summary>
     /// Во что обошёлся последний обзор.

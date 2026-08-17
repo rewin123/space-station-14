@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Perception;
+using Content.Server.AiAgent.Threading;
 using Content.Server.AiAgent.Tools;
 using Content.Shared.Silicons.Laws.Components;
 
@@ -321,9 +322,9 @@ public sealed partial class StationAiAgentSystem
         var brain = session.Brain;
         var generation = session.Generation;
 
-        return await _dispatcher.RunAsync(() =>
+        return await _world.RunAsync(() =>
         {
-            _dispatcher.AssertMainThread("observation");
+            _world.AssertMainThread("observation");
 
             // Выключенный агент не делает ходов, и это работает на ЖИВОЙ сессии.
             //
@@ -398,7 +399,7 @@ public sealed partial class StationAiAgentSystem
                 items.Any(i => i.Kind == ObsKind.Speech),
                 force,
                 ObservationFormatter.FormatRoundTime(roundTime));
-        }, generation, () => GenerationOf(brain), ct, what: "observation").ConfigureAwait(false);
+        }, generation, () => GenerationOf(brain), ct, what: "observation", priority: WorldPriority.Urgent).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -492,6 +493,30 @@ public sealed partial class StationAiAgentSystem
 
     // -------------------------------------------------------------- tool plumbing
 
+    /// <summary>
+    /// Что меняет мир или говорит вслух — в срочную полосу; что только смотрит — в обычную.
+    ///
+    /// <para>
+    /// Правило именно такое, а не «дешёвое вперёд». Смысл приоритета в том, чтобы объявление
+    /// тревоги не ждало за обзором, который считает две тысячи сущностей: экипаж замечает
+    /// задержку речи и не замечает задержку опроса. Стоимость тут ни при чём — <c>announce</c>
+    /// сам по себе не из дешёвых.
+    /// </para>
+    /// <para>
+    /// Политика живёт одним списком, а не параметром на восемнадцати вызовах: так её видно
+    /// целиком и она не разъезжается при добавлении инструмента.
+    /// </para>
+    /// </summary>
+    private static readonly HashSet<string> UrgentOps = new(StringComparer.Ordinal)
+    {
+        "say", "radio", "announce", "move_camera", "jump_to_core",
+        "device_action", "device_ui", "new_timer", "del_timer",
+        "observation", "compaction announce", "untooled reply",
+    };
+
+    private static WorldPriority PriorityOf(string what) =>
+        UrgentOps.Contains(what) ? WorldPriority.Urgent : WorldPriority.Normal;
+
     /// <summary>Run a tool body on the main thread with the session's generation guard.</summary>
     private Task<ToolResult> OnMainAsync(AgentSession s, string what, Func<ToolResult> body,
         CancellationToken ct, TimeSpan? timeout = null)
@@ -499,13 +524,13 @@ public sealed partial class StationAiAgentSystem
         var brain = s.Brain;
         var generation = s.Generation;
 
-        return _dispatcher.RunAsync(() =>
+        return _world.RunAsync(() =>
         {
-            _dispatcher.AssertMainThread(what);
+            _world.AssertMainThread(what);
             return !IsPlayable(brain)
                 ? ToolResult.Fail(ToolError.Dead, "ИИ больше не в игре")
                 : body();
-        }, generation, () => GenerationOf(brain), ct, timeout, what);
+        }, generation, () => GenerationOf(brain), ct, timeout, what, PriorityOf(what));
     }
 
     /// <summary>

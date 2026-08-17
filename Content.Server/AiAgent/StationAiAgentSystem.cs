@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -80,7 +81,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private SharedUserInterfaceSystem _uiSystem = default!;
 
     private ISawmill _sawmill = default!;
-    private MainThreadDispatcher _dispatcher = default!;
+    private WorldBus _world = default!;
     private GameTicker? _ticker;
 
     /// <summary>
@@ -111,7 +112,22 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _sawmill = _logManager.GetSawmill("ai");
 
         // Constructed here, on the main thread, so it learns which thread that is.
-        _dispatcher = new MainThreadDispatcher(_taskManager, _sawmill, _cfg.GetCVar(AiCVars.MainThreadBudgetMs));
+        _world = new WorldBus(_taskManager, _sawmill, _cfg.GetCVar(AiCVars.MainThreadBudgetMs));
+
+        // Порог живой, а не снятый один раз при старте.
+        //
+        // `BudgetMs` — публичное сеттерное свойство, но записать в него было некому: значение
+        // читалось здесь и больше нигде, так что `cvar ai.mainthread_budget_ms 2` из админ-консоли
+        // молча не делал ничего. Диагностический порог, который нельзя подкрутить на живом
+        // сервере, бесполезен ровно тогда, когда нужен, — на живом сервере.
+        _cfg.OnValueChanged(AiCVars.MainThreadBudgetMs, ms => _world.BudgetMs = ms);
+
+        // Все ручки шины — живые, по той же причине. Особенно рубильник: если шина поведёт себя
+        // не так, откатывать её командой из консоли, а не пересборкой с киком всех игроков.
+        _cfg.OnValueChanged(AiCVars.FrameBudgetMs, ms => _world.FrameBudgetMs = ms, true);
+        _cfg.OnValueChanged(AiCVars.WorldPromoteMs, ms => _world.PromoteAfterMs = ms, true);
+        _cfg.OnValueChanged(AiCVars.WorldQueueMax, n => _world.QueueMax = n, true);
+        _cfg.OnValueChanged(AiCVars.WorldBusEnabled, on => _world.Enabled = on, true);
 
         // Before the stores, so their initial contents arrive on the bus rather than appearing
         // out of nowhere to whoever connects first.
@@ -479,6 +495,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // is what makes the whole agent event-driven rather than polled.
         queue.Arrived = session.Wake;
 
+        // Снимок пишет сама петля, после каждого хода. Здесь только замыкание, и в нём намеренно
+        // нет ни одного обращения к миру: хранилище ходит по своим файлам, идентификатор —
+        // константа, а номер раунда берётся из volatile-поля, снятого на главном потоке. Позвать
+        // отсюда CurrentRoundId() значило бы трогать EntityManager с потока агента.
+        var store = SessionStoreFor();
+        var sessionId = SessionIdFor(brain);
+        session.Persist = () => store.Save(sessionId, session.State, _roundId);
+
         RegisterTools(session, registry);
         session.Conv.SetPrefix(BuildSystemPrompt(), registry.WireJson());
         session.Cache.SetExpectedPrefix(session.Conv.PrefixHash);
@@ -536,15 +560,28 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // would get an ObjectDisposedException off it.
         DetachDebugSession(session, why);
 
-        // Snapshot before cancelling: a server restart mid-round should not amnesia the agent, and
-        // this is the last moment the conversation is still coherent.
-        try
+        // Аварийное сохранение — только если свежего снимка нет.
+        //
+        // Обычно писать здесь уже нечего: петля кладёт снимок после каждого хода, и на диске лежит
+        // состояние не старше одного хода. Но ждать петлю нельзя (см. комментарий ниже — Wait
+        // здесь гарантированно вешал сервер на две секунды), а значит нельзя и переложить
+        // сохранение на неё: к моменту Release она может сидеть в HTTP-вызове до 180 секунд.
+        //
+        // Поэтому синхронная запись остаётся, но становится РЕДКИМ путём вместо постоянного: она
+        // срабатывает, только если ход давно не закрывался — сразу после старта сессии, или когда
+        // агент завис на длинном запросе. Ровно те случаи, ради которых она и была написана.
+        var age = DateTime.UtcNow - session.LastPersistedUtc;
+
+        if (age > TimeSpan.FromSeconds(SnapshotMaxAgeSeconds))
         {
-            SessionStoreFor().Save(SessionIdFor(brain), session.State, CurrentRoundId());
-        }
-        catch (Exception e)
-        {
-            _sawmill.Warning($"снапшот при остановке не сохранён: {e.Message}");
+            try
+            {
+                SessionStoreFor().Save(SessionIdFor(brain), session.State, CurrentRoundId());
+            }
+            catch (Exception e)
+            {
+                _sawmill.Warning($"снапшот при остановке не сохранён: {e.Message}");
+            }
         }
 
         session.Cts.Cancel();
@@ -581,6 +618,13 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     {
         base.Update(frameTime);
 
+        // Первым делом — запросы агента к миру, под бюджетом на кадр.
+        //
+        // Здесь, а не в Input: Update идёт внутри _entityManager.TickUpdate, то есть ПОСЛЕ того,
+        // как движок слил свою очередь продолжений (BaseServer.cs:753 → :757). Правки мира от
+        // агента ложатся вместе с остальными системами, а не тиком раньше них.
+        _world.Pump();
+
         for (var i = _draining.Count - 1; i >= 0; i--)
         {
             var session = _draining[i];
@@ -601,10 +645,69 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // восьми записей под замком дешевле, чем счётчик, который пришлось бы объяснять.
         FireDueTimers();
 
-        AutoSaveSessions(frameTime);
         PruneHandles(frameTime);
         ResetWitnessTick(frameTime);
+        ReportFrameTime(frameTime);
     }
+
+    private readonly FrameTimeWatch _frames = new();
+
+    /// <summary>
+    /// Базовая линия: во что обходится кадр всему серверу, и сколько из этого стоит агент.
+    ///
+    /// Считается ВСЕГДА, а не только когда агент жив, — иначе сравнивать не с чем: раунд без
+    /// сессии и есть контрольный замер. Вторая строка появляется, только если агент работал в
+    /// этом окне, и говорит, какую долю кадра он занял. Именно это число решает спор «виснем
+    /// из-за ИИ»: если оно исчезающе мало, а кадры всё равно плывут, причина не здесь.
+    /// </summary>
+    private void ReportFrameTime(float frameTime)
+    {
+        _frames.TickPeriodMs = _gameTiming.TickPeriod.TotalMilliseconds;
+
+        // Промежуток между СОСЕДНИМИ ТИКАМИ по настенным часам, посчитанный здесь, а не взятый из
+        // `IGameTiming.RealFrameTime`.
+        //
+        // RealFrameTime — это `curRealTime - _lastRealTime` из `StartFrame` (GameTiming.cs:190), то
+        // есть период итерации ГЛАВНОГО ЦИКЛА, а цикл крутится куда чаще, чем тикает: он копит
+        // аккумулятор и зовёт Tick, только когда набежал период. На пустом лобби первый же замер
+        // показал p50=0.7мс при 901 замере — цикл шёл около 1400 оборотов в секунду на тридцати
+        // тиках. Мерить этим просадку тика нельзя: числа получаются красивые и не о том.
+        //
+        // Update зовётся ровно раз за тик, поэтому разница RealTime между двумя его вызовами и есть
+        // то, что нужно: уложился сервер в 33.3мс или нет.
+        var now = _gameTiming.RealTime;
+        var sinceLast = _lastTickAt == TimeSpan.Zero ? TimeSpan.Zero : now - _lastTickAt;
+        _lastTickAt = now;
+
+        // Первый тик после старта сравнивать не с чем; пропускаем, иначе в выборку попадёт вся
+        // загрузка карты одним значением.
+        if (sinceLast <= TimeSpan.Zero)
+            return;
+
+        if (_frames.Tick(frameTime, sinceLast.TotalMilliseconds) is not { } line)
+            return;
+
+        _sawmill.Info(line);
+
+        var spent = _world.TotalMs - _lastReportedDispatcherMs;
+        _lastReportedDispatcherMs = _world.TotalMs;
+
+        if (spent <= 0)
+            return;
+
+        // Доля, а не абсолют, и делится на РЕАЛЬНОЕ время окна, а не на номинальные 30 секунд:
+        // окно закрывается по симуляционному времени, и когда сервер отстаёт, реального проходит
+        // больше. Делить на 30000 значило бы завышать долю ровно в тех случаях, ради которых всё
+        // и меряется, — то есть подыгрывать выводу «виноват ИИ».
+        var window = _frames.WindowRealMs;
+        var share = window > 0 ? 100.0 * spent / window : 0;
+
+        _sawmill.Info(string.Create(CultureInfo.InvariantCulture,
+            $"из них главного потока на агента: {spent:F1}мс ({share:F2}% времени)"));
+    }
+
+    private double _lastReportedDispatcherMs;
+    private TimeSpan _lastTickAt;
 
     private float _sincePrune;
 
@@ -997,9 +1100,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     {
         var brain = session.Brain;
 
-        return _dispatcher.RunAsync(() =>
+        return _world.RunAsync(() =>
         {
-            _dispatcher.AssertMainThread("compaction announce");
+            _world.AssertMainThread("compaction announce");
 
             if (!IsPlayable(brain))
                 return false;
@@ -1010,7 +1113,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
             _sawmill.Info($"[LLM] компакция: {text}");
             return true;
-        }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "compaction announce");
+        }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "compaction announce", priority: WorldPriority.Urgent);
     }
 
     /// <summary>
@@ -1028,9 +1131,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         var brain = session.Brain;
 
-        return _dispatcher.RunAsync(() =>
+        return _world.RunAsync(() =>
         {
-            _dispatcher.AssertMainThread("untooled reply");
+            _world.AssertMainThread("untooled reply");
 
             if (!IsPlayable(brain))
                 return false;
@@ -1059,44 +1162,33 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             }
 
             return true;
-        }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "untooled reply");
+        }, session.Generation, () => GenerationOf(brain), CancellationToken.None, what: "untooled reply", priority: WorldPriority.Urgent);
     }
-
-    /// <summary>Persist the conversation so a restart does not amnesia the agent mid-round.</summary>
-    public void SaveSessions()
-    {
-        foreach (var (brain, session) in _sessions)
-            SessionStoreFor().Save(SessionIdFor(brain), session.State, CurrentRoundId());
-    }
-
-    private float _sinceAutoSave;
 
     /// <summary>
-    /// Periodic snapshot, because the tidy place to do it does not run.
+    /// Насколько старым должен быть снимок на диске, чтобы <c>Release</c> написал его сам.
     ///
-    /// <c>EntitySystem.Shutdown()</c> is never invoked on a dedicated server: <c>BaseServer.Cleanup</c>
-    /// reaches <c>EntityManager.Cleanup()</c>, which calls <c>EntitySystemManager.Clear()</c> — and
-    /// Clear does not call Shutdown on anything. Only the client path does. So the "save on the way
-    /// out" that this class appeared to have never ran in production, and the only real save was the
-    /// one at round restart, by which point the round it belonged to was already over.
-    ///
-    /// Serialising the body costs a few hundred kilobytes of JSON, which is why this is once a
-    /// minute rather than once a turn.
+    /// Две минуты — заметно больше обычного хода (в бою 4–30 с) и заметно меньше потолка запроса
+    /// к модели (<c>ai.request_timeout</c>, 180 с). То есть при живой петле путь не берётся, а при
+    /// зависшей — берётся.
     /// </summary>
-    private void AutoSaveSessions(float frameTime)
-    {
-        if (_sessions.Count == 0)
-            return;
+    private const double SnapshotMaxAgeSeconds = 120;
 
-        _sinceAutoSave += frameTime;
-        if (_sinceAutoSave < AutoSaveSeconds)
-            return;
 
-        _sinceAutoSave = 0f;
-        SaveSessions();
-    }
-
-    private const float AutoSaveSeconds = 60f;
+    // Периодического автосейва из тика здесь больше нет — снимок пишет сама петля после каждого
+    // хода, см. AgentSession.Persist.
+    //
+    // Зачем он был. EntitySystem.Shutdown() на выделенном сервере не зовётся никогда:
+    // BaseServer.Cleanup доходит до EntityManager.Cleanup(), тот зовёт EntitySystemManager.Clear(),
+    // а Clear не зовёт Shutdown ни у кого — только клиентский путь это делает. То есть
+    // «сохранение на выходе», которое у этого класса как будто было, в бою не отрабатывало ни
+    // разу, и единственным настоящим сохранением оставалось то, что при рестарте раунда, — когда
+    // раунд, которому снимок принадлежал, уже кончился.
+    //
+    // Почему убран. Раз в минуту он делал в тике то, чему в тике не место: Conv.Snapshot() под
+    // локом, который в тот же момент держит агент, сериализацию тела в сотни килобайт JSON и
+    // блокирующую запись файла. Всё это принадлежит потоку агента и там же теперь и живёт, а
+    // «раз в минуту» превратилось в «после каждого хода».
 
     // ------------------------------------------------------------------- curator
 

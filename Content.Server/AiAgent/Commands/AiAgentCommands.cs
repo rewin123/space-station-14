@@ -16,7 +16,7 @@ public sealed class AiAgentCommand : IConsoleCommand
 {
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
-    public string Help => "aiagent status | claim [uid] | release | inject <канал> <текст> | " +
+    public string Help => "aiagent status | cost | claim [uid] | release | inject <канал> <текст> | " +
                           "tool <имя> [json] | curate | skills | timers | debug | dryrun on|off";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
@@ -56,6 +56,10 @@ public sealed class AiAgentCommand : IConsoleCommand
             case "release":
                 system.ReleaseAll("вручную из консоли");
                 shell.WriteLine("все агенты остановлены.");
+                break;
+
+            case "cost":
+                Cost(shell, system);
                 break;
 
             case "inject":
@@ -164,6 +168,44 @@ public sealed class AiAgentCommand : IConsoleCommand
             default:
                 shell.WriteError($"неизвестная подкоманда '{sub}'. {Help}");
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Чем агент занял главный поток и во что обошёлся кадр.
+    ///
+    /// Отдельной командой, а не строкой в <c>status</c>: это таблица на два десятка строк, а
+    /// <c>status</c> должен оставаться тем, что читают с одного экрана.
+    /// </summary>
+    private static void Cost(IConsoleShell shell, StationAiAgentSystem system)
+    {
+        var (last, ticks, overruns) = system.FrameReport();
+
+        shell.WriteLine(last);
+        shell.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"тиков всего: {ticks}, опозданий: {overruns} " +
+            $"({(ticks == 0 ? 0 : 100.0 * overruns / ticks):F1}%)"));
+
+        var (depth, deferrals, promotions, overflows, maxWait) = system.WorldBusHealth();
+        shell.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"шина мира: в очереди {depth}, переносов {deferrals}, обгонов {promotions}, " +
+            $"отказов по переполнению {overflows}, худшее ожидание {maxWait:F1}мс"));
+
+        var report = system.MainThreadReport();
+        if (report.Count == 0)
+        {
+            shell.WriteLine("главный поток агентом ещё не занимался.");
+            return;
+        }
+
+        shell.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"главного потока на агента всего: {system.MainThreadTotalMs():F0}мс"));
+        shell.WriteLine($"{"операция",-20} {"n",6} {"p50",7} {"p95",7} {"max",7} {"итого",9} {"сверх",6}");
+
+        foreach (var (what, count, p50, p95, max, total, over) in report)
+        {
+            shell.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"{what,-20} {count,6} {p50,7:F1} {p95,7:F1} {max,7:F1} {total,9:F0} {over,6}"));
         }
     }
 
