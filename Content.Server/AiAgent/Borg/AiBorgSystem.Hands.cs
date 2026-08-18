@@ -48,6 +48,40 @@ public sealed partial class AiBorgSystem
         return true;
     }
 
+    /// <summary>
+    /// В каком установленном модуле лежит инструмент с таким названием.
+    /// </summary>
+    /// <remarks>
+    /// Смотрит на прототипы предметов в руках модулей, а не на сами предметы: пока модуль не
+    /// выбран, предметы ещё не созданы — они существуют только как записи «в этой руке будет вот
+    /// это». Иначе подсказать было бы нечем ровно тогда, когда она нужна.
+    /// </remarks>
+    private string? FindModuleWithTool(EntityUid borg, string toolName)
+    {
+        if (!TryComp<BorgChassisComponent>(borg, out var chassis))
+            return null;
+
+        foreach (var module in chassis.ModuleContainer.ContainedEntities)
+        {
+            if (!TryComp<ItemBorgModuleComponent>(module, out var items))
+                continue;
+
+            foreach (var hand in items.Hands)
+            {
+                if (hand.Item is not { } proto)
+                    continue;
+
+                if (!proto.Id.Contains(toolName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                return Name(module).Replace(" cyborg module", string.Empty,
+                    StringComparison.OrdinalIgnoreCase).Trim();
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Выбрать модуль — то есть сменить набор инструментов в руках.</summary>
     private bool TrySelectModule(EntityUid borg, string name, out string why)
     {

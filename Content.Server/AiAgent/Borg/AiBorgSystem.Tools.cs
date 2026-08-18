@@ -404,7 +404,15 @@ public sealed partial class AiBorgSystem
             if (!TryTarget(s, args, out var target, out var failure))
                 return failure!;
 
+            var beforeSnap = Snapshot(target);
             var before = _host.ShortState(target);
+
+            // Номер следующего отложенного действия — так узнаём, что оно вообще началось.
+            // Приём взят у апстримового InteractWithOperator: у DoAfter нет события «я стартовал»,
+            // зато счётчик на компоненте увеличивается ровно на запуск.
+            var beforeDoAfter = TryComp<Content.Shared.DoAfter.DoAfterComponent>(borg, out var da)
+                ? da.NextId
+                : (ushort) 0;
 
             var withItem = args.ValueKind == JsonValueKind.Object
                            && args.TryGetProperty("with_item", out var wi)
@@ -416,9 +424,13 @@ public sealed partial class AiBorgSystem
             // инструментов шесть, и «применить» уходило тем, что оказалось активным. На запуске
             // реактора это стоило отладки — упаковка экранирования требует ПРОЗВОНКИ (мультитул),
             // а в руке был лом, и вскрытие молча не срабатывало.
+            string? toolUsed = null;
+
             if (StationAiAgentSystem.TryGetString(args, "tool", out var toolName)
                 && !string.IsNullOrWhiteSpace(toolName))
             {
+                toolUsed = toolName;
+
                 var picked = false;
 
                 foreach (var held in _hands.EnumerateHeld(borg))
@@ -433,11 +445,22 @@ public sealed partial class AiBorgSystem
                 if (!picked)
                 {
                     var have = string.Join(", ", _hands.EnumerateHeld(borg).Select(h => Name(h)));
-                    return ToolResult.Fail(ToolError.Refused,
-                        string.IsNullOrEmpty(have)
-                            ? $"инструмента «{toolName}» нет: руки пусты, смени модуль"
-                            : $"инструмента «{toolName}» нет в руках. Есть: {have}",
-                        retry: "other_target");
+
+                    // Не просто «нет», а КАКОЙ модуль его даёт.
+                    //
+                    // На боевом прогоне модель выбрала модуль prying — он даёт свойство, а не
+                    // руки, — осталась с пустыми руками и десять ходов перебирала названия
+                    // инструмента, потому что отказ «смени модуль» не говорил, на какой. Отказ
+                    // обязан указывать следующий шаг, иначе он просто съедает ход.
+                    var where = FindModuleWithTool(borg, toolName!);
+
+                    var detail = where != null
+                        ? $"инструмент «{toolName}» лежит в модуле «{where}» — сначала module {where}"
+                        : string.IsNullOrEmpty(have)
+                            ? $"инструмента «{toolName}» нет, и руки пусты. Список модулей — в строке SELF"
+                            : $"инструмента «{toolName}» нет в руках. Сейчас в руках: {have}";
+
+                    return ToolResult.Fail(ToolError.Refused, detail, retry: "other_target");
                 }
 
                 withItem = true;
@@ -461,16 +484,39 @@ public sealed partial class AiBorgSystem
             }
 
             var after = _host.ShortState(target);
+            var afterSnap = Snapshot(target);
 
-            return ToolResult.Effected(Identity.Name(target, EntityManager), new Dictionary<string, object?>
+            var started = TryComp<Content.Shared.DoAfter.DoAfterComponent>(borg, out var da2)
+                          && da2.NextId != beforeDoAfter;
+
+            var changes = Diff(beforeSnap, afterSnap);
+
+            // Три разных исхода под одной вывеской «ok» — это и был главный дефект инструмента.
+            // Теперь они называются по-разному: началось долгое действие; что-то изменилось (и
+            // ЧТО именно); ничего не вышло (и ПОЧЕМУ).
+            var result = new Dictionary<string, object?>
             {
                 ["было"] = before,
                 ["стало"] = after,
-                ["замечание"] = before == after
-                    ? "состояние не изменилось: либо действие занимает время (жди наблюдения), " +
-                      "либо ты слишком далеко, либо нужен другой инструмент в руке"
-                    : null,
-            });
+            };
+
+            if (started)
+            {
+                result["итог"] = "действие НАЧАЛОСЬ и занимает время. СТОЙ НА МЕСТЕ и жди " +
+                                 "наблюдения: шаг в сторону отменяет его, и всё придётся начинать заново";
+            }
+            else if (changes.Count > 0)
+            {
+                result["итог"] = "получилось";
+                result["изменилось"] = changes;
+            }
+            else
+            {
+                result["итог"] = "НЕ ПОЛУЧИЛОСЬ";
+                result["почему"] = Explain(target, toolUsed, beforeSnap, afterSnap);
+            }
+
+            return ToolResult.Effected(Identity.Name(target, EntityManager), result);
         }, ct);
     }
 

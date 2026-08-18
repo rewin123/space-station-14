@@ -81,11 +81,29 @@ public sealed partial class AiBorgSystem
             Глаза: look (осмотреться вокруг себя), examine (рассмотреть одну вещь вблизи).
 
             Руки: use (главный инструмент — применить руки к цели: открыть, нажать, применить то,
-            что держишь), pickup, drop, hit, module (сменить набор инструментов в руках).
+            что держишь), pickup, drop, hit, module (сменить набор инструментов в руках),
+            console (пульт машины: показания и кнопки).
+
+            ИМЕНА БЕРИ ИЗ SELF ДОСЛОВНО. В строке SELF перечислены твои модули и инструменты в
+            руках. Они названы так, как их зовёт станция, — часто по-английски. Подставляй эти
+            названия как есть: «module tool», «use tool: multitool». Придуманный перевод не
+            сработает, и ты потратишь ход на отказ.
+
+            Носить предметы можно только манипулятором: у остальных модулей руки заняты
+            несъёмными инструментами. Поэтому обычный порядок работы с деталью такой —
+            переключиться на манипулятор, взять и донести, переключиться обратно на инструменты,
+            применить нужный.
 
             Речь: say (рядом), radio (по станции), set_channel.
 
             Ещё: laws, таймеры, память, навыки, заметки о людях, noop.
+
+            ДЕЙСТВИЯ С ЗАДЕРЖКОЙ
+
+            Часть работы делается не мгновенно: отжать ящик, сварить, починить, вскрыть. Если в
+            ответе use написано, что действие НАЧАЛОСЬ, — стой на месте и жди наблюдения. Любой
+            шаг в сторону отменяет его, и всё придётся начинать заново. Это самая частая причина
+            «делаю одно и то же, а результата нет».
 
             ПОРЯДОК РАБОТЫ РУКАМИ
 
@@ -139,6 +157,10 @@ public sealed partial class AiBorgSystem
         return sb.ToString();
     }
 
+    /// <summary>Короткое имя модуля: без хвоста «cyborg module», который одинаков у всех.</summary>
+    private string ShortName(EntityUid uid) =>
+        Name(uid).Replace(" cyborg module", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+
     /// <summary>Строка SELF: где я, что со мной, что в руках.</summary>
     private string BorgSelfLine(AgentSession s, EntityUid borg)
     {
@@ -160,13 +182,32 @@ public sealed partial class AiBorgSystem
             {
                 parts.Add($"шасси={(chassis.Active ? "активно" : "НЕ АКТИВНО (нет заряда)")}");
 
+                if (ChargePercent(borg) is { } charge)
+                    parts.Add($"заряд={charge}%");
+
                 if (chassis.SelectedModule is { } sel && Exists(sel))
-                    parts.Add($"модуль={Name(sel)}");
+                    parts.Add($"модуль={ShortName(sel)}");
+
+                // Перечень установленных модулей — в каждую строку SELF.
+                //
+                // Без него модель угадывает: на боевом прогоне она перебирала module «инженер»,
+                // «prying», «tool», потому что узнать настоящие имена было неоткуда. Своё тело
+                // агент обязан знать без экспериментов.
+                var installed = chassis.ModuleContainer.ContainedEntities
+                    .Where(Exists)
+                    .Select(ShortName)
+                    .ToList();
+
+                if (installed.Count > 0)
+                    parts.Add($"модули=[{string.Join(", ", installed)}]");
             }
 
-            parts.Add(_hands.TryGetActiveItem(borg, out var item) && item != null
-                ? $"в_руке={Name(item.Value)}"
-                : "в_руке=пусто");
+            // Инструменты в руках — теми же именами, какие принимает use{tool}.
+            var held = _hands.EnumerateHeld(borg).Where(Exists).Select(h => Name(h)).ToList();
+
+            parts.Add(held.Count > 0
+                ? $"в_руках=[{string.Join(", ", held)}]"
+                : "в_руках=пусто");
 
             parts.Add(IsWalking(borg) ? "иду=да" : "иду=нет");
         }

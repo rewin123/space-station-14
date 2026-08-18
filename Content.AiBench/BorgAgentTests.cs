@@ -1014,4 +1014,65 @@ public sealed class BorgAgentTests
 
         return xform.LocalPosition;
     }
+
+    /// <summary>
+    /// <c>use</c> объясняет исход, а не отвечает голым «ok».
+    /// </summary>
+    /// <remarks>
+    /// Прямая регрессия на прогон, где робот 520 вызовов подряд бил ломом по ящику, который
+    /// открывается нажатием. Инструмент отвечал <c>ok</c> и «состояние не изменилось» — а это три
+    /// разных исхода под одной вывеской: началось долгое действие; что-то изменилось; действие
+    /// неприменимо. Модель выбрала неверный способ и не получила ни одного сигнала об этом.
+    /// </remarks>
+    [Test]
+    public async Task Use_ExplainsWhatHappened()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+        var ent = w.Ent;
+
+        var crate = EntityUid.Invalid;
+        var door = EntityUid.Invalid;
+
+        await w.Pair.Server.WaitPost(() =>
+        {
+            var where = ent.GetComponent<TransformComponent>(borg).Coordinates;
+            crate = ent.SpawnEntity("CrateGenericSteel", where.Offset(new Vector2(1, 0)));
+            door = ent.SpawnEntity("Airlock", where.Offset(new Vector2(0, 1)));
+        });
+
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var handle = await w.Read(() => w.System.HandleFor(borg, crate));
+
+        // Нажатием — ящик должен открыться, и инструмент обязан назвать ЧТО изменилось.
+        var pressed = await w.InvokeOn(borg, "use", "{\"target\":\"" + handle + "\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var json = pressed.EffectJson();
+        TestContext.Out.WriteLine("НАЖАЛ: " + json[..Math.Min(300, json.Length)]);
+
+        Assert.That(pressed.Ok, Is.True, $"use отказал: {pressed.Error} {pressed.Detail}");
+        Assert.That(json, Does.Contain("итог"), "в ответе нет исхода — модель снова увидит голое ok");
+
+        // Путь УСПЕХА: дверь на нажатие обязана поменять состояние, и это обязано быть сказано.
+        var doorHandle = await w.Read(() => w.System.HandleFor(borg, door));
+        var opened = await w.InvokeOn(borg, "use", "{\"target\":\"" + doorHandle + "\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var openJson = opened.EffectJson();
+        TestContext.Out.WriteLine("ДВЕРЬ: " + openJson[..Math.Min(280, openJson.Length)]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(openJson, Does.Contain("получилось"),
+                "дверь открылась, а инструмент об этом не сказал");
+            Assert.That(openJson, Does.Contain("дверь:"),
+                "не назван характер изменения — модель снова не поймёт, сработало ли");
+
+            // Путь ОТКАЗА: по ящику ломом. Инструмент обязан сказать, что лом тут ни при чём.
+            Assert.That(json, Does.Contain("НЕ ПОЛУЧИЛОСЬ").And.Contain("почему"),
+                "ничего не вышло, а причина не названа");
+        });
+    }
 }

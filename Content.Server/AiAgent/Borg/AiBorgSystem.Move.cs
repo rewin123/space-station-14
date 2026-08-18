@@ -53,6 +53,9 @@ public sealed partial class AiBorgSystem
     {
         base.Update(frameTime);
         PollWalking();
+
+        foreach (var borg in _claimed.Keys)
+            WatchCharge(borg);
     }
 
     private void StopSteering(EntityUid borg)
