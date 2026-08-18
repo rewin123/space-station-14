@@ -87,9 +87,12 @@ public static class BorgPathfinder
     /// Нужен, потому что цель почти никогда не задаётся проходимым тайлом: навигационный маяк —
     /// это вывеска на стене, а хендл двери — сама дверь. Идти надо «к», а не «в».
     /// </remarks>
-    public static Vector2i? NearestPassable(NavMapComponent navMap, Vector2i around, int radius = 12)
+    public static Vector2i? NearestPassable(NavMapComponent navMap, Vector2i around, int radius = 12,
+        Func<Vector2i, bool>? walkable = null)
     {
-        if (Passable(navMap, around))
+        bool Open(Vector2i t) => Passable(navMap, t) && (walkable == null || walkable(t));
+
+        if (Open(around))
             return around;
 
         for (var r = 1; r <= radius; r++)
@@ -103,7 +106,7 @@ public static class BorgPathfinder
 
                     var candidate = around + new Vector2i(dx, dy);
 
-                    if (Passable(navMap, candidate))
+                    if (Open(candidate))
                         return candidate;
                 }
             }
@@ -120,12 +123,30 @@ public static class BorgPathfinder
     /// проверки срезанных углов: по диагонали между двумя стенами корпус не пройдёт, и путь,
     /// который карта считает верным, кончился бы роботом, застрявшим в дверном косяке.
     /// </remarks>
-    public static List<Vector2i>? FindPath(NavMapComponent navMap, Vector2i start, Vector2i goal)
+    /// <param name="walkable">
+    /// Дополнительная проверка тайла — обычно «видит ли его апстримовый навмеш».
+    ///
+    /// <para>
+    /// Без неё поиск врёт в одну сторону: карта <see cref="NavMapComponent"/> знает пол, стены и
+    /// шлюзы, но НЕ знает машин, мебели и всего прочего, что стоит на полу. Путь спокойно
+    /// прокладывался сквозь тайл, занятый оборудованием, локальный рулевой на нём вставал, а
+    /// перепланировка с того же места давала ровно тот же путь. На бою это выглядело так: робот
+    /// прошёл 27 тайлов из 47 и встал в чистом коридоре, где ни одной двери в четырёх тайлах.
+    /// </para>
+    /// <para>
+    /// С этой проверкой поиск идёт по ТОМУ ЖЕ графу, что и рулевой, и отличается от него ровно
+    /// одним — отсутствием потолка в 512 узлов, ради чего всё и затевалось.
+    /// </para>
+    /// </param>
+    public static List<Vector2i>? FindPath(NavMapComponent navMap, Vector2i start, Vector2i goal,
+        Func<Vector2i, bool>? walkable = null)
     {
+        bool Open(Vector2i t) => Passable(navMap, t) && (walkable == null || walkable(t));
+
         if (start == goal)
             return new List<Vector2i> { start };
 
-        if (!Passable(navMap, start) || !Passable(navMap, goal))
+        if (!Open(start) || !Open(goal))
             return null;
 
         var frontier = new PriorityQueue<Vector2i, float>();
@@ -152,7 +173,7 @@ public static class BorgPathfinder
             {
                 var next = current + dir;
 
-                if (!Passable(navMap, next))
+                if (!Open(next))
                     continue;
 
                 var step = IsDoor(navMap, next) ? DoorCost : 1f;
@@ -194,12 +215,38 @@ public static class BorgPathfinder
     /// точку раз в <paramref name="every"/> тайлов. Последний тайл добавляется всегда: без него
     /// робот останавливался бы за несколько шагов до цели.
     /// </remarks>
-    public static List<Vector2i> ToLegs(List<Vector2i> path, int every = 6)
+    public static List<Vector2i> ToLegs(List<Vector2i> path, int every = 6, Func<Vector2i, bool>? reachable = null)
     {
         var legs = new List<Vector2i>();
 
         for (var i = every; i < path.Count; i += every)
-            legs.Add(path[i]);
+        {
+            var tile = path[i];
+
+            // Пересадка должна стоять там, куда локальный рулевой умеет дойти. Наша карта знает
+            // пол, стены и шлюзы, но не знает мебели и машин: точка раз в шесть тайлов вполне
+            // может попасть на тайл, занятый столом, и тогда нога не пройдёт целиком. Если такое
+            // видно заранее — сдвигаемся на соседний тайл пути.
+            if (reachable != null && !reachable(tile))
+            {
+                var shifted = false;
+
+                for (var back = 1; back <= 2 && i - back > 0; back++)
+                {
+                    if (!reachable(path[i - back]))
+                        continue;
+
+                    legs.Add(path[i - back]);
+                    shifted = true;
+                    break;
+                }
+
+                if (shifted)
+                    continue;
+            }
+
+            legs.Add(tile);
+        }
 
         if (legs.Count == 0 || legs[^1] != path[^1])
             legs.Add(path[^1]);

@@ -46,6 +46,15 @@ public sealed class AiStation : IAsyncDisposable
     /// </summary>
     public const string MapProto = "Box";
 
+    /// <summary>
+    /// Карта этого стенда. Обычно <see cref="MapProto"/>, но сценарий может попросить другую.
+    ///
+    /// Нужно, потому что вопросы связности отсеков на разных картах разные: «дойти от бара до
+    /// реактора» на Box и на Packed — не один и тот же вопрос, и проверять его на карте, которой
+    /// нет в ротации, значит проверять не то.
+    /// </summary>
+    public string Map { get; private set; } = MapProto;
+
     public TestPair Pair { get; private set; } = default!;
     public StationAiAgentSystem System { get; private set; } = default!;
     public ScriptedLlmClient Llm { get; private set; }
@@ -64,6 +73,10 @@ public sealed class AiStation : IAsyncDisposable
     public static Task<AiStation> Create(ScriptedLlmClient llm = null) =>
         Build(llm ?? new ScriptedLlmClient());
 
+    /// <summary>Тот же стенд, но на названной карте.</summary>
+    public static Task<AiStation> CreateOnMap(string map) =>
+        Build(new ScriptedLlmClient(), map);
+
     /// <summary>
     /// A station driven by the REAL model, for behavioural benchmarks.
     ///
@@ -72,9 +85,9 @@ public sealed class AiStation : IAsyncDisposable
     /// </summary>
     public static Task<AiStation> CreateLive() => Build(null);
 
-    private static async Task<AiStation> Build(Content.Server.AiAgent.Llm.ILlmClient llm)
+    private static async Task<AiStation> Build(Content.Server.AiAgent.Llm.ILlmClient llm, string map = MapProto)
     {
-        var w = new AiStation { Llm = llm as ScriptedLlmClient };
+        var w = new AiStation { Llm = llm as ScriptedLlmClient, Map = map };
         AiTestHooks.LlmFactory = llm == null ? null : () => llm;
 
         // Dirty: a loaded station cannot be recycled back into the pool.
@@ -91,7 +104,7 @@ public sealed class AiStation : IAsyncDisposable
         await server.WaitPost(() =>
         {
             cfg.SetCVar(CCVars.GameDummyTicker, false);
-            cfg.SetCVar(CCVars.GameMap, MapProto);
+            cfg.SetCVar(CCVars.GameMap, w.Map);
             cfg.SetCVar(CCVars.GameLobbyEnabled, false);
 
             // Мир не должен вставать на паузу: в пуле нет игроков, а `game.auto_pause_empty`

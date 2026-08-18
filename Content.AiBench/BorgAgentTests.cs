@@ -72,15 +72,12 @@ public sealed class BorgAgentTests
         var active = await w.Read(() => ent.GetComponent<BorgChassisComponent>(borg).Active);
         var hasMind = await w.Read(() =>
             ent.TryGetComponent<MindContainerComponent>(borg, out var mc) && mc.HasMind);
-        var hasNpc = await w.Read(() => ent.HasComponent<ActiveNPCComponent>(borg));
         var hasSession = await w.Read(() => w.System.Sessions.ContainsKey(borg));
 
         Assert.Multiple(() =>
         {
             Assert.That(hasMind, Is.True, "разум не посажен — шасси не активируется");
             Assert.That(active, Is.True, "шасси не активно: не будет ни модулей, ни доступа по ID");
-            Assert.That(hasNpc, Is.True,
-                "нет ActiveNPCComponent — рулевой не увидит робота и тот не сдвинется, молча");
             Assert.That(hasSession, Is.True, "сессия агента не завелась");
         });
     }
@@ -155,36 +152,6 @@ public sealed class BorgAgentTests
         Assert.That(borgCount, Is.GreaterThan(0), "робот не увидел вообще ничего — обзор сломан");
     }
 
-    /// <summary>
-    /// Ходьба: рулевой получил задачу и флаги пути.
-    /// </summary>
-    /// <remarks>
-    /// Флаги проверяются отдельным утверждением, потому что <c>NPCSteeringSystem.Register</c>
-    /// выставляет их через <c>PathfindingSystem.GetFlags</c>, а тот возвращает <c>None</c> для
-    /// всего, у чего нет <c>HTNComponent</c>. С <c>None</c> робот считает любую дверь стеной —
-    /// и это не ошибка, а тихий обход половины станции.
-    /// </remarks>
-    [Test]
-    public async Task Goto_RegistersSteeringWithPathFlags()
-    {
-        await using var w = await AiStation.Create();
-        var borg = await SpawnAndClaim(w);
-        var ent = w.Ent;
-
-        var result = await w.InvokeOn(borg, "goto", "{\"to\":\"12,-34\"}");
-
-        // Координаты заведомо есть не на всякой карте; важен сам факт регистрации рулевого.
-        if (!result.Ok)
-            Assert.Inconclusive($"goto отказал: {result.Error} {result.Detail}");
-
-        var flags = await w.Read(() =>
-            ent.TryGetComponent<Content.Server.NPC.Components.NPCSteeringComponent>(borg, out var st)
-                ? st.Flags
-                : Content.Server.NPC.Pathfinding.PathFlags.None);
-
-        Assert.That(flags, Is.Not.EqualTo(Content.Server.NPC.Pathfinding.PathFlags.None),
-            "флаги пути не выставлены — робот будет считать двери непроходимыми");
-    }
 
 
 
@@ -195,49 +162,6 @@ public sealed class BorgAgentTests
 
 
 
-    /// <summary>
-    /// Путепоиск выдаёт роботу настоящие флаги — то есть двери для него не стены.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Самый неочевидный тест файла, и появился он после того, как робот на живом сервере отвечал
-    /// «дороги нет» на любую цель, стоя посреди коридора.
-    /// </para>
-    /// <para>
-    /// Причина: <c>NPCSteeringSystem.RequestPath</c> на КАЖДЫЙ запрос заново берёт флаги через
-    /// <c>PathfindingSystem.GetFlags(uid)</c> и игнорирует те, что выставлены на компоненте
-    /// рулевого. А <c>GetFlags</c> умеет доставать их только из блэкборда <c>HTNComponent</c>
-    /// (<c>NPCSystem.TryGetNpc</c> не знает других видов NPC) и всему остальному отдаёт
-    /// <c>PathFlags.None</c>. С <c>None</c> любая дверь непроходима — а станция это двери.
-    /// </para>
-    /// <para>
-    /// Поэтому шасси несёт <c>HTN</c> с пустой задачей: компонент нужен ради навигации, поведение
-    /// задаёт модель. Тест сторожит именно связку — уедет HTN из прототипа, и робот замрёт молча.
-    /// </para>
-    /// </remarks>
-    [Test]
-    public async Task Pathfinding_GivesTheRobotRealFlags()
-    {
-        await using var w = await AiStation.Create();
-        var borg = await SpawnAndClaim(w);
-        var ent = w.Ent;
-
-        await w.Pair.Server.WaitRunTicks(60);
-
-        var (htn, flags) = await w.Read(() =>
-        {
-            var pf = w.Pair.Server.System<Content.Server.NPC.Pathfinding.PathfindingSystem>();
-            return (ent.HasComponent<Content.Server.NPC.HTN.HTNComponent>(borg), pf.GetFlags(borg));
-        });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(htn, Is.True,
-                "у шасси нет HTNComponent — путепоиск отдаст PathFlags.None и робот никуда не пойдёт");
-            Assert.That(flags, Is.Not.EqualTo(Content.Server.NPC.Pathfinding.PathFlags.None),
-                "путепоиск считает робота неспособным открыть ни одну дверь");
-        });
-    }
 
     /// <summary>
     /// Робот действительно доходит до цели своими ногами.
@@ -536,5 +460,211 @@ public sealed class BorgAgentTests
         Assert.That(sent, Is.True, $"передача не ушла: {why}");
         Assert.That(after, Is.GreaterThan(before),
             "радиопередача не попала в очередь наблюдений робота — он глух к эфиру");
+    }
+
+    /// <summary>
+    /// Диагностика: связность отсеков боевой карты глазами нашего поиска.
+    /// </summary>
+    [Test]
+    [Explicit("диагностика связности конкретной карты, не для общего прогона")]
+    public async Task Diag_PackedConnectivity()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+
+        var report = await w.Read(() =>
+        {
+            var nav = ent.GetComponent<Content.Shared.Pinpointer.NavMapComponent>(w.Grid);
+
+            Vector2i? TileOf(string name)
+            {
+                foreach (var b in nav.Beacons.Values)
+                {
+                    if (string.IsNullOrWhiteSpace(b.Text) || !b.Text!.Contains(name, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var t = new Vector2i((int) MathF.Floor(b.Position.X), (int) MathF.Floor(b.Position.Y));
+                    return BorgPathfinder.NearestPassable(nav, t);
+                }
+
+                return null;
+            }
+
+            var lines = new System.Collections.Generic.List<string>();
+            var bar = TileOf("Bar");
+            lines.Add($"маяков всего: {nav.Beacons.Count}, чанков: {nav.Chunks.Count}, Bar: {(bar?.ToString() ?? "НЕТ")}");
+
+            foreach (var target in new[] { "AME", "Engineering", "Atmos", "Bridge", "Arrivals" })
+            {
+                var t = TileOf(target);
+                if (bar == null || t == null)
+                {
+                    lines.Add($"{target}: проходимого тайла нет");
+                    continue;
+                }
+
+                var path = BorgPathfinder.FindPath(nav, bar.Value, t.Value);
+                lines.Add($"{target} {t}: {(path == null ? "ПУТИ НЕТ" : path.Count + " тайлов")}");
+            }
+
+            return string.Join("\n", lines);
+        });
+
+        TestContext.Out.WriteLine("СВЯЗНОСТЬ:\n" + report);
+        Assert.Pass();
+    }
+
+    /// <summary>
+    /// Робот доходит от бара до реактора на боевой карте.
+    /// </summary>
+    /// <remarks>
+    /// Explicit: карта ротации грузится долго, и держать это в общем прогоне незачем. Но именно
+    /// этот маршрут ловил связку двух пределов — нашего поиска и апстримового рулевого, — поэтому
+    /// он записан тестом, а не остался ручной проверкой.
+    /// </remarks>
+    [Test]
+    [Explicit("длинный маршрут на карте ротации")]
+    public async Task Borg_WalksFromBarToTheReactor()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+
+        var borg = EntityUid.Invalid;
+        await w.Pair.Server.WaitPost(() =>
+        {
+            var sys = w.Pair.Server.System<AiBorgSystem>();
+            Assert.That(sys.TrySpawnBorg("Bar", out borg, out var placed), Is.True, placed);
+            Assert.That(sys.TryClaim(borg, out var why), Is.True, why);
+        });
+
+        // Навмеш рулевого строится асинхронно; без него первая же нога — NoPath.
+        for (var i = 0; i < 80; i++)
+        {
+            var ready = await w.Read(() =>
+            {
+                var pf = w.Pair.Server.System<Content.Server.NPC.Pathfinding.PathfindingSystem>();
+                return pf.GetPoly(ent.GetComponent<TransformComponent>(borg).Coordinates) != null;
+            });
+
+            if (ready)
+                break;
+
+            await w.Pair.Server.WaitRunTicks(10);
+        }
+
+        var start = await w.Read(() => ent.GetComponent<TransformComponent>(borg).LocalPosition);
+
+        var r = await w.InvokeOn(borg, "goto", "{\"to\":\"AME\"}");
+        Assert.That(r.Ok, Is.True, $"goto отказал: {r.Error} {r.Detail}");
+
+        var target = await w.Read(() =>
+        {
+            var nav = ent.GetComponent<Content.Shared.Pinpointer.NavMapComponent>(w.Grid);
+            foreach (var b in nav.Beacons.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(b.Text) && b.Text!.Contains("AME", StringComparison.OrdinalIgnoreCase))
+                    return b.Position;
+            }
+
+            return Vector2.Zero;
+        });
+
+        var best = (start - target).Length();
+
+        for (var i = 0; i < 200; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+
+            var d = await w.Read(() =>
+                (ent.GetComponent<TransformComponent>(borg).LocalPosition - target).Length());
+
+            best = MathF.Min(best, d);
+
+            if (best < 3f)
+                break;
+        }
+
+        var от = (start - target).Length();
+        TestContext.Out.WriteLine($"РЕАКТОР: было {от:F1} тайлов до цели, стало {best:F1}");
+
+        // Где именно встал и что мешает: доступ робота и двери вокруг.
+        var stuck = await w.Read(() =>
+        {
+            var access = ent.TryGetComponent<Content.Shared.Access.Components.AccessComponent>(borg, out var acc)
+                ? $"доступ включён={acc.Enabled} групп={string.Join("/", acc.Groups)} тегов={string.Join("/", acc.Tags)}"
+                : "нет AccessComponent";
+
+            var lookup = w.Pair.Server.System<EntityLookupSystem>();
+            var xform = w.Pair.Server.System<SharedTransformSystem>();
+
+            var doors = new System.Collections.Generic.HashSet<Entity<Content.Shared.Doors.Components.DoorComponent>>();
+            lookup.GetEntitiesInRange(xform.GetMapCoordinates(borg), 4f, doors,
+                LookupFlags.Static | LookupFlags.Approximate);
+
+            var near = doors.Select(d =>
+            {
+                var st = d.Comp.State;
+                var reader = ent.HasComponent<Content.Shared.Access.Components.AccessReaderComponent>(d.Owner);
+                return $"{ent.GetComponent<MetaDataComponent>(d.Owner).EntityName}[{st}{(reader ? ",замок" : "")}]";
+            });
+
+            // Всё, что стоит вплотную: препятствием может быть не только дверь.
+            var solid = lookup.GetEntitiesInRange(xform.GetMapCoordinates(borg), 1.8f,
+                LookupFlags.Static | LookupFlags.Dynamic | LookupFlags.Approximate);
+
+            var blockers = solid
+                .Where(u => u != borg && ent.HasComponent<Robust.Shared.Physics.Components.PhysicsComponent>(u))
+                .Select(u => ent.GetComponent<MetaDataComponent>(u).EntityName)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct()
+                .Take(12);
+
+            var pos = ent.GetComponent<TransformComponent>(borg).LocalPosition;
+
+            return $"тайл ({MathF.Floor(pos.X)},{MathF.Floor(pos.Y)}) | " + access +
+                   " | двери: " + string.Join(", ", near) +
+                   " | рядом: " + string.Join(", ", blockers);
+        });
+
+        TestContext.Out.WriteLine("ЗАСТРЯЛ: " + stuck);
+
+        Assert.That(best, Is.LessThan(3f),
+            $"робот не дошёл до реактора: с {от:F1} тайлов подобрался только на {best:F1}");
+    }
+
+    /// <summary>
+    /// Робот ведёт себя сам, а не через апстримовый рулевой.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Сторожит архитектурное решение, к которому пришли не сразу. Сначала маршрут строил наш
+    /// поиск, а вести по нему должен был <c>NPCSteeringSystem</c> по коротким ногам. На карте
+    /// ротации это встало намертво: робот проходил 27 тайлов из 47 и отвечал «дороги нет» там,
+    /// где наш путь был построен и проверен ЕГО ЖЕ правилом проходимости.
+    /// </para>
+    /// <para>
+    /// Поэтому движение своё, а вместе с рулевым ушли и подпорки под него — <c>ActiveNPCComponent</c>
+    /// и пустая HTN-задача в прототипе, которые нужны были ровно затем, чтобы он согласился
+    /// работать. Тест держит их снятыми: вернутся — значит кто-то снова тащит чужой рулевой.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task Borg_MovesWithoutUpstreamSteering()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+        var ent = w.Ent;
+
+        var (steering, npc, htn) = await w.Read(() => (
+            ent.HasComponent<Content.Server.NPC.Components.NPCSteeringComponent>(borg),
+            ent.HasComponent<Content.Shared.NPC.ActiveNPCComponent>(borg),
+            ent.HasComponent<Content.Server.NPC.HTN.HTNComponent>(borg)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(steering, Is.False, "на роботе висит апстримовый рулевой — движение раздвоилось");
+            Assert.That(npc, Is.False, "ActiveNPCComponent нужен был только рулевому");
+            Assert.That(htn, Is.False, "HTN нужен был только ради флагов чужого путепоиска");
+        });
     }
 }

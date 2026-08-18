@@ -42,37 +42,3 @@
       cell_slot:
         name: power-cell-slot-component-slot-name-default
         startingItem: PowerCellHigh
-  # См. комментарий к AiBorgIdleCompound ниже: компонент стоит здесь ради флагов путепоиска,
-  # а не ради поведения. Ключи Nav* — это и есть «роботу можно открывать двери, отжимать их
-  # и перелезать»; без них он обходит станцию по коридорам, где нет ни одной двери, то есть
-  # практически никуда.
-  - type: HTN
-    rootTask:
-      task: AiBorgIdleCompound
-    blackboard:
-      NavInteract: !type:Bool
-        true
-      NavPry: !type:Bool
-        true
-      NavClimb: !type:Bool
-        true
-
-# Пустая HTN-задача: робот «планирует» ничегонеделание.
-#
-# Нужна не ради поведения, а ради НАВИГАЦИИ, и это самая неочевидная деталь всей затеи.
-# NPCSteeringSystem.RequestPath на каждый запрос пути заново берёт флаги через
-# PathfindingSystem.GetFlags(uid), ИГНОРИРУЯ те, что выставлены на компоненте рулевого. А GetFlags
-# отдаёт PathFlags.None всему, у чего нет HTNComponent (TryGetNpc умеет только его). С None
-# путепоиск считает непроходимой любую дверь — то есть робот на станции не может дойти никуда,
-# сообщая «дороги нет» даже на соседний отсек.
-#
-# Поэтому HTN-компонент боргу нужен, а вот HTN-поведение — нет: решения принимает модель. Корневая
-# задача обязательна (rootTask: required), поэтому она здесь есть и только ждёт. Планировщик крутит
-# её вхолостую и в наше управление не вмешивается: ни одного оператора движения в ней нет.
-- type: htnCompound
-  id: AiBorgIdleCompound
-  branches:
-  - tasks:
-    - !type:HTNPrimitiveTask
-      operator: !type:WaitOperator
-        key: AiBorgIdleWait

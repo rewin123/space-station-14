@@ -20,7 +20,8 @@ public sealed class AiBorgCommand : IConsoleCommand
 {
     public string Command => "aiborg";
     public string Description => "Управление ИИ-боргом: спавн, захват, освобождение.";
-    public string Help => "aiborg list | spawn [маяк|x y] | claim [uid] | release [uid] | where | tool <имя> [json]";
+    public string Help => "aiborg list | spawn [маяк|x y] | claim [uid] | release [uid] | where | " +
+                          "tool <имя> [json] | path <маяк>";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
@@ -141,6 +142,57 @@ public sealed class AiBorgCommand : IConsoleCommand
                 shell.WriteLine(host.InvokeToolFromConsole(name, json, out var why, agentId)
                     ? why
                     : $"не вышло: {why}");
+                break;
+            }
+
+            case "path":
+            {
+                // Почему поиск не нашёл дороги. Без этого «дороги нет» неотличимо от «цель в
+                // стене», «старт в стене» и «отсеки не связаны» — а лечатся они по-разному.
+                if (args.Length < 2)
+                {
+                    shell.WriteError("aiborg path <маяк>");
+                    return;
+                }
+
+                if (!TryTargetBorg(shell, entMan, args.Length > 2 ? new[] { args[0], args[2] } : new[] { args[0] }, out var who))
+                    return;
+
+                var xf = entMan.GetComponent<TransformComponent>(who);
+                if (xf.GridUid is not { } g || !entMan.TryGetComponent<Content.Shared.Pinpointer.NavMapComponent>(g, out var nav))
+                {
+                    shell.WriteError("робот вне сетки с навигационной картой");
+                    return;
+                }
+
+                var beacon = nav.Beacons.Values.FirstOrDefault(x =>
+                    !string.IsNullOrWhiteSpace(x.Text) &&
+                    x.Text!.Contains(args[1], StringComparison.OrdinalIgnoreCase));
+
+                if (beacon.Text == null)
+                {
+                    shell.WriteError($"нет маяка «{args[1]}»");
+                    return;
+                }
+
+                var from = new Vector2i((int) MathF.Floor(xf.LocalPosition.X), (int) MathF.Floor(xf.LocalPosition.Y));
+                var to = new Vector2i((int) MathF.Floor(beacon.Position.X), (int) MathF.Floor(beacon.Position.Y));
+
+                var a = BorgPathfinder.NearestPassable(nav, from);
+                var bb = BorgPathfinder.NearestPassable(nav, to);
+
+                shell.WriteLine($"маяк «{beacon.Text}» тайл {to}; проходимый рядом: {(bb == null ? "НЕ НАЙДЕН" : bb.ToString())}");
+                shell.WriteLine($"робот тайл {from}; проходимый рядом: {(a == null ? "НЕ НАЙДЕН" : a.ToString())}");
+
+                if (a == null || bb == null)
+                    return;
+
+                var path = BorgPathfinder.FindPath(nav, a.Value, bb.Value);
+
+                shell.WriteLine(path == null
+                    ? $"путь НЕ найден (развёрнуто до {BorgPathfinder.NodeLimit} узлов)"
+                    : $"путь найден: {path.Count} тайлов, ног {BorgPathfinder.ToLegs(path).Count}");
+
                 break;
             }
 

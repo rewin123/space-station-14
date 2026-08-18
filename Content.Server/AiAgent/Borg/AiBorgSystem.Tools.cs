@@ -300,9 +300,10 @@ public sealed partial class AiBorgSystem
                 xform.ParentUid.IsValid() ? xform.ParentUid : borg,
                 xform.LocalPosition + delta * count);
 
-            // Тем же рулевым, что и goto: свой код шага означал бы своё поведение на дверях,
-            // завалах и в невесомости — то есть второй, тихо расходящийся движок передвижения.
-            StartSteering(borg, target, $"{count} шаг(ов) на {dir}", range: 0.2f);
+            // Через тот же маршрут, что и goto: свой код шага означал бы второй, тихо
+            // расходящийся способ передвижения.
+            if (!TryStartRoute(borg, target, $"{count} шаг(ов) на {dir}", out var stepWhy))
+                return ToolResult.Fail(ToolError.Refused, stepWhy, retry: "other_target");
 
             return ToolResult.Effected("self", new Dictionary<string, object?>
             {

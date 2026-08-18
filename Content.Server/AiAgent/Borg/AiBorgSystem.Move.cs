@@ -2,12 +2,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Content.Server.AiAgent.Perception;
-using Content.Server.NPC.Components;
 using Content.Server.NPC.Pathfinding;
-using Content.Server.NPC.Systems;
 using Content.Shared.Doors;
 using Content.Shared.Doors.Components;
 using Robust.Shared.Map;
+using Robust.Shared.Physics.Systems;
 
 namespace Content.Server.AiAgent.Borg;
 
@@ -15,63 +14,45 @@ namespace Content.Server.AiAgent.Borg;
 /// Ноги.
 ///
 /// <para>
-/// Своего кода движения здесь нет и быть не должно: робот ходит тем же рулевым
-/// (<c>NPCSteeringSystem</c>), которым ходят все мобы игры, а тот синтезирует ровно тот же ввод,
-/// что шлёт клиент живого игрока (<c>InputMoverComponent.CurTickSprintMovement</c>). Это и есть
-/// требуемый паритет: робот не телепортируется и не скользит сквозь стены, он идёт.
+/// Маршрут строит <see cref="BorgPathfinder"/>, ведёт по нему <see cref="StepAlongTrail"/>, а вся
+/// физика — движение, столкновения, скорость, открывание дверей корпусом — остаётся апстримовой:
+/// мы кладём направление в то же поле, куда клиент живого игрока кладёт нажатые стрелки.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
 {
-    [Dependency] private NPCSteeringSystem _steering = default!;
-    [Dependency] private SharedTransformSystem _xform = default!;
     [Dependency] private PathfindingSystem _pathfinding = default!;
+    [Dependency] private SharedPhysicsSystem _physics = default!;
+    [Dependency] private SharedTransformSystem _xform = default!;
 
     /// <summary>
-    /// Куда шёл робот, чтобы отчитаться о прибытии.
+    /// Куда робот идёт, чтобы отчитаться о прибытии.
     ///
     /// <para>
-    /// Нужен, потому что инструмент ходьбы <b>не ждёт</b> прибытия. Ход, висящий тридцать секунд
-    /// на переходе через станцию, — это агент, который весь переход глухой: он не услышит ни
-    /// рации, ни выстрела за спиной. Поэтому <c>goto</c> отвечает «иду» немедленно, а факт
+    /// Инструмент ходьбы <b>не ждёт</b> прибытия: ход, висящий полминуты на переходе через
+    /// станцию, — это агент, глухой весь переход. <c>goto</c> отвечает «иду» немедленно, а факт
     /// прибытия приезжает наблюдением, как и всё остальное в этом модуле.
     /// </para>
     /// </summary>
     private readonly Dictionary<EntityUid, string> _walking = new();
 
+    /// <summary>Где робот был в прошлой проверке и сколько раз подряд не сдвинулся.</summary>
+    private readonly Dictionary<EntityUid, (Vector2 Where, int Stalls)> _progress = new();
+
+    /// <summary>Столько проверок без движения — и пробуем нажать на дверь.</summary>
+    private const int StallsBeforeDoor = 4;
+
+    /// <summary>Столько — и признаём, что здесь не пройти, и перекладываем маршрут.</summary>
+    private const int StallsBeforeReplan = 30;
+
     private void InitializeMovement()
     {
     }
 
-    /// <summary>
-    /// Опрос ходьбы каждый кадр.
-    ///
-    /// <para>
-    /// Дёшево по построению: <see cref="_walking"/> пуст, пока никто не идёт, и первая же строка
-    /// выходит. Полноценной подписки на «дошёл» рулевой не предлагает.
-    /// </para>
-    /// </summary>
     public override void Update(float frameTime)
     {
         base.Update(frameTime);
-        PollSteering();
-    }
-
-    /// <summary>Отправить робота к координатам. Возвращает описание цели для ответа модели.</summary>
-    private void StartSteering(EntityUid borg, EntityCoordinates target, string what, float range)
-    {
-        var comp = _steering.Register(borg, target);
-
-        // Флаги ставятся руками, и это не перестраховка.
-        //
-        // Register выставляет их через PathfindingSystem.GetFlags(uid), а тот возвращает
-        // PathFlags.None для всего, у чего нет HTNComponent, — то есть для нашего борга всегда.
-        // Без флагов путепоиск считает любую дверь непроходимой, и робот либо идёт кругами, либо
-        // сообщает NoPath в двух шагах от цели.
-        comp.Flags = PathFlags.Interact | PathFlags.Prying | PathFlags.Climbing;
-        comp.Range = range;
-
-        _walking[borg] = what;
+        PollWalking();
     }
 
     private void StopSteering(EntityUid borg)
@@ -79,105 +60,61 @@ public sealed partial class AiBorgSystem
         _walking.Remove(borg);
         _progress.Remove(borg);
         ClearRoute(borg);
-
-        if (HasComp<NPCSteeringComponent>(borg))
-            _steering.Unregister(borg);
+        ClearTrail(borg);
     }
 
-    /// <summary>
-    /// Опрос ходьбы: дошёл — сказать, не смог — сказать.
-    ///
-    /// Зовётся из <see cref="Update"/>, потому что рулевой о своих результатах никого не
-    /// уведомляет: он просто меняет <c>Status</c>.
-    /// </summary>
-    private void PollSteering()
+    /// <summary>Идёт ли робот прямо сейчас — этим глушится дельта зрения на ходу.</summary>
+    private bool IsWalking(EntityUid borg) => _walking.ContainsKey(borg);
+
+    /// <summary>Вести всех идущих: шаг по пути, разбор заторов, доклад о прибытии.</summary>
+    private void PollWalking()
     {
         if (_walking.Count == 0)
             return;
 
         foreach (var (borg, what) in _walking.ToArray())
         {
-            if (!TryComp<NPCSteeringComponent>(borg, out var steering))
+            if (!Exists(borg) || TerminatingOrDeleted(borg))
             {
-                _walking.Remove(borg);
+                StopSteering(borg);
                 continue;
             }
 
-            if (steering.Status == SteeringStatus.Moving)
-                NudgeStuck(borg);
-
-            switch (steering.Status)
+            if (StepAlongTrail(borg))
             {
-                case SteeringStatus.InRange:
-                    _walking.Remove(borg);
-                    _steering.Unregister(borg);
-
-                    // Промежуточный маяк — не повод сообщать модели: она просила отсек, а не
-                    // пересадку. Молча идём дальше, говорим только о конце маршрута.
-                    if (AdvanceRoute(borg))
-                    {
-                        _sawmill.Debug($"{ToPrettyString(borg)} прошёл участок: {what}");
-                        break;
-                    }
-
-                    PushToBorg(borg, Observation.Event($"ARRIVED дошёл: {what}", _host.RoundTime()));
-
-                    // В лог тоже: «робот не идёт» и «робот идёт, но медленно» в игре выглядят
-                    // одинаково, а различаются только этой строкой.
-                    _sawmill.Info($"{ToPrettyString(borg)} дошёл: {what}");
-                    break;
-
-                case SteeringStatus.NoPath:
-                    _walking.Remove(borg);
-                    _steering.Unregister(borg);
-
-                    // Не прошла ПРОМЕЖУТОЧНАЯ нога — пробуем следующую, а не бросаем маршрут.
-                    //
-                    // Цепочка маяков строится по расстоянию, а не по проходимости: она не знает
-                    // ни про запертые двери, ни про отсеки, куда пути нет вовсе. На бою это
-                    // выглядело так: робот прошёл двенадцать тайлов, упёрся на пересадке
-                    // «Cryosleep» и встал, хотя до цели оставалось полстанции проходимых
-                    // коридоров. Пропуск неудачной пересадки — то же, что делает человек:
-                    // «здесь заперто, пойду дальше».
-                    if (AdvanceRoute(borg))
-                    {
-                        _sawmill.Debug($"{ToPrettyString(borg)} обходит участок «{what}»");
-                        break;
-                    }
-
-                    ClearRoute(borg);
-
-                    PushToBorg(borg, Observation.Event(
-                        $"NOPATH дороги нет: {what}. Возможно, путь перекрыт или цель за запертой дверью.",
-                        _host.RoundTime()));
-
-                    _sawmill.Info($"{ToPrettyString(borg)} не нашёл дороги: {what}");
-                    break;
+                WatchForStall(borg, what);
+                continue;
             }
+
+            // Тайлы кончились — дошли.
+            _walking.Remove(borg);
+            _progress.Remove(borg);
+            ClearRoute(borg);
+
+            PushToBorg(borg, Observation.Event($"ARRIVED дошёл: {what}", _host.RoundTime()));
+
+            // В лог тоже: «робот не идёт» и «робот идёт медленно» в игре выглядят одинаково, а
+            // различаются только этой строкой.
+            _sawmill.Info($"{ToPrettyString(borg)} дошёл: {what}");
         }
     }
 
-    /// <summary>Где робот был в прошлой проверке и сколько раз подряд не сдвинулся.</summary>
-    private readonly Dictionary<EntityUid, (Vector2 Where, int Stalls)> _progress = new();
-
     /// <summary>
-    /// Робот упёрся — открыть дверь, в которую упёрся.
+    /// Робот упёрся — сначала открыть дверь, потом переложить маршрут, потом сдаться.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Апстримовый рулевой умеет обходить препятствия сам, но с шлюзами это работает не всегда:
-    /// путь через дверь он проложит, а открыть её должен либо бампом (нужен контакт под нужным
-    /// углом), либо отжатием (долгий DoAfter). На боевом сервере это выглядело так: маршрут
-    /// построен, флаги верные, путь 17 полигонов — и робот полминуты топчется в метре от
-    /// закрытого стеклянного шлюза.
+    /// Порядок важен. Самая частая причина затора — закрытый шлюз: корпус открывает его тараном
+    /// (<c>DoorBumpOpener</c>), но не всегда с нужного угла, а прав у робота хватает, чтобы просто
+    /// нажать. Если и это не помогло — дело не в двери, и надо искать другую дорогу от текущего
+    /// места.
     /// </para>
     /// <para>
-    /// Поэтому делаем то же, что сделал бы человек: упёрся — нажми на дверь. У борга есть доступ
-    /// по ID, так что <c>InteractionActivate</c> её просто откроет. Это не обход путепоиска, а
-    /// недостающее действие: путь-то он проложил правильно.
+    /// Порог перепланировки намеренно велик: перекладывать маршрут на каждой заминке значит
+    /// дёргать станцию впустую, пока робота просто обходит человек.
     /// </para>
     /// </remarks>
-    private void NudgeStuck(EntityUid borg)
+    private void WatchForStall(EntityUid borg, string what)
     {
         var now = _xform.GetMapCoordinates(borg).Position;
 
@@ -187,26 +124,88 @@ public sealed partial class AiBorgSystem
             return;
         }
 
-        // Полтайла за проверку — движение; меньше — топтание на месте.
-        if ((now - last.Where).Length() > 0.5f)
+        if ((now - last.Where).Length() > 0.15f)
         {
             _progress[borg] = (now, 0);
+
+            // Робот сдвинулся — значит затор был проходим, и потраченные попытки не в счёт.
+            // Без этого длинная дорога с тремя дверями исчерпывала бюджет перепланировок на
+            // полпути, хотя каждая дверь в итоге открывалась.
+            ForgetReplans(borg);
             return;
         }
 
         var stalls = last.Stalls + 1;
         _progress[borg] = (now, stalls);
 
-        // Не с первого раза: рулевой сам разворачивается и обходит, и мешать ему на каждой заминке
-        // значило бы дёргать двери всю дорогу.
-        if (stalls < 3)
+        // Жмём периодически, а не однажды: шлюз закрывается сам, и одного нажатия на всю заминку
+        // хватает не всегда — особенно когда робот подошёл к нему под углом.
+        if (stalls % StallsBeforeDoor == 0 && TryPressClosedDoor(borg, 1.6f))
+        {
+            _sawmill.Debug($"{ToPrettyString(borg)} упёрся и нажал на дверь");
+            return;
+        }
+
+        if (stalls < StallsBeforeReplan)
             return;
 
         _progress[borg] = (now, 0);
 
+        // Дверь не поддалась — считаем её стеной и ищем обход.
+        //
+        // Так честнее любого числа попыток: причина может быть какой угодно — нет доступа, дверь
+        // заварена, обесточена, — и робот всё равно должен либо найти другую дорогу, либо честно
+        // сказать, что её нет. Заодно это единственное, что спасает от вечного тыканья в одну и
+        // ту же створку.
+        if (NextTile(borg) is { } blocked)
+        {
+            BlockTile(borg, blocked);
+            _sawmill.Debug($"{ToPrettyString(borg)} считает тайл {blocked} непроходимым и ищет обход");
+        }
+
+        if (TryReplan(borg))
+            return;
+
+        _walking.Remove(borg);
+        _progress.Remove(borg);
+        ClearRoute(borg);
+        ClearTrail(borg);
+
+        PushToBorg(borg, Observation.Event(
+            $"NOPATH дороги нет: {what}. Путь перекрыт, и обойти не вышло.", _host.RoundTime()));
+
+        _sawmill.Info($"{ToPrettyString(borg)} не смог пройти к «{what}»");
+    }
+
+    /// <summary>
+    /// Нажать на ближайшую закрытую дверь. Возвращает true, если нашлась и нажали.
+    /// </summary>
+    /// <remarks>
+    /// Апстримовый путепоиск знает про двери два способа: «нажать» — для дверей без замка — и
+    /// «отжать ломом» — для дверей с замком, через долгий DoAfter, который на запитанном шлюзе ещё
+    /// и не факт что пройдёт. Варианта «у меня есть доступ по ID, просто открой» у него нет вовсе,
+    /// а у борга доступ есть: его включает появление разума.
+    /// </remarks>
+    private bool TryPressClosedDoor(EntityUid borg, float radius)
+    {
         var doors = new HashSet<Entity<DoorComponent>>();
-        _lookup.GetEntitiesInRange(_xform.GetMapCoordinates(borg), 1.6f, doors,
+        _lookup.GetEntitiesInRange(_xform.GetMapCoordinates(borg), radius, doors,
             LookupFlags.Static | LookupFlags.Approximate);
+
+        if (doors.Count == 0)
+            return false;
+
+        // Жмём дверь ПО ХОДУ ДВИЖЕНИЯ, а не первую попавшуюся.
+        //
+        // В тамбуре их бывает пять сразу — на бою робот вставал в развязке у входа в атмос,
+        // окружённый maintenance access, Engineering Lobby, Atmospherics и двумя шлюзами. «Первая
+        // попавшаяся» с равной вероятностью оказывалась той, из которой он только что вышел.
+        var aim = NextTile(borg) is { } tile && Transform(borg).GridUid is { } grid
+            ? _xform.ToMapCoordinates(new EntityCoordinates(grid, Center(tile))).Position
+            : _xform.GetMapCoordinates(borg).Position;
+
+        var best = EntityUid.Invalid;
+        var bestDist = float.MaxValue;
 
         foreach (var door in doors)
         {
@@ -214,14 +213,20 @@ public sealed partial class AiBorgSystem
             if (state is DoorState.Open or DoorState.Opening)
                 continue;
 
-            _interaction.InteractionActivate(borg, door.Owner);
-            _sawmill.Debug($"{ToPrettyString(borg)} упёрся и жмёт на {ToPrettyString(door.Owner)}");
-            return;
-        }
-    }
+            var d = (_xform.GetMapCoordinates(door.Owner).Position - aim).Length();
+            if (d >= bestDist)
+                continue;
 
-    /// <summary>Идёт ли робот прямо сейчас — этим глушится дельта зрения на ходу.</summary>
-    private bool IsWalking(EntityUid borg) => _walking.ContainsKey(borg);
+            bestDist = d;
+            best = door.Owner;
+        }
+
+        if (!best.IsValid())
+            return false;
+
+        _interaction.InteractionActivate(borg, best);
+        return true;
+    }
 
     /// <summary>Положить наблюдение в очередь агента, который сидит в этом теле.</summary>
     private void PushToBorg(EntityUid borg, Observation obs)

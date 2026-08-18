@@ -9,7 +9,6 @@ using Content.Shared.Mind;
 using Content.Shared.Mobs.Systems;
 using Content.Shared.Silicons.Borgs;
 using Content.Shared.Silicons.Borgs.Components;
-using Content.Shared.NPC;
 using Robust.Shared.Configuration;
 using Robust.Shared.Log;
 
@@ -88,12 +87,6 @@ public sealed partial class AiBorgSystem : EntitySystem
     /// безголовый — <c>CreateMind(null)</c>, без игрока: <c>TransferTo</c> спотыкается только об
     /// <c>ActorComponent</c>, которого у шасси нет.
     /// </para>
-    /// <para>
-    /// <c>ActiveNPCComponent</c> ставится здесь, а не в момент первой ходьбы, и это не
-    /// перестраховка: <c>NPCSteeringSystem.Update</c> перебирает запрос, в котором этот компонент
-    /// обязателен. Без него <c>Register</c> отработает без ошибки, а робот просто не сдвинется —
-    /// отказ, который в логе не виден вообще.
-    /// </para>
     /// </remarks>
     public bool TryClaim(EntityUid borg, out string reason)
     {
@@ -126,8 +119,6 @@ public sealed partial class AiBorgSystem : EntitySystem
         {
             comp.Mind = existing;
         }
-
-        EnsureComp<ActiveNPCComponent>(borg);
 
         // Маркер «здесь живёт LLM-агент». Назван по первому телу, но значит именно это, и боргу
         // он нужен не для порядка: на пару (маркер, RadioReceiveEvent) повешен приём рации, и без
