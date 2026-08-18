@@ -1,0 +1,34 @@
+# Резервный контур питания, который ставится, только если на смене нет инженеров.
+#
+# Ставит его BackupPowerSystem, см. Content.Server/AiAgent/BackupPowerSystem.cs — там же
+# объяснено, почему условие считается на раздаче должностей и почему место ищется рядом с SMES.
+#
+# Почему свой прототип, а не четыре апстримовых GeneratorBasic15kW: объект видимый, к нему
+# подойдут и прочитают. Четыре одинаковых генератора у SMES экипаж примет за часть карты и не
+# поймёт, откуда взялось питание; один с говорящим описанием объясняет себя сам.
+#
+# Мощность здесь — только значение по умолчанию. Настоящую ставит система из
+# `ai.backup_power_watts`, перезаписывая PowerSupplier.MaxSupply после спавна: иначе величину
+# нельзя было бы подкрутить на живом сервере, а пересборка кикает всех играющих.
+#
+# Имя и описание английские, как у всего остального в игре. Русской локализации в форке нет
+# (см. Resources/Locale — только en-US), и единственный русскоязычный предмет посреди
+# англоязычной станции смотрелся бы опечаткой. Экипажу про генератор рассказывает агент по
+# рации, по-русски, — система для этого поднимает StationAnnouncementEvent.
+- type: entity
+  parent: GeneratorBasic15kW
+  id: AiAgentBackupGenerator
+  name: emergency backup generator
+  suffix: Aksioma, no-engineers fallback
+  description: >-
+    A sealed Nanotrasen thermoelectric unit with no fuel port and no service hatch. Stencilled on
+    the casing: DEPLOY ONLY WHEN NO ENGINEERING PERSONNEL ARE ASSIGNED. The warranty seal is intact
+    and there is nowhere to refuel it, which raises questions nobody at Central Command will answer.
+  components:
+    - type: PowerSupplier
+      supplyRate: 60000
+      # Разгон до полной мощности за шесть секунд вместо мгновенного включения. Апстримовый
+      # BaseGenerator берёт умолчания PowerSupplierComponent; здесь важно, чтобы появление
+      # генератора не выглядело как скачок в сети, за который потом винят агента.
+      supplyRampRate: 10000
+      supplyRampTolerance: 1000
