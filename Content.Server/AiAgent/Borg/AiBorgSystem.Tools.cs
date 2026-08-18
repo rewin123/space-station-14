@@ -99,14 +99,14 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "use",
-            Description = "Применить руки к цели — то же, что клик игрока. Пустой рукой это " +
-                          "«потрогать/открыть/нажать», с предметом в руке — «применить предмет к " +
-                          "цели»: отжать лом, сварить, починить, вскрыть. Надо стоять рядом: " +
-                          "сначала goto, потом use.",
+            Description = "Нажать на цель: открыть дверь, включить машину, нажать кнопку. Надо " +
+                          "стоять рядом — сначала goto, потом use. Чтобы ПРИМЕНИТЬ то, что у тебя " +
+                          "в руке (отжать, сварить, починить, вскрыть), добавь with_item: true.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
-                "target":{"type":"string","description":"Хендл из look."}}}
+                "target":{"type":"string","description":"Хендл из look."},
+                "with_item":{"type":"boolean","default":false,"description":"Применить предмет из руки, а не просто нажать."}}}
                 """,
             Handler = (a, ct) => UseAsync(s, a, ct),
         });
@@ -379,9 +379,26 @@ public sealed partial class AiBorgSystem
 
             var before = _host.ShortState(target);
 
-            // Полный путь клика игрока: движок сам решит, пустая рука это или предмет в руке,
-            // и сам проверит дальность, доступ и ActionBlocker.
-            _interaction.UserInteraction(borg, Transform(target).Coordinates, target);
+            var withItem = args.ValueKind == JsonValueKind.Object
+                           && args.TryGetProperty("with_item", out var wi)
+                           && wi.ValueKind == JsonValueKind.True;
+
+            if (withItem)
+            {
+                // Полный путь клика игрока: движок сам решит, пустая рука это или предмет в руке.
+                _interaction.UserInteraction(borg, Transform(target).Coordinates, target);
+            }
+            else
+            {
+                // Нажатие, а НЕ клик, и это не мелочь.
+                //
+                // У борга в руке почти всегда несъёмный инструмент модуля, а клик с инструментом
+                // означает «применить инструмент»: лом по шлюзу — это отжатие с долгим DoAfter,
+                // а не «открой». На бою это выглядело так — робот стоит вплотную к двери, use
+                // отвечает «ok», дверь закрыта. Человек в этом случае жмёт E, что и делает
+                // InteractionActivate.
+                _interaction.InteractionActivate(borg, target);
+            }
 
             var after = _host.ShortState(target);
 

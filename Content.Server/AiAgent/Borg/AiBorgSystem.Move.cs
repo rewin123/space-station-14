@@ -130,6 +130,21 @@ public sealed partial class AiBorgSystem
                 case SteeringStatus.NoPath:
                     _walking.Remove(borg);
                     _steering.Unregister(borg);
+
+                    // Не прошла ПРОМЕЖУТОЧНАЯ нога — пробуем следующую, а не бросаем маршрут.
+                    //
+                    // Цепочка маяков строится по расстоянию, а не по проходимости: она не знает
+                    // ни про запертые двери, ни про отсеки, куда пути нет вовсе. На бою это
+                    // выглядело так: робот прошёл двенадцать тайлов, упёрся на пересадке
+                    // «Cryosleep» и встал, хотя до цели оставалось полстанции проходимых
+                    // коридоров. Пропуск неудачной пересадки — то же, что делает человек:
+                    // «здесь заперто, пойду дальше».
+                    if (AdvanceRoute(borg))
+                    {
+                        _sawmill.Debug($"{ToPrettyString(borg)} обходит участок «{what}»");
+                        break;
+                    }
+
                     ClearRoute(borg);
 
                     PushToBorg(borg, Observation.Event(

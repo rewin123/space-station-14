@@ -1,4 +1,5 @@
 using System.Linq;
+using System;
 using System.Numerics;
 using System.Threading.Tasks;
 using Content.Server.AiAgent;
@@ -10,6 +11,7 @@ using Content.Shared.Silicons.Borgs.Components;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Maths;
 
 namespace Content.AiBench;
 
@@ -321,4 +323,137 @@ public sealed class BorgAgentTests
 
         Assert.Fail("робот не сдвинулся ни к одной из целей:\n" + string.Join("\n", log));
     }
+
+    /// <summary>
+    /// Свой поиск находит дорогу через всю станцию — там, где апстримовый сдаётся.
+    /// </summary>
+    /// <remarks>
+    /// Смысл теста в сравнении. Апстримовый <c>PathfindingSystem</c> обрывает разворот графа на
+    /// <c>NodeLimit = 512</c>, и переход через станцию для него «дороги нет» — это не поломка, а
+    /// его рабочий диапазон: штатные NPC живут в пределах комнаты. Наш поиск идёт по побитовой
+    /// карте <c>NavMapComponent</c> и обязан находить путь между далёкими отсеками.
+    /// </remarks>
+    [Test]
+    public async Task Pathfinder_CrossesTheWholeStation()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+        var ent = w.Ent;
+
+        var report = await w.Read(() =>
+        {
+            var grid = ent.GetComponent<TransformComponent>(borg).GridUid!.Value;
+            var navMap = ent.GetComponent<Content.Shared.Pinpointer.NavMapComponent>(grid);
+
+            // Две самые далёкие друг от друга проходимые точки, которые дают маяки: это и есть
+            // «через станцию», выраженное в терминах самой карты, а не в наших числах.
+            var beacons = navMap.Beacons.Values
+                .Select(b => new Vector2i((int) MathF.Floor(b.Position.X), (int) MathF.Floor(b.Position.Y)))
+                .Select(t => Content.Server.AiAgent.Borg.BorgPathfinder.NearestPassable(navMap, t))
+                .Where(t => t != null)
+                .Select(t => t!.Value)
+                .ToList();
+
+            if (beacons.Count < 2)
+                return "маяков меньше двух — сцена сломана";
+
+            var a = beacons[0];
+            var b = beacons[0];
+            var best = 0;
+
+            foreach (var x in beacons)
+            {
+                foreach (var y in beacons)
+                {
+                    var d = Math.Abs(x.X - y.X) + Math.Abs(x.Y - y.Y);
+                    if (d <= best)
+                        continue;
+
+                    best = d;
+                    a = x;
+                    b = y;
+                }
+            }
+
+            var path = Content.Server.AiAgent.Borg.BorgPathfinder.FindPath(navMap, a, b);
+
+            return path == null
+                ? $"путь {a} → {b} (по прямой {best} тайлов) НЕ найден"
+                : $"ok: {a} → {b}, по прямой {best}, путь {path.Count} тайлов, ног {Content.Server.AiAgent.Borg.BorgPathfinder.ToLegs(path).Count}";
+        });
+
+        TestContext.Out.WriteLine("ПОИСК: " + report);
+
+        Assert.That(report, Does.StartWith("ok:"), report);
+        Assert.That(report, Does.Not.Contain("путь 0"), "путь пустой");
+    }
+
+    /// <summary>
+    /// <c>goto</c> по хендлу ведёт К ЦЕЛИ, а не в начало координат станции.
+    /// </summary>
+    /// <remarks>
+    /// Регрессия, пойманная на боевом сервере. Цель по хендлу задаётся как
+    /// <c>EntityCoordinates(target, Vector2.Zero)</c>, чтобы следовать за движущейся целью, и
+    /// её <c>Position</c> — смещение относительно САМОЙ ЦЕЛИ, то есть (0,0). Прочитанное как
+    /// координаты сетки, это отправляло робота в точку (0,0) станции: на «подойди к двери в двух
+    /// шагах» он молча уходил за полстанции. Баг тихий — маршрут строится, робот идёт, всё
+    /// выглядит рабочим.
+    /// </remarks>
+    [Test]
+    public async Task Goto_ByHandle_HeadsTowardsTheTarget()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+        var ent = w.Ent;
+
+        for (var i = 0; i < 60; i++)
+        {
+            var ready = await w.Read(() =>
+            {
+                var pf = w.Pair.Server.System<Content.Server.NPC.Pathfinding.PathfindingSystem>();
+                return pf.GetPoly(ent.GetComponent<TransformComponent>(borg).Coordinates) != null;
+            });
+
+            if (ready)
+                break;
+
+            await w.Pair.Server.WaitRunTicks(10);
+        }
+
+        // Мишень в нескольких тайлах: достаточно далеко, чтобы «в начало координат» и «к цели»
+        // расходились, и достаточно близко, чтобы маршрут был коротким.
+        var target = EntityUid.Invalid;
+        await w.Pair.Server.WaitPost(() =>
+        {
+            var here = ent.GetComponent<TransformComponent>(borg).Coordinates;
+            target = ent.SpawnEntity("Crowbar", here.Offset(new Vector2(4, 0)));
+        });
+
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var handle = await w.Read(() => w.System.HandleFor(borg, target));
+        var before = await w.Read(() => Distance(ent, borg, target));
+
+        var r = await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
+        Assert.That(r.Ok, Is.True, $"goto отказал: {r.Error} {r.Detail}");
+
+        var closest = before;
+        for (var i = 0; i < 30; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+            var d = await w.Read(() => Distance(ent, borg, target));
+            closest = MathF.Min(closest, d);
+
+            if (closest < 1.5f)
+                break;
+        }
+
+        Assert.That(closest, Is.LessThan(before - 1.0f),
+            $"робот не приблизился к цели: было {before:F1}, ближе всего {closest:F1} — " +
+            "похоже, цель по хендлу снова читается в чужой системе координат");
+    }
+
+    private static float Distance(IEntityManager ent, EntityUid a, EntityUid b) =>
+        (ent.GetComponent<TransformComponent>(a).LocalPosition
+         - ent.GetComponent<TransformComponent>(b).LocalPosition).Length();
 }

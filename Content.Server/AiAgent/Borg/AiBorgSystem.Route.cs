@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using Content.Shared.Pinpointer;
 using Robust.Shared.Map;
@@ -18,23 +17,18 @@ namespace Content.Server.AiAgent.Borg;
 /// восток — «дошёл», Bar → Bridge — «дороги нет».
 /// </para>
 /// <para>
-/// Поэтому длинная дорога режется на короткие ноги по навигационным маякам — тем самым, названия
-/// которых экипаж говорит по рации. Каждая нога укладывается в лимит A*, а маяки образуют граф,
-/// по которому ищется последовательность.
+/// Поэтому маршрут строит <see cref="BorgPathfinder"/> — свой поиск по карте станции, — а
+/// апстримовому рулевому достаются короткие ноги, каждая из которых в его лимит укладывается.
+/// Глобальный маршрут наш, локальное движение чужое и проверенное.
+/// </para>
+/// <para>
+/// Первая версия резала дорогу по навигационным маякам. Приём был плох тем, что маяки расставлены
+/// по смыслу, а не по проходимости: цепочка «ближайших» упиралась в запертые отсеки, и робот
+/// вставал на пересадке, хотя до цели оставались проходимые коридоры.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
 {
-    /// <summary>
-    /// Дальше этого расстояния между маяками считаем, что прямой дороги нет.
-    ///
-    /// Не геометрия, а бюджет: нога должна укладываться в <c>NodeLimit</c> полигонов A*.
-    /// </summary>
-    private const float LegLength = 22f;
-
-    /// <summary>Ближе этого до цели маяки не нужны — идём напрямую.</summary>
-    private const float DirectRange = 18f;
-
     /// <summary>Одна нога маршрута.</summary>
     private readonly record struct Leg(EntityCoordinates Coords, string What);
 
@@ -49,53 +43,66 @@ public sealed partial class AiBorgSystem
         why = string.Empty;
         _routes.Remove(borg);
 
-        var here = _xform.GetMapCoordinates(borg).Position;
-        var thereLocal = destination.Position;
-        var grid = Transform(borg).GridUid;
+        var xform = Transform(borg);
+        var grid = xform.GridUid;
 
-        // Близко — идём напрямую, без маяков: лишняя пересадка только удлиняет путь.
-        if (grid == null || (thereLocal - Transform(borg).LocalPosition).Length() <= DirectRange)
+        // Вне сетки маршрут не по чему строить — отдаём рулевому как есть, пусть решает он.
+        if (grid == null || !TryComp<NavMapComponent>(grid.Value, out var navMap))
         {
             StartSteering(borg, destination, goal, range: 1.2f);
             return true;
         }
 
-        if (!TryComp<NavMapComponent>(grid.Value, out var navMap))
+        var from = ToTile(xform.LocalPosition);
+
+        // Цель переводится в систему координат СЕТКИ, а не читается как есть.
+        //
+        // EntityCoordinates.Position — это смещение относительно РОДИТЕЛЯ, а цель по хендлу
+        // привязана к самой сущности: у неё Position равен (0,0). Прочитав его как координаты
+        // сетки, робот отправлялся в начало координат станции — на бою это выглядело так, что
+        // на «подойди к двери в двух шагах» он уходил за полстанции в другую сторону.
+        var destMap = _xform.ToMapCoordinates(destination);
+        var to = ToTile(Vector2.Transform(destMap.Position, _xform.GetInvWorldMatrix(grid.Value)));
+
+        // Цель почти никогда не проходима сама по себе: маяк — вывеска на стене, хендл двери —
+        // сама дверь. Идти надо «к», а не «в».
+        var goalTile = BorgPathfinder.NearestPassable(navMap, to);
+        var startTile = BorgPathfinder.NearestPassable(navMap, from);
+
+        if (startTile == null || goalTile == null)
         {
-            StartSteering(borg, destination, goal, range: 1.2f);
-            return true;
+            why = $"не вижу пола ни под собой, ни у цели «{goal}»";
+            return false;
         }
 
-        var beacons = navMap.Beacons.Values
-            .Where(b => !string.IsNullOrWhiteSpace(b.Text))
-            .Select(b => (b.Text!, b.Position))
-            .ToList();
-
-        if (beacons.Count == 0)
-        {
-            StartSteering(borg, destination, goal, range: 1.2f);
-            return true;
-        }
-
-        var from = Transform(borg).LocalPosition;
-        var path = FindBeaconPath(beacons, from, thereLocal);
+        var path = BorgPathfinder.FindPath(navMap, startTile.Value, goalTile.Value);
 
         if (path == null)
         {
-            why = $"не вижу, как добраться до «{goal}»: между мной и целью нет цепочки известных отсеков";
+            why = $"дороги до «{goal}» нет: всё перекрыто либо цель на другой сетке";
             return false;
         }
 
         var legs = new Queue<Leg>();
-        foreach (var (name, pos) in path)
-            legs.Enqueue(new Leg(new EntityCoordinates(grid.Value, pos), name));
 
+        foreach (var tile in BorgPathfinder.ToLegs(path))
+            legs.Enqueue(new Leg(new EntityCoordinates(grid.Value, ToLocal(tile)), goal));
+
+        // Последняя нога — сама цель, а не центр её тайла: к двери надо подойти вплотную.
         legs.Enqueue(new Leg(destination, goal));
 
         _routes[borg] = legs;
+        _sawmill.Debug($"{ToPrettyString(borg)} маршрут до «{goal}»: {path.Count} тайлов, {legs.Count} ног");
+
         AdvanceRoute(borg);
         return true;
     }
+
+    private static Vector2i ToTile(Vector2 local) =>
+        new((int) MathF.Floor(local.X), (int) MathF.Floor(local.Y));
+
+    private static Vector2 ToLocal(Vector2i tile) =>
+        new(tile.X + 0.5f, tile.Y + 0.5f);
 
     /// <summary>Начать следующую ногу маршрута. Возвращает false, когда маршрут кончился.</summary>
     private bool AdvanceRoute(EntityUid borg)
@@ -115,80 +122,4 @@ public sealed partial class AiBorgSystem
 
     private void ClearRoute(EntityUid borg) => _routes.Remove(borg);
 
-    /// <summary>
-    /// Цепочка маяков от точки до точки: ширину в глубину по графу «маяки не дальше ноги».
-    /// </summary>
-    private static List<(string Name, Vector2 Pos)>? FindBeaconPath(
-        List<(string Name, Vector2 Pos)> beacons, Vector2 from, Vector2 to)
-    {
-        int? Nearest(Vector2 p)
-        {
-            var best = -1;
-            var bestDist = float.MaxValue;
-
-            for (var i = 0; i < beacons.Count; i++)
-            {
-                var d = (beacons[i].Pos - p).Length();
-                if (d >= bestDist)
-                    continue;
-
-                bestDist = d;
-                best = i;
-            }
-
-            return best < 0 ? null : best;
-        }
-
-        var start = Nearest(from);
-        var goal = Nearest(to);
-
-        if (start == null || goal == null)
-            return null;
-
-        var prev = new Dictionary<int, int>();
-        var seen = new HashSet<int> { start.Value };
-        var queue = new Queue<int>();
-        queue.Enqueue(start.Value);
-
-        while (queue.Count > 0)
-        {
-            var cur = queue.Dequeue();
-
-            if (cur == goal.Value)
-                break;
-
-            for (var i = 0; i < beacons.Count; i++)
-            {
-                if (seen.Contains(i))
-                    continue;
-
-                if ((beacons[i].Pos - beacons[cur].Pos).Length() > LegLength)
-                    continue;
-
-                seen.Add(i);
-                prev[i] = cur;
-                queue.Enqueue(i);
-            }
-        }
-
-        if (!seen.Contains(goal.Value))
-            return null;
-
-        var chain = new List<(string, Vector2)>();
-        var node = goal.Value;
-
-        while (true)
-        {
-            chain.Add(beacons[node]);
-
-            if (node == start.Value)
-                break;
-
-            if (!prev.TryGetValue(node, out node))
-                return null;
-        }
-
-        chain.Reverse();
-        return chain;
-    }
 }
