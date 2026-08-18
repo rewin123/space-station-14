@@ -12,6 +12,7 @@ using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
 using Robust.Shared.Maths;
+using Robust.Shared.Map.Components;
 
 namespace Content.AiBench;
 
@@ -666,5 +667,351 @@ public sealed class BorgAgentTests
             Assert.That(npc, Is.False, "ActiveNPCComponent нужен был только рулевому");
             Assert.That(htn, Is.False, "HTN нужен был только ради флагов чужого путепоиска");
         });
+    }
+
+    /// <summary>
+    /// Робот запускает реактор: доходит, находит пульт, вставляет топливо, включает впрыск.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Explicit: карта ротации, длинная дорога. Это конечная цель всей затеи с телом — проверить,
+    /// что робот способен не только дойти, но и СДЕЛАТЬ работу руками в правильном порядке.
+    /// </para>
+    /// <para>
+    /// <b>Осторожно при чтении вердикта.</b> Сценарий доходит до конца и все его утверждения
+    /// проходят, но NUnit всё равно показывает падение: стенд считает провалом ЛЮБУЮ строчку
+    /// уровня ERROR в логе сервера, а апстримовый <c>SharedDoAfterSystem.ShouldCancel</c> после
+    /// вскрытия упаковки резолвит трансформ у сущности, которую сам же и удалил. Это чужая грабля,
+    /// править апстрим нельзя, а механизма «ожидаемая ошибка» у стенда нет. Смотреть надо на
+    /// строку ЗАПУСК и на утверждение про впрыск.
+    /// </para>
+    /// </remarks>
+    [Test]
+    [Explicit("длинный сценарий на карте ротации")]
+    public async Task Borg_StartsTheReactor()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+
+        var borg = EntityUid.Invalid;
+        await w.Pair.Server.WaitPost(() =>
+        {
+            var sys = w.Pair.Server.System<AiBorgSystem>();
+            Assert.That(sys.TrySpawnBorg("AME", out borg, out var placed), Is.True, placed);
+            Assert.That(sys.TryClaim(borg, out var why), Is.True, why);
+        });
+
+        await w.Pair.Server.WaitRunTicks(120);
+
+        // Что вообще есть на станции: пульт АМЭ и канистры с топливом.
+        var found = await w.Read(() =>
+        {
+            var ctrl = EntityUid.Invalid;
+            var jar = EntityUid.Invalid;
+
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeControllerComponent>();
+            while (q.MoveNext(out var uid, out _))
+            {
+                ctrl = uid;
+                break;
+            }
+
+            var j = ent.EntityQueryEnumerator<Content.Shared.Ame.Components.AmeFuelContainerComponent>();
+            while (j.MoveNext(out var uid, out _))
+            {
+                jar = uid;
+                break;
+            }
+
+            return (ctrl, jar);
+        });
+
+        TestContext.Out.WriteLine($"РЕАКТОР: пульт={found.ctrl} канистра={found.jar}");
+        Assert.That(found.ctrl.IsValid(), Is.True, "на карте нет пульта АМЭ — сценарий невозможен");
+
+        // Состояние до вмешательства.
+        var before = await w.Read(() =>
+        {
+            var c = ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(found.ctrl);
+            var injecting = c.Injecting;
+            var fuel = c.FuelSlot.Item;
+            return $"впрыск={injecting} топливо={(fuel == null ? "нет" : "есть")}";
+        });
+
+        TestContext.Out.WriteLine("ДО: " + before);
+
+        var handle = await w.Read(() => w.System.HandleFor(borg, found.ctrl));
+
+        // Дойти до пульта.
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
+
+        for (var i = 0; i < 120; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+
+            var close = await w.Read(() =>
+            {
+                var a = ent.GetComponent<TransformComponent>(borg).LocalPosition;
+                var bpos = ent.GetComponent<TransformComponent>(found.ctrl).LocalPosition;
+                return (a - bpos).Length() < 1.4f;
+            });
+
+            if (close)
+                break;
+        }
+
+        var reached = await w.Read(() =>
+        {
+            var a = ent.GetComponent<TransformComponent>(borg).LocalPosition;
+            var bpos = ent.GetComponent<TransformComponent>(found.ctrl).LocalPosition;
+            return (a - bpos).Length();
+        });
+
+        TestContext.Out.WriteLine($"ДОШЁЛ: {reached:F1} тайлов до пульта");
+
+        // Прочитать пульт.
+        var read = await w.InvokeOn(borg, "console", "{\"target\":\"" + handle + "\"}");
+        TestContext.Out.WriteLine($"ПУЛЬТ: ok={read.Ok} {read.Error} {read.Detail} {read.EffectJson()}"[..Math.Min(600, $"ПУЛЬТ: ok={read.Ok} {read.Error} {read.Detail} {read.EffectJson()}".Length)]);
+
+        Assert.That(read.Ok, Is.True, $"пульт не читается: {read.Error} {read.Detail}");
+
+        // Что вообще есть вокруг реактора: собрано ли ядро и где топливо.
+        var scene = await w.Read(() =>
+        {
+            var shields = 0;
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeShieldComponent>();
+            while (q.MoveNext(out _, out _))
+                shields++;
+
+            var jars = 0;
+            var j = ent.EntityQueryEnumerator<Content.Shared.Ame.Components.AmeFuelContainerComponent>();
+            while (j.MoveNext(out _, out _))
+                jars++;
+
+            var ctrlPos = ent.GetComponent<TransformComponent>(found.ctrl).LocalPosition;
+            var jarPos = found.jar.IsValid()
+                ? ent.GetComponent<TransformComponent>(found.jar).LocalPosition.ToString()
+                : "нет";
+
+            var flatpacks = 0;
+            var f = ent.EntityQueryEnumerator<MetaDataComponent>();
+            while (f.MoveNext(out _, out var meta))
+            {
+                if (meta.EntityPrototype?.ID == "AmePartFlatpack")
+                    flatpacks++;
+            }
+
+            // Где упаковки: на полу их можно взять, в ящике — сначала надо открыть.
+            var loose = 0;
+            var packed = 0;
+            var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
+            var f2 = ent.EntityQueryEnumerator<MetaDataComponent>();
+            while (f2.MoveNext(out var uid2, out var m2))
+            {
+                if (m2.EntityPrototype?.ID != "AmePartFlatpack")
+                    continue;
+
+                if (container.IsEntityInContainer(uid2))
+                    packed++;
+                else
+                    loose++;
+            }
+
+            return $"экранов={shields} канистр={jars} упаковок={flatpacks} (на полу {loose}, в таре {packed}) пульт={ctrlPos}";
+        });
+
+        TestContext.Out.WriteLine("СЦЕНА: " + scene);
+
+        // ---- шаг 1: добыть упаковку экранирования из ящика ----
+        var crate = await w.Read(() =>
+        {
+            var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
+            var q = ent.EntityQueryEnumerator<MetaDataComponent>();
+
+            while (q.MoveNext(out var uid, out var meta))
+            {
+                if (meta.EntityPrototype?.ID != "AmePartFlatpack")
+                    continue;
+
+                if (!container.TryGetContainingContainer((uid, null, null), out var c))
+                    continue;
+
+                return (Crate: c.Owner, Pack: uid);
+            }
+
+            return (Crate: EntityUid.Invalid, Pack: EntityUid.Invalid);
+        });
+
+        Assert.That(crate.Crate.IsValid(), Is.True, "не нашёл тару с упаковками AME");
+
+        var crateHandle = await w.Read(() => w.System.HandleFor(borg, crate.Crate));
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + crateHandle + "\"}");
+
+        for (var i = 0; i < 150; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+            var close = await w.Read(() =>
+                (ent.GetComponent<TransformComponent>(borg).LocalPosition
+                 - ent.GetComponent<TransformComponent>(crate.Crate).LocalPosition).Length() < 1.4f);
+            if (close)
+                break;
+        }
+
+        var openRes = await w.InvokeOn(borg, "use", "{\"target\":\"" + crateHandle + "\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var packLoose = await w.Read(() =>
+            !ent.System<Robust.Shared.Containers.SharedContainerSystem>().IsEntityInContainer(crate.Pack));
+
+        TestContext.Out.WriteLine($"ЯЩИК: use ok={openRes.Ok} {openRes.Error}; упаковка доступна={packLoose}");
+
+        // Руки даёт только ВЫБРАННЫЙ модуль: пока выбран инструментальный, все руки заняты
+        // несъёмными инструментами и взять ничего нельзя.
+        var mod = await w.InvokeOn(borg, "module", "{\"name\":\"manipulator\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var hands = await w.Read(() =>
+        {
+            var hs = w.Pair.Server.System<Content.Shared.Hands.EntitySystems.SharedHandsSystem>();
+            var free = hs.TryGetEmptyHand(borg, out _);
+            var chassis = ent.GetComponent<Content.Shared.Silicons.Borgs.Components.BorgChassisComponent>(borg);
+            var sel = chassis.SelectedModule;
+            return $"модуль={(sel == null ? "нет" : ent.GetComponent<MetaDataComponent>(sel.Value).EntityName)} свободная рука={free}";
+        });
+
+        TestContext.Out.WriteLine($"МОДУЛЬ: ok={mod.Ok} {mod.Error} {mod.Detail} | {hands}");
+
+        var packHandle = await w.Read(() => w.System.HandleFor(borg, crate.Pack));
+        var got = await w.InvokeOn(borg, "pickup", "{\"target\":\"" + packHandle + "\"}");
+
+        TestContext.Out.WriteLine($"ВЗЯЛ УПАКОВКУ: ok={got.Ok} {got.Error} {got.Detail}");
+        Assert.That(got.Ok, Is.True, "робот не смог взять упаковку");
+
+        // ---- шаг 2: донести к пульту и развернуть в экран ----
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
+
+        for (var i = 0; i < 150; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+            var close = await w.Read(() =>
+                (ent.GetComponent<TransformComponent>(borg).LocalPosition
+                 - ent.GetComponent<TransformComponent>(found.ctrl).LocalPosition).Length() < 1.6f);
+            if (close)
+                break;
+        }
+
+        var dropped = await w.InvokeOn(borg, "drop", "{}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        // Ломом владеет инструментальный модуль, а нёс робот манипулятором: перед вскрытием надо
+        // вернуться к инструментам.
+        var back = await w.InvokeOn(borg, "module", "{\"name\":\"tool\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var packHandle2 = await w.Read(() => w.System.HandleFor(borg, crate.Pack));
+        // Упаковке нужна ПРОЗВОНКА — мультитул, а не лом. Инструмент называем явно.
+        var unpacked = await w.InvokeOn(borg, "use",
+            "{\"target\":\"" + packHandle2 + "\",\"tool\":\"multitool\"}");
+
+        await w.Pair.Server.WaitRunTicks(30);
+
+        var shields = await w.Read(() =>
+        {
+            var n = 0;
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeShieldComponent>();
+            while (q.MoveNext(out _, out _))
+                n++;
+            return n;
+        });
+
+        TestContext.Out.WriteLine(
+            $"РАЗВЕРНУЛ: drop={dropped.Ok} module={back.Ok} use={unpacked.Ok} {unpacked.Error} {unpacked.Detail}; экранов теперь {shields}");
+
+        Assert.That(shields, Is.GreaterThan(0), "упаковка не развернулась в экранирование");
+
+        // ---- шаг 3: топливо ----
+        var jarInfo = await w.Read(() =>
+        {
+            var q = ent.EntityQueryEnumerator<Content.Shared.Ame.Components.AmeFuelContainerComponent>();
+            return q.MoveNext(out var uid, out _) ? uid : EntityUid.Invalid;
+        });
+
+        Assert.That(jarInfo.IsValid(), Is.True, "на карте нет канистры с топливом");
+
+        await w.InvokeOn(borg, "module", "{\"name\":\"manipulator\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var jarHandle = await w.Read(() => w.System.HandleFor(borg, jarInfo));
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + jarHandle + "\"}");
+
+        for (var i = 0; i < 200; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+            var close = await w.Read(() =>
+                (ent.GetComponent<TransformComponent>(borg).LocalPosition
+                 - _worldOf(ent, jarInfo)).Length() < 1.5f);
+            if (close)
+                break;
+        }
+
+        var tookJar = await w.InvokeOn(borg, "pickup", "{\"target\":\"" + jarHandle + "\"}");
+        TestContext.Out.WriteLine($"ТОПЛИВО: взял={tookJar.Ok} {tookJar.Error} {tookJar.Detail}");
+
+        // ---- шаг 4: вставить и включить впрыск ----
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
+
+        for (var i = 0; i < 200; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+            var close = await w.Read(() =>
+                (ent.GetComponent<TransformComponent>(borg).LocalPosition
+                 - ent.GetComponent<TransformComponent>(found.ctrl).LocalPosition).Length() < 1.5f);
+            if (close)
+                break;
+        }
+
+        var inserted = await w.InvokeOn(borg, "use",
+            "{\"target\":\"" + handle + "\",\"with_item\":true}");
+
+        await w.Pair.Server.WaitRunTicks(10);
+
+        var fuelIn = await w.Read(() =>
+            ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(found.ctrl).FuelSlot.Item != null);
+
+        TestContext.Out.WriteLine($"ВСТАВИЛ: ok={inserted.Ok} {inserted.Error}; топливо в пульте={fuelIn}");
+
+        var toggled = await w.InvokeOn(borg, "console",
+            "{\"target\":\"" + handle + "\",\"action\":\"ui_button_pressed\",\"args\":{\"button\":\"ToggleInjection\"}}");
+
+        await w.Pair.Server.WaitRunTicks(30);
+
+        var final = await w.Read(() =>
+        {
+            var c = ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(found.ctrl);
+            return (c.Injecting, Fuel: c.FuelSlot.Item != null);
+        });
+
+        TestContext.Out.WriteLine(
+            $"ЗАПУСК: кнопка ok={toggled.Ok} {toggled.Error} {toggled.Detail}; впрыск={final.Injecting} топливо={final.Fuel}");
+
+        Assert.That(final.Injecting, Is.True, "реактор не запущен: впрыск не включился");
+
+        TestContext.Out.WriteLine("ИТОГ: РЕАКТОР ЗАПУЩЕН РОБОТОМ — экранирование собрано, топливо " +
+                                  "вставлено, впрыск включён.");
+    }
+
+    /// <summary>Позиция предмета в координатах сетки, даже если он лежит в таре.</summary>
+    private static Vector2 _worldOf(IEntityManager ent, EntityUid uid)
+    {
+        var xform = ent.GetComponent<TransformComponent>(uid);
+        var parent = xform.ParentUid;
+
+        while (parent.IsValid() && !ent.HasComponent<MapGridComponent>(parent))
+        {
+            xform = ent.GetComponent<TransformComponent>(parent);
+            parent = xform.ParentUid;
+        }
+
+        return xform.LocalPosition;
     }
 }

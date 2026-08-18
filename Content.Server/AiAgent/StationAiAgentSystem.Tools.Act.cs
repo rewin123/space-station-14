@@ -636,7 +636,19 @@ public sealed partial class StationAiAgentSystem
     /// The description never enters the frozen prefix: the tool schema is four fields, and the
     /// hundred consoles behind it cost nothing until one is opened.
     /// </summary>
-    private Task<ToolResult> DeviceUiAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    /// <param name="param">Имя аргумента с хендлом: у ядра «handle», у борга «target».</param>
+    /// <param name="gate">
+    /// Чем проверяется право трогать консоль. <c>null</c> — станционные ворота (вайтлист ИИ,
+    /// питание, видимость через камеры). Тело с руками передаёт своё: «я рядом и могу дотянуться».
+    ///
+    /// <para>
+    /// Параметр, а не копия метода, потому что различие ровно здесь: сам драйвер консолей —
+    /// отражение по типам BUI-сообщений — про тело не знает ничего и работает одинаково для
+    /// любого, кто имеет право нажать.
+    /// </para>
+    /// </param>
+    public Task<ToolResult> DeviceUiAsync(AgentSession s, JsonElement args, CancellationToken ct,
+        string param = "handle", Func<AgentSession, EntityUid, ToolResult?>? gate = null)
     {
         TryGetString(args, "action", out var action);
         var hasArgs = args.ValueKind == JsonValueKind.Object &&
@@ -647,12 +659,20 @@ public sealed partial class StationAiAgentSystem
 
         return OnMainAsync(s, "device_ui", () =>
         {
-            if (!TryResolve(s, args, out var uid, out var failure))
+            if (!TryResolve(s, args, out var uid, out var failure, param))
                 return failure!;
 
-            var gate = CheckGate(s.Brain, uid, s.Mode);
-            if (gate != DeviceGate.Ok)
-                return ToolResult.Fail(gate.ToError(), gate.ToDetail(), gate.Retry());
+            if (gate != null)
+            {
+                if (gate(s, uid) is { } refused)
+                    return refused;
+            }
+            else
+            {
+                var station = CheckGate(s.Brain, uid, s.Mode);
+                if (station != DeviceGate.Ok)
+                    return ToolResult.Fail(station.ToError(), station.ToDetail(), station.Retry());
+            }
 
             var handle = s.Handles.TryGetHandle(uid, out var h) ? h : "device";
             var index = UiIndex;

@@ -542,7 +542,7 @@ public sealed partial class StationAiAgentSystem
 
         // Тело борга. Ходьба и руки меняют мир и видны экипажу немедленно — задержка здесь
         // выглядит как зависший робот, а не как занятый сервер.
-        "goto", "step", "use", "pickup", "drop", "hit", "module",
+        "goto", "step", "use", "pickup", "drop", "hit", "module", "console",
     };
 
     private static WorldPriority PriorityOf(string what) =>
@@ -582,14 +582,15 @@ public sealed partial class StationAiAgentSystem
     /// handles of the same kind. Guessing wrong is normal; leaving the model to guess blindly
     /// again is what burns turns.
     /// </summary>
-    private bool TryResolve(AgentSession s, JsonElement args, out EntityUid uid, out ToolResult? failure)
+    private bool TryResolve(AgentSession s, JsonElement args, out EntityUid uid, out ToolResult? failure,
+        string param = "handle")
     {
         uid = default;
         failure = null;
 
-        if (!TryGetString(args, "handle", out var handle) || string.IsNullOrWhiteSpace(handle))
+        if (!TryGetString(args, param, out var handle) || string.IsNullOrWhiteSpace(handle))
         {
-            failure = ToolResult.Fail(ToolError.BadArgs, "нужен параметр 'handle' — возьми его из look");
+            failure = ToolResult.Fail(ToolError.BadArgs, $"нужен параметр '{param}' — возьми его из look");
             return false;
         }
 

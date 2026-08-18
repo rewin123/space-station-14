@@ -100,13 +100,16 @@ public sealed partial class AiBorgSystem
         {
             Name = "use",
             Description = "Нажать на цель: открыть дверь, включить машину, нажать кнопку. Надо " +
-                          "стоять рядом — сначала goto, потом use. Чтобы ПРИМЕНИТЬ то, что у тебя " +
-                          "в руке (отжать, сварить, починить, вскрыть), добавь with_item: true.",
+                          "стоять рядом — сначала goto, потом use. Чтобы ПРИМЕНИТЬ инструмент " +
+                          "(отжать, сварить, вскрыть, прозвонить), назови его в 'tool' — робот сам " +
+                          "возьмёт его в руку. Инструменты у тебя из выбранного модуля; какие есть, " +
+                          "видно в строке SELF.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
                 "target":{"type":"string","description":"Хендл из look."},
-                "with_item":{"type":"boolean","default":false,"description":"Применить предмет из руки, а не просто нажать."}}}
+                "tool":{"type":"string","description":"Часть названия инструмента: лом, мультитул, сварка, ключ. Робот переложит его в рабочую руку."},
+                "with_item":{"type":"boolean","default":false,"description":"Применить то, что уже в руке, не выбирая инструмент."}}}
                 """,
             Handler = (a, ct) => UseAsync(s, a, ct),
         });
@@ -159,6 +162,29 @@ public sealed partial class AiBorgSystem
                 "name":{"type":"string","description":"Часть названия модуля, например «инструмент»."}}}
                 """,
             Handler = (a, ct) => ModuleAsync(s, a, ct),
+        });
+
+        r.Register(new AiTool
+        {
+            Name = "console",
+            Description = "Пульт машины: без 'action' показывает показания и список кнопок, с " +
+                          "'action' — нажимает кнопку. Так управляют реактором, шлюзовыми " +
+                          "контроллерами, консолями. Надо стоять рядом.",
+            GameAction = true,
+            SchemaJson = """
+                {"type":"object","required":["target"],"additionalProperties":false,"properties":{
+                "target":{"type":"string","description":"Хендл машины из look."},
+                "action":{"type":"string","description":"Имя кнопки. Без него — только показания и список."},
+                "args":{"type":"object","description":"Аргументы кнопки, если она их требует."}}}
+                """,
+            // Драйвер общий с ядром: он строится отражением по типам BUI-сообщений и про тело не
+            // знает ничего. Различаются только ворота — у ядра вайтлист и камеры, у борга
+            // «дотянулся рукой».
+            Handler = (a, ct) => _host.DeviceUiAsync(s, a, ct, param: "target", gate: (sess, uid) =>
+                _interaction.InRangeUnobstructed(sess.Brain, uid, 1.5f)
+                    ? null
+                    : ToolResult.Fail(ToolError.NotVisible,
+                        "отсюда не дотянуться — сначала goto к этой машине", retry: "move_first")),
         });
 
         // ------------------------------------------------------------------ речь
@@ -383,6 +409,39 @@ public sealed partial class AiBorgSystem
             var withItem = args.ValueKind == JsonValueKind.Object
                            && args.TryGetProperty("with_item", out var wi)
                            && wi.ValueKind == JsonValueKind.True;
+
+            // Назван инструмент — переложить его в рабочую руку.
+            //
+            // Без этого набор инструментов модуля бесполезен наполовину: рабочая рука одна, а
+            // инструментов шесть, и «применить» уходило тем, что оказалось активным. На запуске
+            // реактора это стоило отладки — упаковка экранирования требует ПРОЗВОНКИ (мультитул),
+            // а в руке был лом, и вскрытие молча не срабатывало.
+            if (StationAiAgentSystem.TryGetString(args, "tool", out var toolName)
+                && !string.IsNullOrWhiteSpace(toolName))
+            {
+                var picked = false;
+
+                foreach (var held in _hands.EnumerateHeld(borg))
+                {
+                    if (!Name(held).Contains(toolName!, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    picked = _hands.TrySelect(borg, held);
+                    break;
+                }
+
+                if (!picked)
+                {
+                    var have = string.Join(", ", _hands.EnumerateHeld(borg).Select(h => Name(h)));
+                    return ToolResult.Fail(ToolError.Refused,
+                        string.IsNullOrEmpty(have)
+                            ? $"инструмента «{toolName}» нет: руки пусты, смени модуль"
+                            : $"инструмента «{toolName}» нет в руках. Есть: {have}",
+                        retry: "other_target");
+                }
+
+                withItem = true;
+            }
 
             if (withItem)
             {

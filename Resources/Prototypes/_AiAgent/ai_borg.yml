@@ -37,8 +37,39 @@
     - Common
     - Engineering
     - Science
+  # Манипулятор ставится сверх штатных модулей типа: без свободной руки робот не может носить
+  # предметы вовсе, а значит и работать с ними. См. AiBorgModuleGripper ниже.
+  - type: BorgChassis
+    moduleWhitelist:
+      tags:
+      - BorgModuleGeneric
+      - BorgModuleEngineering
+  - type: ContainerFill
+    containers:
+      borg_module:
+      - AiBorgModuleGripper
   - type: ItemSlots
     slots:
       cell_slot:
         name: power-cell-slot-component-slot-name-default
         startingItem: PowerCellHigh
+
+# Манипулятор: модуль с ОДНОЙ ПУСТОЙ рукой.
+#
+# Это не починка, а сознательно выданная возможность, и она отступает от ванильного борга.
+# У штатных модулей каждая рука занята несъёмным инструментом (лом, ключ, отвёртка…), поэтому
+# ванильный борг не может НИЧЕГО носить — ни канистру, ни упаковку, ни ящик. Проверено сценарием:
+# на попытке взять упаковку экранирования робот честно отвечал «нет свободной руки».
+#
+# Для нашего робота это делало недостижимой любую работу с предметами, то есть примерно всю
+# инженерную работу: собрать реактор нельзя, не перенеся к нему детали. Пустая рука это чинит и
+# ничего больше не даёт — ни доступа, ни силы, ни скорости.
+- type: entity
+  id: AiBorgModuleGripper
+  parent: [ BaseBorgModule, BaseProviderBorgModule ]
+  name: manipulator cyborg module
+  description: Пустой манипулятор. Позволяет носить предметы, как это делает человек рукой.
+  components:
+  - type: ItemBorgModule
+    hands:
+    - hand: {}
