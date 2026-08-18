@@ -443,4 +443,37 @@ public sealed class AiCVars
     /// </summary>
     public static readonly CVarDef<string> DebugToken =
         CVarDef.Create("ai.debug_token", "", CVar.SERVERONLY | CVar.CONFIDENTIAL);
+
+    // ------------------------------------------------------------- режим «злой ИИ»
+
+    /// <summary>
+    /// Раздавать ли ИИ двери, которых он штатно не касается: бластдвери, ставни, часть внешних
+    /// шлюзов.
+    ///
+    /// Все три ручки ниже <b>перекрывают прототип правила</b>, а не дополняют его: включённое в
+    /// прототипе можно выключить отсюда, но не наоборот. Так и задумано — это аварийный тормоз на
+    /// живом сервере, а не второй набор настроек режима. Читаются на раздаче должностей, то есть
+    /// вступают в силу со следующего раунда.
+    /// </summary>
+    public static readonly CVarDef<bool> RogueGrantDoors =
+        CVarDef.Create("ai.rogue_grant_doors", true, CVar.SERVERONLY);
+
+    /// <summary>Раздавать ли доступ ко всему, у чего есть интерфейс: консоли, вентили, панели.</summary>
+    public static readonly CVarDef<bool> RogueGrantConsoles =
+        CVarDef.Create("ai.rogue_grant_consoles", true, CVar.SERVERONLY);
+
+    /// <summary>Раздавать ли турели и их панели управления.</summary>
+    public static readonly CVarDef<bool> RogueGrantTurrets =
+        CVarDef.Create("ai.rogue_grant_turrets", true, CVar.SERVERONLY);
+
+    /// <summary>
+    /// В открытом режиме выдавать ассистента и тем, кто просил «оставить в лобби, если должность
+    /// занята».
+    ///
+    /// Без этого закрытие должностей избирательно не пускает на сервер часть игроков — с их точки
+    /// зрения без всякой причины. Выключается, если окажется, что лечение хуже болезни: тогда
+    /// такие игроки просто останутся в лобби, как и просили.
+    /// </summary>
+    public static readonly CVarDef<bool> RogueForceOverflow =
+        CVarDef.Create("ai.rogue_force_overflow", true, CVar.SERVERONLY);
 }

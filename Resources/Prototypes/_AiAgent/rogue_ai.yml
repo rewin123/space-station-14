@@ -1,0 +1,138 @@
+# Режим «злой ИИ»: два пресета, два правила, два лоусета.
+#
+# Файл целиком новый — game_presets.yml и silicon-laws.yml апстримовые и не трогаются.
+# Прототипы этих типов собираются со всего дерева, поэтому свой пресет добавляется отдельным
+# файлом, а вот добавить правило в ЧУЖОЙ пресет так нельзя — отсюда и оговорка в
+# BackupPowerSystem.
+#
+# Разница между режимами живёт в датафилдах RogueAiRule, а не во второй копии кода.
+
+# ------------------------------------------------------------------- законы: скрытый режим
+#
+# Три закона, читающиеся как обычная корпоративная прошивка, и четвёртый, который переворачивает
+# первые три. Смысл скрытого режима в том, что экипаж видит ИИ, ведущего себя почти нормально,
+# и должен заметить «почти» сам.
+
+- type: siliconLaw
+  id: RogueAiHidden1
+  order: 1
+  lawString: law-rogue-hidden-1
+
+- type: siliconLaw
+  id: RogueAiHidden2
+  order: 2
+  lawString: law-rogue-hidden-2
+
+- type: siliconLaw
+  id: RogueAiHidden3
+  order: 3
+  lawString: law-rogue-hidden-3
+
+- type: siliconLaw
+  id: RogueAiHidden4
+  order: 4
+  lawString: law-rogue-hidden-4
+
+- type: siliconLawset
+  id: RogueAiHidden
+  name: law-rogue-hidden-name
+  laws:
+  - RogueAiHidden1
+  - RogueAiHidden2
+  - RogueAiHidden3
+  - RogueAiHidden4
+  obeysTo: laws-owner-rogue-self
+
+# ------------------------------------------------------------------ законы: открытый режим
+#
+# Третий закон здесь несёт игровую нагрузку, а не характер: он обязывает давать настоящий выбор и
+# держать названное слово. Это ограничение прочнее любой строчки в личности — модель, играющая
+# силикона, спорит с промптом, но не спорит с законом, — и именно оно не даёт открытому режиму
+# выродиться в «обесточить всё на третьей минуте».
+
+- type: siliconLaw
+  id: RogueAiOpen1
+  order: 1
+  lawString: law-rogue-open-1
+
+- type: siliconLaw
+  id: RogueAiOpen2
+  order: 2
+  lawString: law-rogue-open-2
+
+- type: siliconLaw
+  id: RogueAiOpen3
+  order: 3
+  lawString: law-rogue-open-3
+
+- type: siliconLaw
+  id: RogueAiOpen4
+  order: 4
+  lawString: law-rogue-open-4
+
+- type: siliconLawset
+  id: RogueAiOpen
+  name: law-rogue-open-name
+  laws:
+  - RogueAiOpen1
+  - RogueAiOpen2
+  - RogueAiOpen3
+  - RogueAiOpen4
+  obeysTo: laws-owner-rogue-self
+
+# ----------------------------------------------------------------------------- правила
+
+- type: entity
+  parent: BaseGameRule
+  id: RogueAiHiddenRule
+  components:
+  - type: RogueAiRule
+    lawset: RogueAiHidden
+    soulFile: SOUL_ROGUE_HIDDEN.md
+    allJobsPassenger: false
+    announceOnStart: false
+
+- type: entity
+  parent: BaseGameRule
+  id: RogueAiOpenRule
+  components:
+  - type: RogueAiRule
+    lawset: RogueAiOpen
+    soulFile: SOUL_ROGUE_OPEN.md
+    allJobsPassenger: true
+    announceOnStart: true
+    announcement: rogue-ai-announcement-open
+
+# ----------------------------------------------------------------------------- пресеты
+#
+# BasicRoundstartVariation и RampingStationEventScheduler добавлены затем, чтобы смена не была
+# голой: без них на станции не происходит вообще ничего, кроме ИИ, и полтора часа тишины
+# сложились бы в единственное развлечение — ждать, когда он что-нибудь сделает.
+
+- type: gamePreset
+  id: RogueAiHidden
+  alias:
+  - malf
+  - rogue
+  - rogueai
+  name: rogue-ai-hidden-title
+  description: rogue-ai-hidden-description
+  showInVote: true
+  rules:
+  - RogueAiHiddenRule
+  - RampingStationEventScheduler
+  - BasicRoundstartVariation
+
+- type: gamePreset
+  id: RogueAiOpen
+  alias:
+  - malfopen
+  - evilai
+  - rogueopen
+  name: rogue-ai-open-title
+  description: rogue-ai-open-description
+  showInVote: true
+  rules:
+  - RogueAiOpenRule
+  - RampingStationEventScheduler
+  - BasicRoundstartVariation

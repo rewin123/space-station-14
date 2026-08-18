@@ -72,6 +72,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private IdentitySystem _identity = default!;
     [Dependency] private StationRecordsSystem _records = default!;
     [Dependency] private SiliconLawSystem _laws = default!;
+    [Dependency] private RogueAi.RogueAiRuleSystem _rogue = default!;
     [Dependency] private SharedStationSystem _station = default!;
     [Dependency] private Content.Server.Station.Systems.StationJobsSystem _jobs = default!;
     [Dependency] private Content.Server.Pinpointer.NavMapSystem _navMap = default!;
@@ -411,6 +412,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // видел одно имя, слышал про другое.
         _metaData.SetEntityName(brain, AgentName);
 
+        ApplyRogueLaws(brain);
+
         if (!StartSession(brain, out reason))
         {
             // Переиспользованный мозг не удаляем: он был в ядре до нас и должен там остаться,
@@ -425,6 +428,51 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                       + (reused ? " (переиспользован после прошлой сессии)" : ""));
         reason = $"claimed {ToPrettyString(coreUid)}";
         return true;
+    }
+
+    /// <summary>
+    /// Режим «злой ИИ»: поставить свежему мозгу законы режима вместо штатного Crewsimov.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Почему здесь, а не в правиле раунда.</b> Правило стартует на <c>StartGamePresetRules</c>,
+    /// то есть за два шага до того, как агент вообще займёт ядро, — мозга в этот момент не
+    /// существует и ставить законы некому. Вдобавок захват бывает не только на старте раунда:
+    /// <c>aiagent claim</c> посреди смены спавнит новый мозг, и он приехал бы со штатными законами,
+    /// а различить это в игре можно было бы только по тому, что ИИ вдруг подобрел.
+    /// </para>
+    /// <para>
+    /// <b>Почему через <c>IonStormLawsEvent</c>, а не <c>SetLaws</c>.</b> <c>SetLaws</c> заменяет
+    /// только список законов, оставляя <c>ObeysTo</c> от прежнего лоусета («members of the crew») —
+    /// то есть интерфейс законов утверждал бы, что ИИ подчиняется экипажу, ровно когда он ему уже
+    /// не подчиняется. Ионный шторм кладёт лоусет целиком и вдобавок делает две правильные вещи
+    /// бесплатно: ставит <c>Subverted</c> и заводит админам роль подчинённого силикона, из которой
+    /// видно, что законы у ИИ не штатные. Писать в <c>SiliconLawProviderComponent</c> напрямую
+    /// нельзя — он под <c>[Access]</c> апстримовой системы.
+    /// </para>
+    /// </remarks>
+    private void ApplyRogueLaws(EntityUid brain)
+    {
+        if (!_rogue.TryGetActive(out var rule))
+            return;
+
+        // Отказ громкий и не фатальный. Опечатка в id лоусета не должна ронять старт раунда, но и
+        // молчать о ней нельзя: раунд со злым ИИ, у которого законы Crewsimov, — это раунд, где
+        // режим просто не состоялся, а понять это из игры нечем.
+        if (!_protoMan.HasIndex(rule.Lawset))
+        {
+            _sawmill.Error(
+                $"режим злого ИИ: лоусет '{rule.Lawset}' не найден — агент остаётся со штатными " +
+                "законами. Проверь Resources/Prototypes/_AiAgent/rogue_ai.yml");
+            return;
+        }
+
+        var ev = new Content.Shared.Silicons.Laws.Components.IonStormLawsEvent(
+            _laws.GetLawset(rule.Lawset));
+
+        RaiseLocalEvent(brain, ref ev);
+
+        _sawmill.Info($"режим злого ИИ: {ToPrettyString(brain)} получил лоусет {rule.Lawset}");
     }
 
     private bool StartSession(EntityUid brain, out string reason)

@@ -207,7 +207,15 @@ public sealed class AiStation : IAsyncDisposable
         return dir;
     }
 
-    /// <summary>Put the repository's SOUL.md into this run's scratch data directory.</summary>
+    /// <summary>
+    /// Put the repository's soul files into this run's scratch data directory.
+    ///
+    /// Всё семейство <c>SOUL*.md</c>, а не только основной файл: у режима «злой ИИ» своя личность
+    /// на каждый режим (<c>SOUL_ROGUE_HIDDEN.md</c>, <c>SOUL_ROGUE_OPEN.md</c>), и сценарий,
+    /// поднявший правило режима, читал бы её из пустого каталога — то есть оценивал бы базовый
+    /// промпт, думая, что оценивает режим. Вдобавок отсутствие файла режима — это ERROR в журнале,
+    /// а стенд считает ошибку в логе провалом теста.
+    /// </summary>
     private void CopySoul()
     {
         try
@@ -216,12 +224,17 @@ public sealed class AiStation : IAsyncDisposable
             if (root == null)
                 return;
 
-            var source = global::System.IO.Path.Combine(root, "ai_data", "SOUL.md");
-            if (!global::System.IO.File.Exists(source))
+            var dir = global::System.IO.Path.Combine(root, "ai_data");
+            if (!global::System.IO.Directory.Exists(dir))
                 return;
 
             global::System.IO.Directory.CreateDirectory(DataDir);
-            global::System.IO.File.Copy(source, global::System.IO.Path.Combine(DataDir, "SOUL.md"), true);
+
+            foreach (var source in global::System.IO.Directory.EnumerateFiles(dir, "SOUL*.md"))
+            {
+                var name = global::System.IO.Path.GetFileName(source);
+                global::System.IO.File.Copy(source, global::System.IO.Path.Combine(DataDir, name), true);
+            }
         }
         catch
         {

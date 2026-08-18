@@ -345,17 +345,41 @@ public sealed partial class StationAiAgentSystem
     /// <summary>
     /// SOUL.md — personality and long-horizon goals, hand-authored rather than agent-written.
     /// Optional: a missing file simply means the agent runs on the base prompt alone.
+    ///
+    /// <para>
+    /// В режиме «злой ИИ» читается файл режима вместо обычного. Подменяется именно личность, а не
+    /// добавляется блок поверх: злой агент и обычный расходятся не парой абзацев, а целями,
+    /// тоном и тем, о чём вообще молчать, — дописанная сверху инструкция «а теперь ты злой»
+    /// оставила бы модель спорить с собственным промптом весь раунд.
+    /// </para>
+    /// <para>
+    /// Промпт — замороженный префикс, он собирается один раз при старте сессии, а сессия
+    /// начинается уже после старта правила режима (<c>StartGamePresetRules</c> → … →
+    /// <c>RunLevel = InRound</c>). То есть к этому моменту режим либо активен, либо его нет.
+    /// </para>
     /// </summary>
     private string ReadSoul()
     {
+        var file = _rogue.TryGetActive(out var rule) ? rule.SoulFile : "SOUL.md";
+
         try
         {
-            var path = System.IO.Path.Combine(DataDir(), "SOUL.md");
-            return System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path).Trim() : string.Empty;
+            var path = System.IO.Path.Combine(DataDir(), file);
+
+            if (System.IO.File.Exists(path))
+                return System.IO.File.ReadAllText(path).Trim();
+
+            // Отсутствие обычного SOUL.md — штатный путь: агент работает на базовом промпте.
+            // Отсутствие файла РЕЖИМА — поломка: раунд заявлен как режим со злым ИИ, а личность у
+            // агента осталась прежняя, и в игре это выглядит как «ИИ почему-то не злой».
+            if (rule != null)
+                _sawmill.Error($"режим злого ИИ: файл личности {file} не найден в {DataDir()}");
+
+            return string.Empty;
         }
         catch (Exception e)
         {
-            _sawmill.Warning($"SOUL.md не читается: {e.Message}");
+            _sawmill.Warning($"{file} не читается: {e.Message}");
             return string.Empty;
         }
     }
