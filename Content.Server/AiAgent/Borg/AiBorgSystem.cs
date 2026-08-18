@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Content.Server.AiAgent.Components;
 using Content.Server.AiAgent.Core;
 using Content.Server.GameTicking;
 using Content.Shared.GameTicking;
@@ -127,6 +128,12 @@ public sealed partial class AiBorgSystem : EntitySystem
         }
 
         EnsureComp<ActiveNPCComponent>(borg);
+
+        // Маркер «здесь живёт LLM-агент». Назван по первому телу, но значит именно это, и боргу
+        // он нужен не для порядка: на пару (маркер, RadioReceiveEvent) повешен приём рации, и без
+        // него робот полностью ГЛУХ к эфиру. На бою это выглядело так — приказ ушёл в Common,
+        // Station AI ответил, борг взял ноль ходов и остался стоять в баре.
+        EnsureComp<LlmStationAiComponent>(borg);
 
         // Имя из настроек агента, а не ванильный NameIdentifier.
         //

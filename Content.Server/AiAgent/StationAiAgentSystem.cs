@@ -513,7 +513,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return false;
         }
 
-        var llm = EnsureClient();
+        var llm = EnsureClientFor(body);
         if (llm == null)
         {
             reason = "no LLM client (ai.enabled false?)";
@@ -837,24 +837,48 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
     private const float PruneSeconds = 30f;
 
-    private ILlmClient? EnsureClient()
+    /// <summary>
+    /// Клиент модели для конкретного агента.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Свой экземпляр на сессию, а не один на процесс.</b> Это не расточительство: маршрутизатор
+    /// хранит «липкий» профиль — тот, на котором сейчас держится агент, — и общий экземпляр означал
+    /// бы, что фаллбек ОДНОГО агента утаскивает за собой второго, ни разу не сбоившего. Заодно
+    /// снимается гонка: <c>RoutingLlmClient</c> сознательно не синхронизирован, и его комментарий
+    /// прямо ссылается на «агент один». Раздельные экземпляры делают это правдой снова.
+    /// </para>
+    /// <para>
+    /// Общим остаётся <see cref="_quota"/> — счётчики платных подписок обязаны быть общими, иначе
+    /// два агента выберут недельный пул дважды. Он заперт своим замком.
+    /// </para>
+    /// </remarks>
+    private ILlmClient? EnsureClientFor(AgentBody body)
     {
         if (!_cfg.GetCVar(AiCVars.Enabled))
             return null;
 
-        if (_llm != null)
-            return _llm;
-
         // A settable static rather than IoC registration: registering in IoC would mean patching
         // an upstream file, and the benchmark suite needs to swap in a scripted client.
+        //
+        // Стенд получает ОДИН клиент на всех намеренно: скрипт ответов там общий, и раздельные
+        // экземпляры сломали бы сценарии, которые считают реплики по порядку.
         if (AiTestHooks.LlmFactory != null)
-        {
-            _llm = AiTestHooks.LlmFactory();
-            return _llm;
-        }
+            return _llm ??= AiTestHooks.LlmFactory();
 
-        _llm = BuildChain() ?? BuildSingleEndpoint();
-        return _llm;
+        var chain = string.IsNullOrWhiteSpace(body.LlmChain)
+            ? _cfg.GetCVar(AiCVars.LlmChain)
+            : body.LlmChain;
+
+        var client = BuildChain(chain) ?? BuildSingleEndpoint();
+
+        // Консольным `aiagent llm` надо на что-то смотреть; показываем первого заведённого.
+        _llm ??= client;
+
+        if (!string.IsNullOrWhiteSpace(body.LlmChain))
+            _sawmill.Info($"агент {body.Id}: своя цепочка моделей «{body.LlmChain}»");
+
+        return client;
     }
 
     /// <summary>
@@ -865,9 +889,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// полноценным режимом, и именно он даёт откат одной строкой в консоли, если цепочка сломает
     /// раунд.
     /// </summary>
-    private ILlmClient? BuildChain()
+    private ILlmClient? BuildChain(string raw)
     {
-        var raw = _cfg.GetCVar(AiCVars.LlmChain);
         if (string.IsNullOrWhiteSpace(raw))
             return null;
 
@@ -1076,15 +1099,18 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             if (args.Source == brain)
                 continue;
 
-            if (!_stationAi.TryGetCore(brain, out var core) || core.Comp == null)
-                continue;
-
-            // Strict vanilla parity. The AI player's attached entity is the brain, which lives in
-            // a container inside the core, so its world position is the core's. There are no
-            // camera microphones in vanilla: the only two ExpandICChatRecipients handlers are the
-            // surveillance camera mic (which needs a monitor viewer, not the AI) and the holopad
-            // projection path. So: hear near the core, and nowhere else.
-            var corePos = _xform.GetMapCoordinates(core.Owner);
+            // Откуда агент слышит.
+            //
+            // Strict vanilla parity для Station AI: игрок на этой роли привязан к мозгу, а тот
+            // лежит в контейнере ядра, то есть слышит там, где стоит ядро. Микрофонов на камерах в
+            // ванили нет — из двух обработчиков ExpandICChatRecipients один требует зрителя у
+            // монитора, второй голопад. Значит: слышит у ядра и больше нигде.
+            //
+            // У тела без ядра (борг) точка своя — он сам. Раньше здесь стоял `continue`, и робот
+            // был полностью глух к речи рядом с собой: подходишь, говоришь — ноль реакции.
+            var corePos = _stationAi.TryGetCore(brain, out var core) && core.Comp != null
+                ? _xform.GetMapCoordinates(core.Owner)
+                : _xform.GetMapCoordinates(brain);
             var speakerPos = _xform.GetMapCoordinates(args.Source, speakerXform);
 
             if (corePos.MapId != speakerPos.MapId)
@@ -1450,7 +1476,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (!_cfg.GetCVar(AiCVars.CuratorEnabled))
             return;
 
-        _curator ??= new Skills.Curator(EnsureClient()!, _sawmill);
+        // Куратор один на процесс, и клиент ему достаётся от того агента, который первым дошёл до
+        // компакции. Это осознанное упрощение: куратор — разбор собственных записей, а не игровое
+        // действие, и держать по экземпляру на тело значило бы дублировать его счётчики ради
+        // разницы, которой в отчёте не видно.
+        _curator ??= new Skills.Curator(EnsureClientFor(session.Body)!, _sawmill);
         Memory.ResetTurnCounters();
         Notes.ResetTurnCounters();
 
@@ -1522,14 +1552,18 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return false;
         }
 
+        // Точка, откуда «говорит» техник. Ядро, если оно есть, иначе тело любого живого агента.
+        //
+        // Раньше отсутствие ядра было отказом, и с появлением второго тела это стало неверным:
+        // передача уходит НАСТОЯЩИМ радиосообщением и её слышат все на канале, а ядро нужно было
+        // лишь как место для спавна говорящего. Раунд без Station AI, но с боргом, оставался без
+        // возможности что-либо агенту передать.
         var brain = _sessions.Keys.First();
-        if (!_stationAi.TryGetCore(brain, out var core) || core.Comp == null)
-        {
-            reason = "у агента нет ядра";
-            return false;
-        }
+        var where = _stationAi.TryGetCore(brain, out var core) && core.Comp != null
+            ? Transform(core.Owner).Coordinates
+            : Transform(brain).Coordinates;
 
-        var speaker = Spawn("MobHuman", Transform(core.Owner).Coordinates);
+        var speaker = Spawn("MobHuman", where);
         _metaData.SetEntityName(speaker, "Тестовый Техник");
 
         _radio.SendRadioMessage(speaker, text, new ProtoId<RadioChannelPrototype>(channel), speaker);

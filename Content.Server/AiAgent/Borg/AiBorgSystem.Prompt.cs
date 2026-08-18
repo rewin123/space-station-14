@@ -146,8 +146,14 @@ public sealed partial class AiBorgSystem
 
         if (Exists(borg))
         {
-            var pos = _xform.GetMapCoordinates(borg);
-            parts.Add($"я=({pos.Position.X:F0},{pos.Position.Y:F0})");
+            // Координаты СЕТКИ, а не карты, и это обязано совпадать с тем, что понимает goto.
+            //
+            // Первая версия печатала координаты карты: на боевой станции робот сообщал о себе
+            // «я=(-521,435)», а goto{"to":"-521,435"} понимал бы это как тайл сетки и увёл бы его
+            // в пустоту. Модель читает свою позицию из этой строки — расхождение систем координат
+            // между «где я» и «куда идти» ей нечем заметить.
+            var pos = Transform(borg).LocalPosition;
+            parts.Add($"я=({pos.X:F0},{pos.Y:F0})");
             parts.Add($"место={_navMap.GetNearestBeaconString((borg, Transform(borg)), onlyName: true)}");
 
             if (TryComp<BorgChassisComponent>(borg, out var chassis))
@@ -168,7 +174,8 @@ public sealed partial class AiBorgSystem
         parts.Add($"канал={s.State.OutputChannel}");
         parts.Add($"turn={s.State.Turns}");
 
-        return "SELF " + string.Join(" ", parts);
+        // Без тега: его добавляет ObservationFormatter. С ним в бою выходило «SELF SELF mode=…».
+        return string.Join(" ", parts);
     }
 
     /// <summary>

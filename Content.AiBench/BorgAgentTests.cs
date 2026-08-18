@@ -456,4 +456,85 @@ public sealed class BorgAgentTests
     private static float Distance(IEntityManager ent, EntityUid a, EntityUid b) =>
         (ent.GetComponent<TransformComponent>(a).LocalPosition
          - ent.GetComponent<TransformComponent>(b).LocalPosition).Length();
+
+    /// <summary>
+    /// Строка SELF: без задвоенного тега и в координатах СЕТКИ.
+    /// </summary>
+    /// <remarks>
+    /// Обе грани пойманы вживую. Тег <c>SELF</c> добавляет <c>ObservationFormatter</c>, и своя
+    /// добавка давала «SELF SELF mode=…». Координаты же обязаны совпадать с тем, что понимает
+    /// <c>goto {"to":"x,y"}</c>, то есть быть координатами сетки: печатая координаты карты, робот
+    /// сообщал о себе «я=(-521,435)», а goto по этим же числам увёл бы его в пустоту. Модель
+    /// читает свою позицию отсюда и расхождения систем координат заметить не может.
+    /// </remarks>
+    [Test]
+    public async Task SelfLine_IsUntaggedAndInGridCoordinates()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+        var ent = w.Ent;
+
+        var (line, local) = await w.Read(() =>
+        {
+            var session = w.System.Sessions[borg];
+            return (session.Body.SelfLine(session), ent.GetComponent<TransformComponent>(borg).LocalPosition);
+        });
+
+        TestContext.Out.WriteLine("SELF: " + line);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(line, Does.Not.StartWith("SELF"),
+                "тег добавляет форматтер — своя добавка даёт «SELF SELF»");
+
+            Assert.That(line, Does.Contain($"я=({local.X:F0},{local.Y:F0})"),
+                $"позиция в строке не совпадает с координатами сетки {local} — goto поймёт её иначе");
+        });
+    }
+
+    /// <summary>
+    /// Робот слышит рацию и речь рядом с собой.
+    /// </summary>
+    /// <remarks>
+    /// Пойман вживую и был полностью немым отказом. Приём эфира висит на паре
+    /// <c>(LlmStationAiComponent, RadioReceiveEvent)</c> — маркере, названном по первому телу, —
+    /// а слух вблизи в <c>OnEntitySpoke</c> начинался с «нет ядра → пропустить». Борг не имел ни
+    /// того, ни другого: приказ ушёл в Common, Station AI ответил, а робот взял НОЛЬ ходов и
+    /// остался стоять в баре. Ни ошибки, ни строчки в логе — просто глухой агент.
+    /// </remarks>
+    [Test]
+    public async Task Borg_HearsRadio()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+
+        var marker = await w.Read(() =>
+            w.Ent.HasComponent<Content.Server.AiAgent.Components.LlmStationAiComponent>(borg));
+
+        Assert.That(marker, Is.True,
+            "без маркера LLM-агента приём рации на борге не подписан — он глух к эфиру");
+
+        // Замер В ТОМ ЖЕ тике, что и передача.
+        //
+        // Очередь наблюдений — не накопитель: петля агента просыпается на её пополнении и тут же
+        // вычерпывает. Первая версия теста считала через десять тиков и видела 0 → 0 у ОБОИХ
+        // агентов, то есть обвиняла приём, когда на самом деле измеряла собственную гонку с петлёй.
+        var sent = false;
+        var why = string.Empty;
+        var before = 0;
+        var after = 0;
+
+        await w.Pair.Server.WaitPost(() =>
+        {
+            before = w.System.Sessions[borg].Queue.Count;
+            sent = w.System.InjectRadio("Binary", "Сегмент, доложи обстановку", out why);
+            after = w.System.Sessions[borg].Queue.Count;
+        });
+
+        TestContext.Out.WriteLine($"ЭФИР: отправлено={sent} ({why}) очередь борга {before}→{after}");
+
+        Assert.That(sent, Is.True, $"передача не ушла: {why}");
+        Assert.That(after, Is.GreaterThan(before),
+            "радиопередача не попала в очередь наблюдений робота — он глух к эфиру");
+    }
 }
