@@ -238,6 +238,10 @@ public sealed partial class AiBorgSystem
 
         // ------------------------------------------------------- общее для всех тел
         _host.RegisterCommonTools(s, r);
+
+        // Ждущие версии ходьбы и применения. На проводе их нет — они существуют только для
+        // скрипта, где «дойти и продолжить» это одна строка, а не четыре хода.
+        RegisterWaitingTools(s, r);
     }
 
     // ===================================================================== handlers
@@ -488,6 +492,11 @@ public sealed partial class AiBorgSystem
 
             var started = TryComp<Content.Shared.DoAfter.DoAfterComponent>(borg, out var da2)
                           && da2.NextId != beforeDoAfter;
+
+            // Запомнить начатое действие: ждущая версия use (её зовёт скрипт) досмотрит его до
+            // конца и посчитает разницу заново — уже по факту, а не по первому мгновению.
+            if (started)
+                _pending[borg] = new PendingAction(beforeDoAfter, target, beforeSnap);
 
             var changes = Diff(beforeSnap, afterSnap);
 

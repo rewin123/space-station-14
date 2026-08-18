@@ -510,6 +510,47 @@ public sealed class AiStation : IAsyncDisposable
         return await task;
     }
 
+    /// <summary>
+    /// Инструмент, которому нужно РЕАЛЬНОЕ время: скрипт ходит, спит и ждёт долгие действия.
+    ///
+    /// <see cref="InvokeOn"/> считает тики и на пустом сервере прокручивает девятьсот штук за доли
+    /// секунды — для скрипта это «не дождался» там, где он работает штатно.
+    /// </summary>
+    public async Task<ToolResult> InvokeSlow(EntityUid agent, string tool, string argsJson = "{}", int seconds = 120)
+    {
+        var task = System.InvokeToolForTest(agent, tool, argsJson);
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+
+        while (!task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            await Pair.Server.WaitRunTicks(3);
+            await Task.Delay(25);
+        }
+
+        if (!task.IsCompleted)
+            Assert.Fail($"инструмент {tool} не завершился за {seconds} с");
+
+        return await task;
+    }
+
+    /// <summary>Перевести следующего заведённого агента в режим скрипта.</summary>
+    public Task SetScriptMode(bool on) => Post(() =>
+        Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
+            .SetCVar(AiCVars.ScriptMode, on));
+
+    /// <summary>
+    /// Окно, после которого скрипт уходит в фон.
+    ///
+    /// Тесты про ожидание задирают его нарочно: иначе всякий скрипт длиннее секунды уезжает в фон,
+    /// и проверять пришлось бы досылку наблюдения вместо того, ради чего тест написан.
+    /// </summary>
+    public Task SetScriptForeground(int ms) => Post(() =>
+        Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
+            .SetCVar(AiCVars.ScriptForegroundMs, ms));
+
+    /// <summary>Провод конкретного агента — тут видно, смешались ли режимы.</summary>
+    public Task<string> WireOf(EntityUid agent) => Read(() => System.GetSession(agent).Registry.WireJson());
+
     public async Task<T> Read<T>(Func<T> fn)
     {
         var value = default(T);

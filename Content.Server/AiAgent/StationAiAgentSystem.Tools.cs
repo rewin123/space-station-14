@@ -514,6 +514,12 @@ public sealed partial class StationAiAgentSystem
         if (timers.Length > 0)
             sb.Append(" таймеры=").Append(timers);
 
+        // Идущие скрипты — по той же причине, что и будильники: запущенное фоновое дело иначе
+        // становится скрытым состоянием, и агент запускает второе такое же.
+        var scripts = ScriptsForSelf(session);
+        if (scripts.Length > 0)
+            sb.Append(' ').Append(scripts);
+
         sb.Append(" turn=").Append(session.Turns.ToString(CultureInfo.InvariantCulture));
         return sb.ToString();
     }

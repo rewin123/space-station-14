@@ -590,6 +590,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         session.Persist = () => store.Save(sessionId, session.State, _roundId);
 
         body.RegisterTools(session, registry);
+
+        // Режим скрипта ставится ПОСЛЕ набора тела и до сборки префикса: он не добавляет
+        // инструменты к существующим, а подменяет то, что уходит модели на провод.
+        if (body.ScriptMode ?? _cfg.GetCVar(AiCVars.ScriptMode))
+            Scripts.Install(session, registry);
         session.Conv.SetPrefix(body.BuildPrompt(), registry.WireJson());
         session.Cache.SetExpectedPrefix(session.Conv.PrefixHash);
 
@@ -652,6 +657,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return;
 
         _sawmill.Info($"releasing agent on {brain}: {why}");
+
+        // Фоновые скрипты — первым делом. Процесс, застрявший в вызове инструмента, узнает об
+        // этом отменой оттуда, а не с ближайшего среза; ждать его здесь нельзя по той же причине,
+        // по которой здесь не ждут петлю.
+        session.Scripts?.StopAll();
 
         // Before anything else, and on the main thread: past this point the session's CTS is
         // cancelled and Update will dispose it, so a debug thread still holding the reference
@@ -742,6 +752,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Каждый тик, без своего интервала: сроки заданы агентом с точностью до секунды, а обход
         // восьми записей под замком дешевле, чем счётчик, который пришлось бы объяснять.
         FireDueTimers();
+
+        ReportFinishedScripts();
 
         PruneHandles(frameTime);
         ResetWitnessTick(frameTime);

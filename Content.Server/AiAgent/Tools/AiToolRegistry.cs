@@ -26,6 +26,17 @@ public sealed class AiTool
     public required string SchemaJson { get; init; }
     public required ToolHandler Handler { get; init; }
 
+    /// <summary>
+    /// Виден ли инструмент модели.
+    ///
+    /// <para>
+    /// <c>false</c> — инструмент существует, но на провод не уходит: его зовёт только скрипт на
+    /// Lua, консольная команда и тесты. Так живут примитивы вроде «иду ли я сейчас», которые
+    /// модели в виде отдельного вызова не нужны и только раздули бы замороженный префикс.
+    /// </para>
+    /// </summary>
+    public bool Wire { get; init; } = true;
+
     /// <summary>Refused while the curator is reviewing — see the review_mode error code.</summary>
     public bool GameAction { get; init; }
 
@@ -76,6 +87,28 @@ public sealed class AiToolRegistry
     private readonly Dictionary<string, AiTool> _tools = new();
     private List<ToolDto>? _wire;
     private string? _wireJson;
+    private IReadOnlySet<string>? _allow;
+
+    /// <summary>
+    /// Если задано — модель видит только эти имена. Так включается режим скрипта.
+    ///
+    /// <para>
+    /// Режим — свойство агента, и он ровно один: либо классический набор, либо три функции
+    /// управления скриптами. Смешение здесь было бы не гибкостью, а способом запутать модель,
+    /// которой пришлось бы гадать, каким из двух способов делать одно и то же. Инструменты при
+    /// этом остаются в реестре: их зовут скрипт, консоль и тесты.
+    /// </para>
+    /// </summary>
+    public IReadOnlySet<string>? WireAllow
+    {
+        get => _allow;
+        set
+        {
+            _allow = value;
+            _wire = null;
+            _wireJson = null;
+        }
+    }
 
     public IReadOnlyCollection<AiTool> Tools => _tools.Values;
 
@@ -100,6 +133,7 @@ public sealed class AiToolRegistry
             return _wire;
 
         _wire = _tools.Values
+            .Where(t => t.Wire && (_allow == null || _allow.Contains(t.Name)))
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .Select(t => new ToolDto
             {

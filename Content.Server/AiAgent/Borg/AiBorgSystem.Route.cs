@@ -150,6 +150,9 @@ public sealed partial class AiBorgSystem
         // Ведём сами по всем тайлам пути. Пересадок нет вовсе: то, ради чего они заводились —
         // уложиться в чужой лимит, — перестало быть задачей вместе с чужим рулевым.
         SetTrail(borg, path);
+        // Исход прошлой ходьбы забывается здесь: иначе скрипт, спросивший walk_status сразу
+        // после старта нового маршрута, получил бы «пришёл» от предыдущего и пошёл дальше.
+        _lastWalk.Remove(borg);
         _walking[borg] = goal;
 
         if (!_goals.TryGetValue(borg, out var known) || known.Goal != goal)

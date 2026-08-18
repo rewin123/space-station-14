@@ -18,7 +18,7 @@ namespace Content.Server.AiAgent;
 /// </summary>
 public sealed partial class StationAiAgentSystem
 {
-    private string BuildSystemPrompt()
+    private string BuildSystemPrompt(bool scripted = false)
     {
         var sb = new StringBuilder();
 
@@ -327,6 +327,13 @@ public sealed partial class StationAiAgentSystem
         //
         // Заметок о людях здесь нет и не будет: их по файлу на человека, и за месяцы их станет
         // столько, что индекс вроде скилловского съел бы окно. Они открываются инструментом.
+        // Режим скрипта: секция уходит ПЕРЕД личностью и памятью, потому что она меняет способ
+        // действовать, а не содержание. Секция общая для обоих тел; перечисление функций у ядра
+        // осталось в тексте выше — там инструменты и так названы по именам, а вводная секция
+        // прямо говорит читать эти имена как функции.
+        if (scripted)
+            sb.Append("\n\n").Append(Core.Scripting.ScriptPromptText.Common);
+
         var soul = ReadSoul();
         if (soul.Length > 0)
             sb.Append("\n\n").Append(soul);

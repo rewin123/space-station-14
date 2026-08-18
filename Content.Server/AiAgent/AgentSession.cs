@@ -125,6 +125,15 @@ public sealed class AgentSession : IDisposable
 
     public ObservationQueue Queue { get; }
 
+    /// <summary>
+    /// Фоновые скрипты этого агента — <c>null</c>, пока режим скрипта не включён.
+    ///
+    /// Живёт на сессии, а не в системе, ровно по той же причине, что и всё остальное здесь:
+    /// процессы принадлежат агенту и обязаны умереть вместе с ним. Мира эта таблица не касается —
+    /// её процессы ходят в мир тем же диспетчером, что и обычный ход.
+    /// </summary>
+    public Core.Scripting.ScriptProcessTable? Scripts { get; set; }
+
     /// <summary>Handle registry — per session, so names never leak between rounds.</summary>
     public Handles.EntityHandleRegistry Handles { get; } = new();
 

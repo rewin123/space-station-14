@@ -36,6 +36,16 @@ public sealed partial class AiBorgSystem
     /// </summary>
     private readonly Dictionary<EntityUid, string> _walking = new();
 
+    /// <summary>
+    /// Чем кончилась последняя ходьба: «пришёл» или «нет пути».
+    ///
+    /// Нужно скрипту, который ждёт прибытия. Наблюдение ARRIVED адресовано модели между ходами, а
+    /// скрипт исполняется, пока ход идёт, и очередь наблюдений в этот момент трогать не может —
+    /// её вычитывает петля. Поэтому исход дублируется сюда: одна строка на робота, живёт до
+    /// следующего маршрута.
+    /// </summary>
+    private readonly Dictionary<EntityUid, string> _lastWalk = new();
+
     /// <summary>Где робот был в прошлой проверке и сколько раз подряд не сдвинулся.</summary>
     private readonly Dictionary<EntityUid, (Vector2 Where, int Stalls)> _progress = new();
 
@@ -69,6 +79,15 @@ public sealed partial class AiBorgSystem
     /// <summary>Идёт ли робот прямо сейчас — этим глушится дельта зрения на ходу.</summary>
     private bool IsWalking(EntityUid borg) => _walking.ContainsKey(borg);
 
+    /// <summary>Состояние ходьбы одной строкой — это читает скрипт через walk_status.</summary>
+    private string WalkStatus(EntityUid borg)
+    {
+        if (_walking.TryGetValue(borg, out var what))
+            return $"идёт: {what}";
+
+        return _lastWalk.TryGetValue(borg, out var last) ? last : "стоит";
+    }
+
     /// <summary>Вести всех идущих: шаг по пути, разбор заторов, доклад о прибытии.</summary>
     private void PollWalking()
     {
@@ -93,6 +112,8 @@ public sealed partial class AiBorgSystem
             _walking.Remove(borg);
             _progress.Remove(borg);
             ClearRoute(borg);
+
+            _lastWalk[borg] = "пришёл";
 
             PushToBorg(borg, Observation.Event($"ARRIVED дошёл: {what}", _host.RoundTime()));
 
@@ -173,6 +194,8 @@ public sealed partial class AiBorgSystem
         _progress.Remove(borg);
         ClearRoute(borg);
         ClearTrail(borg);
+
+        _lastWalk[borg] = $"нет пути: {what}";
 
         PushToBorg(borg, Observation.Event(
             $"NOPATH дороги нет: {what}. Путь перекрыт, и обойти не вышло.", _host.RoundTime()));

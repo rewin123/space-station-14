@@ -1,0 +1,33 @@
+<Project>
+  <!--
+    Единственный файл сборки, который добавляет форк.
+
+    Зачем он вообще есть. Режиму SCRIPT TOOL MODE нужен интерпретатор Lua, а взять зависимость
+    штатным путём нельзя: Content.Server.csproj — апстримовый файл, и правило форка запрещает
+    менять апстрим (единственное исключение — строка ai_data/ в корневом .gitignore).
+
+    Почему это работает и ничего не задевает. Корневого Directory.Build.props в дереве нет, а
+    MSBuild берёт ПЕРВЫЙ найденный вверх от каталога проекта (Microsoft.Common.props,
+    GetDirectoryNameOfFileAbove). Значит этот файл виден ровно Content.Server: RobustToolbox
+    останавливается на своём RobustToolbox/Directory.Build.props, прочие Content.* лежат выше и
+    его не видят, а перекрывать нам нечего — перекрывать было бы что, существуй корневой.
+
+    Почему две строки, а не одна. В дереве включён Central Package Management
+    (RobustToolbox/MSBuild/Robust.Properties.targets: ManagePackageVersionsCentrally=true), поэтому
+    PackageReference обязан идти без Version, а версия — приехать из PackageVersion. Корневой
+    Directory.Packages.props апстримовый, трогать нельзя; items из обоих файлов складываются, так
+    что свой PackageVersion объявляем здесь.
+
+    ЧЕГО ЗДЕСЬ ДЕЛАТЬ НЕЛЬЗЯ: заводить Content.Server/Directory.Packages.props. По тому же правилу
+    «первый вверх по дереву» он перекрыл бы корневой целиком и снёс версии всех остальных пакетов.
+
+    Почему MoonSharp безопасен именно в Content.Server: рантайм-песочница на сервере выключена
+    (ServerOptions.Sandboxing = false), а AssemblyTypeChecker натравливают только на Content.Client
+    и Content.Shared (Content.IntegrationTests/Tests/Utility/SandboxTest.cs). В Content.Shared этот
+    пакет тянуть нельзя ни при каких обстоятельствах — он живёт на рефлексии.
+  -->
+  <ItemGroup>
+    <PackageVersion Include="MoonSharp" Version="2.0.0" />
+    <PackageReference Include="MoonSharp" />
+  </ItemGroup>
+</Project>

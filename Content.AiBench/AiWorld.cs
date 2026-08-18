@@ -64,6 +64,16 @@ public sealed class AiWorld : IAsyncDisposable
         Build(llm ?? new ScriptedLlmClient(), radius, gridOffset);
 
     /// <summary>
+    /// Мир, где агент живёт в режиме скрипта.
+    ///
+    /// Отдельная фабрика, а не cvar после создания: режим ставится при старте сессии — тогда же
+    /// собирается провод инструментов и замораживается префикс. Включённый позже, он не поменял бы
+    /// уже работающего агента, и тест проверял бы не то, что думает.
+    /// </summary>
+    public static Task<AiWorld> CreateScripted(ScriptedLlmClient llm = null, int radius = 6) =>
+        Build(llm ?? new ScriptedLlmClient(), radius, 0f, scriptMode: true);
+
+    /// <summary>
     /// A world driven by an arbitrary model stand-in rather than the scripted one.
     ///
     /// For tests about <em>timing</em> rather than about content — a client that blocks until the
@@ -84,7 +94,8 @@ public sealed class AiWorld : IAsyncDisposable
     /// </summary>
     public static Task<AiWorld> CreateLive() => Build(null, 6, 0f);
 
-    private static async Task<AiWorld> Build(Content.Server.AiAgent.Llm.ILlmClient llm, int radius, float gridOffset)
+    private static async Task<AiWorld> Build(Content.Server.AiAgent.Llm.ILlmClient llm, int radius, float gridOffset,
+        bool scriptMode = false)
     {
         var world = new AiWorld { Llm = llm as ScriptedLlmClient };
 
@@ -122,6 +133,7 @@ public sealed class AiWorld : IAsyncDisposable
             // agent's memory or skill library.
             cfg.SetCVar(AiCVars.DataDir, world.DataDir);
             cfg.SetCVar(AiCVars.CuratorEnabled, false);
+            cfg.SetCVar(AiCVars.ScriptMode, scriptMode);
         });
 
         world.Map = await world.Pair.CreateTestMap();
@@ -258,6 +270,53 @@ public sealed class AiWorld : IAsyncDisposable
 
         return await task;
     }
+
+    /// <summary>
+    /// Подождать условия по РЕАЛЬНОМУ времени, продолжая тикать сервер.
+    ///
+    /// Штатный <c>PoolManager.WaitUntil</c> считает тики и на пустом сервере прокручивает девятьсот
+    /// штук за доли секунды. Скрипт же живёт в реальном времени: он спит, ждёт шину и работает на
+    /// своём потоке. Ждать его тиками — значит не дождаться никогда и списать это на зависание.
+    /// </summary>
+    public async Task<bool> WaitFor(Func<bool> until, int seconds = 30)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            var done = false;
+            await Pair.Server.WaitPost(() => done = until());
+
+            if (done)
+                return true;
+
+            await Pair.Server.WaitRunTicks(3);
+            await Task.Delay(25);
+        }
+
+        return false;
+    }
+
+    /// <summary>Отпускать скрипт в фон быстрее секунды — иначе тест на фон ждал бы впустую.</summary>
+    public Task SetScriptForeground(int ms) => Post(() =>
+        Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
+            .SetCVar(AiCVars.ScriptForegroundMs, ms));
+
+    /// <summary>Сколько скриптов пускать одновременно.</summary>
+    public Task SetScriptProcesses(int count) => Post(() =>
+        Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
+            .SetCVar(AiCVars.ScriptMaxProcesses, count));
+
+    /// <summary>Что уходит модели полем tools — тут видно, смешались режимы или нет.</summary>
+    public Task<string> Wire() => Read(() => System.GetSession(Brain).Registry.WireJson());
+
+    /// <summary>Строки, которые агент прочитает следующим ходом. Очередь не трогает.</summary>
+    public Task<System.Collections.Generic.List<string>> Unread(int max = 30) =>
+        Read(() => System.GetSession(Brain).Queue.PeekUnread(max));
+
+    /// <summary>Таблица фоновых скриптов этой сессии.</summary>
+    public Task<Content.Server.AiAgent.Core.Scripting.ScriptProcessTable> ScriptTable() =>
+        Read(() => System.GetSession(Brain).Scripts);
 
     /// <summary>Read something off the world on the main thread.</summary>
     public async Task<T> Read<T>(Func<T> fn)

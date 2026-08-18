@@ -38,6 +38,18 @@ public static class ToolError
     /// </summary>
     public const string Refused = "refused";
 
+    /// <summary>Скрипт не разобрался: синтаксис или вызов несуществующей функции — до всякого действия.</summary>
+    public const string ScriptSyntax = "script_syntax";
+
+    /// <summary>Скрипт упал на середине. Часть работы при этом уже сделана — как у человека.</summary>
+    public const string ScriptError = "script_error";
+
+    /// <summary>Скрипт снят предохранителем: инструкции, вызовы или время кончились.</summary>
+    public const string ScriptBudget = "script_budget";
+
+    /// <summary>Такого процесса нет: неверный pid или его уже забыли.</summary>
+    public const string NoProcess = "no_process";
+
     public const string Internal = "internal";
     public const string UnknownTool = "unknown_tool";
 }
@@ -76,9 +88,16 @@ public sealed class ToolResult
     public static ToolResult Effected(string handle, object? state) =>
         new() { Ok = true, Effect = new Dictionary<string, object?> { [handle] = state } };
 
+    /// <summary>
+    /// Отказ. <paramref name="effect"/> — для случая, когда часть работы всё-таки произошла.
+    ///
+    /// Обычный отказ ничего не меняет в мире, и поле там пустое. Но упавший на середине скрипт —
+    /// это отказ, за которым стоят сделанные действия и напечатанные строки; молчать о них значило
+    /// бы отправить модель разбираться заново с тем, что мы уже знаем.
+    /// </summary>
     public static ToolResult Fail(string error, string? detail = null, string? retry = null,
-        IReadOnlyList<string>? alternatives = null) =>
-        new() { Ok = false, Error = error, Detail = detail, Retry = retry, Alternatives = alternatives };
+        IReadOnlyList<string>? alternatives = null, IReadOnlyDictionary<string, object?>? effect = null) =>
+        new() { Ok = false, Error = error, Detail = detail, Retry = retry, Alternatives = alternatives, Effect = effect };
 
     /// <summary>
     /// Report an unexpected exception usefully: type and message, plus which tool blew up.

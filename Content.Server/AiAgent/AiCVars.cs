@@ -606,4 +606,62 @@ public sealed class AiCVars
     /// </summary>
     public static readonly CVarDef<bool> RogueForceOverflow =
         CVarDef.Create("ai.rogue_force_overflow", true, CVar.SERVERONLY);
+
+    // ------------------------------------------------------------------ режим скрипта
+
+    /// <summary>
+    /// Инструменты идут через обёртку на Lua, а не отдельными вызовами модели.
+    ///
+    /// <para>
+    /// Зачем. Замер боевого прогона борга: 661 обращение к модели на 680 вызовов инструментов —
+    /// ровно один круг через LLM на каждое элементарное действие, по 14 секунд и 41k промпт-токенов
+    /// за «шагни на тайл». Сборка АМЭ в такой арифметике не помещается в раунд. В режиме скрипта
+    /// модель пишет программу, и цикл «дойти, взять, донести, распаковать» стоит одного обращения.
+    /// </para>
+    /// <para>
+    /// Режим — свойство агента, и он ровно один: набор инструментов либо классический, либо
+    /// скриптовый. Отдельному телу переключается полем <c>AgentBody.ScriptMode</c>, чтобы можно
+    /// было держать ядро на классическом наборе, а борга — на скриптах, и сравнивать.
+    /// </para>
+    /// </summary>
+    public static readonly CVarDef<bool> ScriptMode =
+        CVarDef.Create("ai.script_mode", false, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Сколько ждать скрипт, прежде чем отпустить его в фон.
+    ///
+    /// Короткий скрипт обязан ответить в том же вызове — иначе модель платит лишний круг за
+    /// «посмотри вокруг». Длинный уходит в фон и досылает итог наблюдением.
+    /// </summary>
+    public static readonly CVarDef<int> ScriptForegroundMs =
+        CVarDef.Create("ai.script_foreground_ms", 1000, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Сколько скриптов может идти одновременно.
+    ///
+    /// Тело у агента одно, и два скрипта, оба двигающие его, — это не параллелизм, а драка за
+    /// ноги. Двойка оставляет место наблюдающему скрипту рядом с работающим.
+    /// </summary>
+    public static readonly CVarDef<int> ScriptMaxProcesses =
+        CVarDef.Create("ai.script_max_processes", 2, CVar.SERVERONLY);
+
+    /// <summary>
+    /// Потолок жизни скрипта в реальных секундах — в отличие от будильников, которые живут в
+    /// раундовом времени. На паузе раундовые часы стоят, и раундовый потолок не наступил бы
+    /// никогда как раз тогда, когда он нужен.
+    /// </summary>
+    public static readonly CVarDef<int> ScriptMaxSeconds =
+        CVarDef.Create("ai.script_max_seconds", 300, CVar.SERVERONLY);
+
+    /// <summary>Сколько инструментов один скрипт может позвать. Предохранитель, а не регулятор темпа.</summary>
+    public static readonly CVarDef<int> ScriptMaxCalls =
+        CVarDef.Create("ai.script_max_calls", 400, CVar.SERVERONLY);
+
+    /// <summary>Потолок инструкций Lua: единственная защита от <c>while true do end</c>.</summary>
+    public static readonly CVarDef<int> ScriptMaxSteps =
+        CVarDef.Create("ai.script_max_steps", 5_000_000, CVar.SERVERONLY);
+
+    /// <summary>Сколько строк вывода держать на процесс; старые вытесняются с отметкой о потере.</summary>
+    public static readonly CVarDef<int> ScriptOutputLines =
+        CVarDef.Create("ai.script_output_lines", 200, CVar.SERVERONLY);
 }

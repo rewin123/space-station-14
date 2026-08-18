@@ -30,19 +30,27 @@ public sealed partial class StationAiAgentSystem
     /// недоделка, а как отсутствие органа.
     /// </para>
     /// </remarks>
-    private AgentBody BuildStationBody(EntityUid brain) => new()
+    private AgentBody BuildStationBody(EntityUid brain)
     {
-        Owner = brain,
-        Id = CoreAgentId,
-        Name = AgentName,
-        SoulFile = StationSoulFile(),
-        Eye = () => _stationAi.TryGetCore(brain, out var core) ? core.Comp?.RemoteEntity : null,
-        Alive = () => IsPlayable(brain),
-        BuildPrompt = BuildSystemPrompt,
-        SelfLine = SelfLine,
-        RegisterTools = RegisterTools,
-        Announce = AnnounceInGameAsync,
-        Speak = SpeakUntooledAsync,
-        ChannelsFor = ChannelsFor,
-    };
+        // Как и у борга: режим фиксируется при сборке тела, чтобы промпт и провод не разъехались
+        // при переключении cvar посреди раунда.
+        var scripted = _cfg.GetCVar(AiCVars.ScriptMode);
+
+        return new AgentBody
+        {
+            Owner = brain,
+            Id = CoreAgentId,
+            Name = AgentName,
+            SoulFile = StationSoulFile(),
+            Eye = () => _stationAi.TryGetCore(brain, out var core) ? core.Comp?.RemoteEntity : null,
+            Alive = () => IsPlayable(brain),
+            ScriptMode = scripted,
+            BuildPrompt = () => BuildSystemPrompt(scripted),
+            SelfLine = SelfLine,
+            RegisterTools = RegisterTools,
+            Announce = AnnounceInGameAsync,
+            Speak = SpeakUntooledAsync,
+            ChannelsFor = ChannelsFor,
+        };
+    }
 }

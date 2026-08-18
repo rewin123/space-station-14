@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Content.Server.AiAgent.Components;
 using Content.Server.AiAgent.Core;
+using Content.Shared.DoAfter;
 using Content.Server.GameTicking;
 using Content.Shared.GameTicking;
 using Content.Server.Mind;
@@ -30,6 +31,7 @@ public sealed partial class AiBorgSystem : EntitySystem
     [Dependency] private MindSystem _mind = default!;
     [Dependency] private SharedBorgSystem _borg = default!;
     [Dependency] private MobStateSystem _mobState = default!;
+    [Dependency] private SharedDoAfterSystem _doAfter = default!;
     [Dependency] private MetaDataSystem _metaData = default!;
     [Dependency] private IConfigurationManager _cfg = default!;
     [Dependency] private ILogManager _logManager = default!;
@@ -195,21 +197,30 @@ public sealed partial class AiBorgSystem : EntitySystem
     /// отсутствие органа, а не недоделка — предупреждение о компакции хост в этом случае
     /// произносит вслух.
     /// </remarks>
-    private AgentBody BuildBody(EntityUid borg, AiBorgComponent comp) => new()
+    private AgentBody BuildBody(EntityUid borg, AiBorgComponent comp)
     {
-        Owner = borg,
-        Id = comp.AgentId,
-        Name = comp.AgentName,
-        SoulFile = comp.SoulFile,
-        Eye = () => borg,
-        Alive = () => Exists(borg) && !TerminatingOrDeleted(borg) && !_mobState.IsDead(borg),
-        BuildPrompt = () => BuildBorgPrompt(borg, comp),
-        SelfLine = s => BorgSelfLine(s, borg),
-        BeforeObservation = s => PushSightDelta(s, borg),
-        RegisterTools = (s, r) => RegisterBorgTools(s, r, comp),
-        Announce = null,
-        Speak = _host.SpeakUntooledAsync,
-        ChannelsFor = _ => comp.Channels,
-        LlmChain = string.IsNullOrWhiteSpace(comp.LlmChain) ? null : comp.LlmChain,
-    };
+        // Режим инструментов фиксируется здесь, при сборке тела, и дальше не меняется. Иначе
+        // промпт и провод могли бы разъехаться: провод собирается один раз на старте сессии, а
+        // промпт пересобирается ещё и на компакции.
+        var scripted = _cfg.GetCVar(AiCVars.ScriptMode);
+
+        return new AgentBody
+        {
+            Owner = borg,
+            Id = comp.AgentId,
+            Name = comp.AgentName,
+            SoulFile = comp.SoulFile,
+            Eye = () => borg,
+            Alive = () => Exists(borg) && !TerminatingOrDeleted(borg) && !_mobState.IsDead(borg),
+            ScriptMode = scripted,
+            BuildPrompt = () => BuildBorgPrompt(borg, comp, scripted),
+            SelfLine = s => BorgSelfLine(s, borg),
+            BeforeObservation = s => PushSightDelta(s, borg),
+            RegisterTools = (s, r) => RegisterBorgTools(s, r, comp),
+            Announce = null,
+            Speak = _host.SpeakUntooledAsync,
+            ChannelsFor = _ => comp.Channels,
+            LlmChain = string.IsNullOrWhiteSpace(comp.LlmChain) ? null : comp.LlmChain,
+        };
+    }
 }
