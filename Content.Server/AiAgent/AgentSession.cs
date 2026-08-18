@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Bus;
+using Content.Server.AiAgent.Core;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Perception;
@@ -102,7 +103,11 @@ public sealed class AgentSession : IDisposable
     /// </summary>
     public int ContextLimit { get; private set; }
 
-    public EntityUid Brain { get; }
+    /// <summary>Тело, в котором живёт агент, — единственная дверь ядра к игровому миру.</summary>
+    public AgentBody Body { get; }
+
+    /// <summary>Сущность тела. Оставлено свойством, чтобы не переписывать полсотни мест обращения.</summary>
+    public EntityUid Brain => Body.Owner;
 
     /// <summary>Everything mutable about this agent. See <see cref="AgentState"/> for why.</summary>
     public AgentState State { get; } = new();
@@ -261,7 +266,7 @@ public sealed class AgentSession : IDisposable
     public string? LastError { get; private set; }
 
     public AgentSession(
-        EntityUid brain,
+        AgentBody body,
         ILlmClient llm,
         AiToolRegistry registry,
         ObservationQueue queue,
@@ -276,7 +281,7 @@ public sealed class AgentSession : IDisposable
         IAgentEventSink? sink,
         ISawmill sawmill)
     {
-        Brain = brain;
+        Body = body;
         Journal = journal;
         _llm = llm;
         _registry = registry;

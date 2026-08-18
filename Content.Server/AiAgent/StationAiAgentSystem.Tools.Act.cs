@@ -83,7 +83,7 @@ public sealed partial class StationAiAgentSystem
 
     // ------------------------------------------------------------------------ say
 
-    private Task<ToolResult> SayAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    public Task<ToolResult> SayAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
         if (!TryGetString(args, "text", out var text) || string.IsNullOrWhiteSpace(text))
             return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "say: нужен непустой 'text'"));
@@ -110,7 +110,7 @@ public sealed partial class StationAiAgentSystem
 
     // ---------------------------------------------------------------------- radio
 
-    private Task<ToolResult> RadioAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    public Task<ToolResult> RadioAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
         if (!TryGetString(args, "text", out var text) || string.IsNullOrWhiteSpace(text))
             return Task.FromResult(ToolResult.Fail(ToolError.BadArgs, "radio: нужен непустой 'text'"));
@@ -118,7 +118,7 @@ public sealed partial class StationAiAgentSystem
         if (s.AlreadySaid(text!))
             return Task.FromResult(RepeatRefusal());
 
-        var allowed = ChannelsFor(s.Mode);
+        var allowed = s.Body.ChannelsFor(s.Mode);
 
         // Канал не назван — говорим в тот, на который настроен тумблер. Разовое обращение в другой
         // канал тумблер НЕ двигает: это ровно та же механика, что префикс у живого игрока.
@@ -145,7 +145,7 @@ public sealed partial class StationAiAgentSystem
         {
             // Канал существует, но не в этом режиме — это другой отказ, и говорить о нём надо
             // иначе, иначе модель будет искать опечатку там, где её нет.
-            if (AiRadioChannels.Any(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase)))
+            if (s.Body.ChannelsFor(AgentMode.Core).Any(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase)))
             {
                 return Task.FromResult(ToolResult.Fail(ToolError.Carded,
                     $"из интелликарты канал '{channel}' недоступен — передатчик остался в ядре",
@@ -181,7 +181,7 @@ public sealed partial class StationAiAgentSystem
     /// Не трогает мир и потому не маршалится: это внутренняя настройка агента, как положение
     /// тумблера на пульте. Ход, назвавший канал прямо в <c>radio</c>, тумблер не двигает.
     /// </summary>
-    private Task<ToolResult> SetChannelAsync(AgentSession s, JsonElement args, CancellationToken ct)
+    public Task<ToolResult> SetChannelAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
         _ = ct;
 

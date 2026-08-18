@@ -358,13 +358,25 @@ public sealed partial class StationAiAgentSystem
     /// <c>RunLevel = InRound</c>). То есть к этому моменту режим либо активен, либо его нет.
     /// </para>
     /// </summary>
-    private string ReadSoul()
+    private string ReadSoul() => ReadSoul(StationSoulFile(), DataDir());
+
+    /// <summary>Какой файл личности читает Station AI: режимный, если режим активен.</summary>
+    public string StationSoulFile() => _rogue.TryGetActive(out var rule) ? rule.SoulFile : "SOUL.md";
+
+    /// <summary>
+    /// Прочитать личность из каталога агента.
+    ///
+    /// Параметризован телом, а не прибит к <c>ai_data/SOUL.md</c>: у второго агента и файл другой,
+    /// и каталог другой, а правила «нет обычного — работаем без личности, нет режимного — это
+    /// поломка» одни и те же.
+    /// </summary>
+    public string ReadSoul(string file, string dir)
     {
-        var file = _rogue.TryGetActive(out var rule) ? rule.SoulFile : "SOUL.md";
+        var rogueActive = _rogue.TryGetActive(out var rule) && rule.SoulFile == file;
 
         try
         {
-            var path = System.IO.Path.Combine(DataDir(), file);
+            var path = System.IO.Path.Combine(dir, file);
 
             if (System.IO.File.Exists(path))
                 return System.IO.File.ReadAllText(path).Trim();
@@ -372,8 +384,8 @@ public sealed partial class StationAiAgentSystem
             // Отсутствие обычного SOUL.md — штатный путь: агент работает на базовом промпте.
             // Отсутствие файла РЕЖИМА — поломка: раунд заявлен как режим со злым ИИ, а личность у
             // агента осталась прежняя, и в игре это выглядит как «ИИ почему-то не злой».
-            if (rule != null)
-                _sawmill.Error($"режим злого ИИ: файл личности {file} не найден в {DataDir()}");
+            if (rogueActive)
+                _sawmill.Error($"режим злого ИИ: файл личности {file} не найден в {dir}");
 
             return string.Empty;
         }

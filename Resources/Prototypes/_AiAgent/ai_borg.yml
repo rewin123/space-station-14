@@ -1,0 +1,67 @@
+# Шасси борга, которое ведёт языковая модель.
+#
+# Наследуется от инженерного борга не по вкусу, а по задаче: у типа `engineering` в
+# borg_types.yml стоят ровно те модули, которыми делают работу на станции — Prying, Tool,
+# Construction, RCD, Cable. Робот без них умеет ходить и разговаривать, то есть не умеет
+# ничего из того, ради чего ему дали тело.
+#
+# Батарея вставлена прототипом намеренно. Без заряда `SharedBorgSystem.CanActivate` не пускает
+# шасси в активное состояние, а неактивное шасси — это отсутствие модулей (то есть рук) и
+# отсутствие доступа по ID. Пустой слот означал бы, что робот при спавне выглядит рабочим и
+# молча не может ничего.
+
+- type: entity
+  id: AiBorgChassis
+  parent: BorgChassisEngineer
+  name: инженерный киборг «Сегмент»
+  description: Кибернетический корпус под управлением станционной нейросети. Отвечает сам за себя.
+  components:
+  - type: AiBorg
+    agentId: borg-1
+    agentName: Сегмент
+    soulFile: SOUL.md
+    autoClaim: true
+    channels:
+    - Binary
+    - Common
+    - Engineering
+    - Science
+  - type: ItemSlots
+    slots:
+      cell_slot:
+        name: power-cell-slot-component-slot-name-default
+        startingItem: PowerCellHigh
+  # См. комментарий к AiBorgIdleCompound ниже: компонент стоит здесь ради флагов путепоиска,
+  # а не ради поведения. Ключи Nav* — это и есть «роботу можно открывать двери, отжимать их
+  # и перелезать»; без них он обходит станцию по коридорам, где нет ни одной двери, то есть
+  # практически никуда.
+  - type: HTN
+    rootTask:
+      task: AiBorgIdleCompound
+    blackboard:
+      NavInteract: !type:Bool
+        true
+      NavPry: !type:Bool
+        true
+      NavClimb: !type:Bool
+        true
+
+# Пустая HTN-задача: робот «планирует» ничегонеделание.
+#
+# Нужна не ради поведения, а ради НАВИГАЦИИ, и это самая неочевидная деталь всей затеи.
+# NPCSteeringSystem.RequestPath на каждый запрос пути заново берёт флаги через
+# PathfindingSystem.GetFlags(uid), ИГНОРИРУЯ те, что выставлены на компоненте рулевого. А GetFlags
+# отдаёт PathFlags.None всему, у чего нет HTNComponent (TryGetNpc умеет только его). С None
+# путепоиск считает непроходимой любую дверь — то есть робот на станции не может дойти никуда,
+# сообщая «дороги нет» даже на соседний отсек.
+#
+# Поэтому HTN-компонент боргу нужен, а вот HTN-поведение — нет: решения принимает модель. Корневая
+# задача обязательна (rootTask: required), поэтому она здесь есть и только ждёт. Планировщик крутит
+# её вхолостую и в наше управление не вмешивается: ни одного оператора движения в ней нет.
+- type: htnCompound
+  id: AiBorgIdleCompound
+  branches:
+  - tasks:
+    - !type:HTNPrimitiveTask
+      operator: !type:WaitOperator
+        key: AiBorgIdleWait

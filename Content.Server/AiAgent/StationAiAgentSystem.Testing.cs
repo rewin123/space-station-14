@@ -66,20 +66,34 @@ public sealed partial class StationAiAgentSystem
     /// This exists because a live station disagreed with the benchmarks about what the AI could
     /// reach, and there was no way to ask the running server a direct question.
     /// </summary>
-    public bool InvokeToolFromConsole(string tool, string argsJson, out string reason)
+    /// <param name="agentId">
+    /// Кому адресовать. Пусто — первому попавшемуся, что годилось, пока агент был один; с боргом
+    /// на станции «первый попавшийся» стал лотереей по порядку словаря.
+    /// </param>
+    public bool InvokeToolFromConsole(string tool, string argsJson, out string reason, string? agentId = null)
     {
-        var brain = _sessions.Keys.FirstOrDefault();
+        var brain = string.IsNullOrWhiteSpace(agentId)
+            ? _sessions.Keys.FirstOrDefault()
+            : _sessions.FirstOrDefault(kv =>
+                string.Equals(kv.Value.Body.Id, agentId, StringComparison.OrdinalIgnoreCase)).Key;
+
         if (brain == default)
         {
-            reason = "нет активного агента";
+            reason = string.IsNullOrWhiteSpace(agentId)
+                ? "нет активного агента"
+                : $"нет агента с идентификатором '{agentId}'. Есть: {KnownAgentIds()}";
             return false;
         }
 
         _ = ReportAsync(brain, tool, argsJson);
 
-        reason = $"{tool} запущен, результат будет в логе";
+        reason = $"{tool} запущен на {_sessions[brain].Body.Id}, результат будет в логе";
         return true;
     }
+
+    /// <summary>Идентификаторы живых агентов — для внятного отказа в консоли.</summary>
+    public string KnownAgentIds() =>
+        _sessions.Count == 0 ? "(ни одного)" : string.Join(", ", _sessions.Values.Select(s => s.Body.Id));
 
     private async Task ReportAsync(EntityUid brain, string tool, string argsJson)
     {

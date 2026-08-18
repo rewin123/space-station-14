@@ -40,7 +40,7 @@ public sealed class JournalTests
     private static AgentSession BuildSession(string logDir, ScriptedLlmClient llm, AiToolRegistry registry)
     {
         return new AgentSession(
-            default,
+            StubAgentBody.Make(),
             llm,
             registry,
             new ObservationQueue(200),

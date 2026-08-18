@@ -26,6 +26,18 @@ public static class ToolError
     public const string Timeout = "timeout";
     public const string ReviewMode = "review_mode";
     public const string TurnBudget = "turn_budget";
+    /// <summary>
+    /// Тело физически не смогло: нет свободной руки, предмет не выпускается, модуль не установлен.
+    ///
+    /// <para>
+    /// Отдельно от <see cref="NotControllable"/> намеренно. Тот означает «эта вещь тебе в принципе
+    /// не подчиняется» и правильно гасит попытки. Здесь наоборот: действие возможно, не хватило
+    /// условия, которое агент может исправить сам — сменить модуль, освободить руку, подойти. Один
+    /// код на оба случая учил бы модель сдаваться там, где надо переставить руки.
+    /// </para>
+    /// </summary>
+    public const string Refused = "refused";
+
     public const string Internal = "internal";
     public const string UnknownTool = "unknown_tool";
 }

@@ -1,3 +1,4 @@
+using Content.Server.AiAgent.Core;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -432,7 +433,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         ApplyRogueLaws(brain);
 
-        if (!StartSession(brain, out reason))
+        if (!StartSession(BuildStationBody(brain), out reason))
         {
             // Переиспользованный мозг не удаляем: он был в ядре до нас и должен там остаться,
             // иначе неудачная попытка захвата уничтожает то, что чинила.
@@ -493,8 +494,25 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _sawmill.Info($"режим злого ИИ: {ToPrettyString(brain)} получил лоусет {rule.Lawset}");
     }
 
-    private bool StartSession(EntityUid brain, out string reason)
+    /// <summary>
+    /// Завести агента в теле.
+    ///
+    /// <para>
+    /// Публичный, потому что тело собирает не этот класс: <c>AiBorgSystem</c> строит своё
+    /// <see cref="AgentBody"/> и зовёт сюда. Всё, что ниже, про тело не знает ничего — только
+    /// про делегаты, которые оно принесло.
+    /// </para>
+    /// </summary>
+    public bool StartSession(AgentBody body, out string reason)
     {
+        var brain = body.Owner;
+
+        if (_sessions.ContainsKey(brain))
+        {
+            reason = $"{ToPrettyString(brain)} уже занят работающим агентом";
+            return false;
+        }
+
         var llm = EnsureClient();
         if (llm == null)
         {
@@ -517,7 +535,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         AgentSession? self = null;
 
         var session = new AgentSession(
-            brain,
+            body,
             llm,
             registry,
             queue,
@@ -529,8 +547,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 MaxConsecutiveFailures = () => _cfg.GetCVar(AiCVars.MaxConsecutiveFailures),
             },
             (force, ct) => BuildObservationAsync(self!, force, ct),
-            text => AnnounceInGameAsync(self!, text),
-            (text, channel) => SpeakUntooledAsync(self!, text, channel),
+            // Телу без объявлений (борг) предупреждение о компакции всё равно надо озвучить —
+            // иначе экипаж просто видит, что робот замолчал на полминуты.
+            text => (body.Announce ?? ((s2, t) => body.Speak(s2, t, null).ContinueWith(_ => { })))(self!, text),
+            (text, channel) => body.Speak(self!, text, channel),
             () => RunCuratorAsync(self!, registry),
             () =>
             {
@@ -540,7 +560,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 // prefill anyway.
                 Memory.RefreshSnapshot();
                 Skills.LoadFromDisk();
-                return (BuildSystemPrompt(), registry.WireJson());
+                return (body.BuildPrompt(), registry.WireJson());
             },
             new CompactionOptions
             {
@@ -548,10 +568,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 KeepEvents = () => _cfg.GetCVar(AiCVars.CompactEvents),
             },
             _cfg.GetCVar(AiCVars.LogTranscript)
-                ? new Journal(System.IO.Path.Combine(DataDir(), "logs"), _sawmill)
+                ? new Journal(System.IO.Path.Combine(AgentDir(body.Id), "logs"), _sawmill)
                 : Journal.Disabled,
             // Null when the debug bus is off; the conversation then costs one null check.
-            _bus?.ForSession(SessionIdFor(brain)),
+            _bus?.ForSession(body.Id),
             _sawmill);
 
         self = session;
@@ -566,18 +586,18 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // константа, а номер раунда берётся из volatile-поля, снятого на главном потоке. Позвать
         // отсюда CurrentRoundId() значило бы трогать EntityManager с потока агента.
         var store = SessionStoreFor();
-        var sessionId = SessionIdFor(brain);
+        var sessionId = body.Id;
         session.Persist = () => store.Save(sessionId, session.State, _roundId);
 
-        RegisterTools(session, registry);
-        session.Conv.SetPrefix(BuildSystemPrompt(), registry.WireJson());
+        body.RegisterTools(session, registry);
+        session.Conv.SetPrefix(body.BuildPrompt(), registry.WireJson());
         session.Cache.SetExpectedPrefix(session.Conv.PrefixHash);
 
         _sessions[brain] = session;
         AttachDebugSession(session);
 
         // Restore a conversation from before a restart, if the prefix still matches.
-        var snapshot = SessionStoreFor().Load(SessionIdFor(brain), session.Conv.PrefixHash, CurrentRoundId());
+        var snapshot = store.Load(sessionId, session.Conv.PrefixHash, CurrentRoundId());
         if (snapshot != null)
             session.State.Restore(snapshot);
 
@@ -654,7 +674,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         {
             try
             {
-                SessionStoreFor().Save(SessionIdFor(brain), session.State, CurrentRoundId());
+                SessionStoreFor().Save(session.Body.Id, session.State, CurrentRoundId());
             }
             catch (Exception e)
             {
@@ -1286,7 +1306,28 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
     private SessionStore SessionStoreFor() => _sessionStore ??= new SessionStore(DataDir(), _sawmill);
 
-    private static string SessionIdFor(EntityUid brain) => "current";
+    /// <summary>
+    /// Идентификатор первого агента — того, что жил здесь, когда агент был один.
+    ///
+    /// <para>
+    /// Существует ради данных, а не ради красоты. На боевом сервере уже лежат
+    /// <c>ai_data/memory/MEMORY.md</c>, <c>ai_data/skills/</c> и заметки о людях, накопленные за
+    /// месяцы. Переезд на схему «каталог на агента» унёс бы их у ядра молча — агент проснулся бы
+    /// с чистой памятью и без единой ошибки в журнале. Поэтому ядро остаётся в корне
+    /// <c>ai_data/</c>, а каталог заводится только новым телам.
+    /// </para>
+    /// </summary>
+    public const string CoreAgentId = "core";
+
+    /// <summary>
+    /// Каталог файлов конкретного агента.
+    ///
+    /// Ядро — корень <c>ai_data/</c> (см. <see cref="CoreAgentId"/>); все остальные —
+    /// <c>ai_data/agents/&lt;id&gt;/</c>.
+    /// </summary>
+    public string AgentDir(string agentId) => agentId == CoreAgentId
+        ? DataDir()
+        : System.IO.Path.Combine(DataDir(), "agents", agentId);
 
     /// <summary>
     /// Round the snapshot belongs to. Comes from the database, so it survives a server restart and
@@ -1327,7 +1368,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// actually addressed the AI. It routes to the channel the request came in on, because a reply
     /// whispered next to the core is no better than silence to whoever asked over the radio.
     /// </summary>
-    private Task<bool> SpeakUntooledAsync(AgentSession session, string text, string? channel)
+    public Task<bool> SpeakUntooledAsync(AgentSession session, string text, string? channel)
     {
         if (!_cfg.GetCVar(AiCVars.SpeakUntooledText))
             return Task.FromResult(false);

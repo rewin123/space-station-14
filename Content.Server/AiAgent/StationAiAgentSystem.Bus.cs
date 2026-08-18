@@ -35,9 +35,16 @@ public sealed partial class StationAiAgentSystem
     private AgentDebugServer? _debugServer;
 
     /// <summary>
-    /// One agent at a time (<c>ai.max_agents</c> is 1), so the id is a constant — the same one the
-    /// session snapshot on disk uses. It stays in the envelope anyway: a uniform frame shape costs
-    /// nothing now and is what a second agent would need later.
+    /// Ярлык сессии, который отладчик показывает по умолчанию.
+    ///
+    /// <para>
+    /// Кадры на шину уходят с настоящим идентификатором тела (<c>session.Body.Id</c>), а вот
+    /// маршрутизатор HTTP по-прежнему показывает одного агента — того, кто занял тело последним.
+    /// Это <b>осознанное ограничение</b>, а не недоделка: отладчик выключен по умолчанию
+    /// (<c>ai.debug_enabled</c>), а выбор агента в его UI — отдельная работа, которой в этой задаче
+    /// не место. Важно было другое: чтобы освобождение ВТОРОГО агента не гасило отладку ПЕРВОГО,
+    /// см. <see cref="DetachDebugSession"/>.
+    /// </para>
     /// </summary>
     private const string DebugSessionId = "current";
 
@@ -101,7 +108,7 @@ public sealed partial class StationAiAgentSystem
     {
         _debugSession = session;
 
-        _bus?.Publish(AgentEventKind.SessionStarted, SessionIdFor(session.Brain), JsonSerializer.Serialize(new
+        _bus?.Publish(AgentEventKind.SessionStarted, session.Body.Id, JsonSerializer.Serialize(new
         {
             brain = (int)session.Brain,
             round = CurrentRoundId(),
@@ -118,9 +125,12 @@ public sealed partial class StationAiAgentSystem
     /// </summary>
     private void DetachDebugSession(AgentSession session, string why)
     {
-        _debugSession = null;
+        // Только если уходит именно тот, кого показывает отладчик. Безусловное обнуление означало
+        // бы, что освобождение борга гасит отладку ядра, которое продолжает работать.
+        if (ReferenceEquals(_debugSession, session))
+            _debugSession = null;
 
-        _bus?.Publish(AgentEventKind.SessionEnded, SessionIdFor(session.Brain), JsonSerializer.Serialize(new
+        _bus?.Publish(AgentEventKind.SessionEnded, session.Body.Id, JsonSerializer.Serialize(new
         {
             brain = (int)session.Brain,
             reason = why,

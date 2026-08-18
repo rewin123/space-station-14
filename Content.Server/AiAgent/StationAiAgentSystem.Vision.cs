@@ -454,7 +454,7 @@ public sealed partial class StationAiAgentSystem
     private string FacingRu(EntityUid uid) => DirectionRu(_xform.GetWorldRotation(uid).GetDir());
 
     /// <summary>Classify an entity into a handle kind. Order matters: most specific first.</summary>
-    private string KindOf(EntityUid uid)
+    public string KindOf(EntityUid uid)
     {
         if (HasComp<MobStateComponent>(uid))
             return "crew";

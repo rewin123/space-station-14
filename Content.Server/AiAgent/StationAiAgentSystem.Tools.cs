@@ -139,17 +139,6 @@ public sealed partial class StationAiAgentSystem
 
         r.Register(new AiTool
         {
-            Name = "laws",
-            Description = "Перечитать свои законы. О перепрошивке тебе сообщит строка LAWS с новым " +
-                          "текстом; этот инструмент — чтобы свериться, когда сомневаешься.",
-            SchemaJson = """
-                {"type":"object","additionalProperties":false,"properties":{}}
-                """,
-            Handler = (a, ct) => LawsAsync(s, a, ct),
-        });
-
-        r.Register(new AiTool
-        {
             Name = "station_status",
             Description = "Сводка по станции: уровень тревоги, состояние твоего ядра, питание.",
             SchemaJson = """
@@ -286,6 +275,40 @@ public sealed partial class StationAiAgentSystem
             Handler = (a, ct) => DeviceUiAsync(s, a, ct),
         });
 
+        RegisterCommonTools(s, r);
+    }
+
+    /// <summary>
+    /// Инструменты, одинаковые для любого тела.
+    ///
+    /// <para>
+    /// Отбор строгий: сюда попало только то, что не меняет ни смысла, ни описания при смене тела.
+    /// <c>noop</c> закрывает ход, <c>laws</c> перечитывает законы силикона, таймеры живут в
+    /// состоянии агента, память и навыки — в файлах. Ни один из них не знает, есть ли у агента
+    /// камеры или ноги.
+    /// </para>
+    /// <para>
+    /// <c>say</c>, <c>radio</c> и <c>set_channel</c> сюда сознательно <b>не</b> попали, хотя
+    /// соблазн был. У них расходится не реализация, а <em>описание и схема</em>: «слышат те, кто
+    /// рядом с ядром» для борга — ложь, а перечень каналов в <c>enum</c> у шасси другой. Описание
+    /// инструмента едет в замороженный префикс и является для модели единственным источником
+    /// правды о её возможностях, поэтому общая формулировка «на все тела» была бы не экономией, а
+    /// дезинформацией.
+    /// </para>
+    /// </summary>
+    public void RegisterCommonTools(AgentSession s, AiToolRegistry r)
+    {
+        r.Register(new AiTool
+        {
+            Name = "laws",
+            Description = "Перечитать свои законы. О перепрошивке тебе сообщит строка LAWS с новым " +
+                          "текстом; этот инструмент — чтобы свериться, когда сомневаешься.",
+            SchemaJson = """
+                {"type":"object","additionalProperties":false,"properties":{}}
+                """,
+            Handler = (a, ct) => LawsAsync(s, a, ct),
+        });
+
         // ------------------------------------------------------------ ничего не делать
 
         r.Register(new AiTool
@@ -384,10 +407,14 @@ public sealed partial class StationAiAgentSystem
             // Before the drain, so a rewrite lands in the very turn that notices it.
             NoticeLawChange(session);
 
+            // Тому же правилу подчиняется восприятие, которое тело считает само (у борга — разность
+            // поля зрения): посчитать надо ДО слива, иначе строки уедут в следующий ход.
+            session.Body.BeforeObservation?.Invoke(session);
+
             var (items, dropped) = session.Queue.Drain();
             var roundTime = RoundTime();
 
-            var text = ObservationFormatter.Format(items, dropped, roundTime, SelfLine(session), force);
+            var text = ObservationFormatter.Format(items, dropped, roundTime, session.Body.SelfLine(session), force);
             if (text == null)
                 return null;
 
@@ -512,23 +539,40 @@ public sealed partial class StationAiAgentSystem
         "say", "radio", "announce", "move_camera", "jump_to_core",
         "device_action", "device_ui", "new_timer", "del_timer",
         "observation", "compaction announce", "untooled reply",
+
+        // Тело борга. Ходьба и руки меняют мир и видны экипажу немедленно — задержка здесь
+        // выглядит как зависший робот, а не как занятый сервер.
+        "goto", "step", "use", "pickup", "drop", "hit", "module",
     };
 
     private static WorldPriority PriorityOf(string what) =>
         UrgentOps.Contains(what) ? WorldPriority.Urgent : WorldPriority.Normal;
 
-    /// <summary>Run a tool body on the main thread with the session's generation guard.</summary>
-    private Task<ToolResult> OnMainAsync(AgentSession s, string what, Func<ToolResult> body,
+    /// <summary>
+    /// Run a tool body on the main thread with the session's generation guard.
+    ///
+    /// <para>
+    /// Публичный: инструменты второго тела маршалируются через ту же шину и тот же бюджет кадра.
+    /// Своя шина у борга означала бы, что два агента делят кадр без общего потолка — то есть
+    /// ровно та просадка тика, ради предсказуемости которой шина и заведена.
+    /// </para>
+    /// <para>
+    /// Проверка живости идёт через <c>Body.Alive</c>, а не через станционный <c>IsPlayable</c>:
+    /// «жив» для мозга в ядре и для шасси на батарее — разные вопросы.
+    /// </para>
+    /// </summary>
+    public Task<ToolResult> OnMainAsync(AgentSession s, string what, Func<ToolResult> body,
         CancellationToken ct, TimeSpan? timeout = null)
     {
         var brain = s.Brain;
         var generation = s.Generation;
+        var alive = s.Body.Alive;
 
         return _world.RunAsync(() =>
         {
             _world.AssertMainThread(what);
-            return !IsPlayable(brain)
-                ? ToolResult.Fail(ToolError.Dead, "ИИ больше не в игре")
+            return !alive()
+                ? ToolResult.Fail(ToolError.Dead, "агент больше не в игре")
                 : body();
         }, generation, () => GenerationOf(brain), ct, timeout, what, PriorityOf(what));
     }
@@ -566,7 +610,7 @@ public sealed partial class StationAiAgentSystem
         return true;
     }
 
-    private static bool TryGetString(JsonElement args, string name, out string? value)
+    public static bool TryGetString(JsonElement args, string name, out string? value)
     {
         value = null;
         if (args.ValueKind != JsonValueKind.Object)

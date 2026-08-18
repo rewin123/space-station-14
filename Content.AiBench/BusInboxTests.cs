@@ -131,7 +131,7 @@ public sealed class BusInboxTests
         var observations = 0;
 
         var session = new AgentSession(
-            default,
+            StubAgentBody.Make(),
             llm,
             registry,
             new ObservationQueue(200),
@@ -211,7 +211,7 @@ public sealed class BusInboxTests
         var llm = new ScriptedLlmClient().Then("раз").Then("два").Then("три").Then("четыре");
 
         var session = new AgentSession(
-            default,
+            StubAgentBody.Make(),
             llm,
             registry,
             new ObservationQueue(200),

@@ -450,7 +450,7 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>One-line state for the look listing; the full picture is what inspect is for.</summary>
-    private string ShortState(EntityUid uid)
+    public string ShortState(EntityUid uid)
     {
         if (TryComp<DoorComponent>(uid, out var door))
         {

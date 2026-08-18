@@ -478,9 +478,17 @@ public sealed class AiStation : IAsyncDisposable
     });
 
     /// <summary>Invoke a tool through the real dispatcher, ticking so marshalled calls can land.</summary>
-    public async Task<ToolResult> Invoke(string tool, string argsJson = "{}")
+    public Task<ToolResult> Invoke(string tool, string argsJson = "{}") => InvokeOn(Brain, tool, argsJson);
+
+    /// <summary>
+    /// То же, но на конкретном агенте.
+    ///
+    /// Появилось вместе со вторым телом: <see cref="Invoke"/> всегда адресует мозг в ядре, и
+    /// проверить инструмент борга через него нельзя в принципе.
+    /// </summary>
+    public async Task<ToolResult> InvokeOn(EntityUid agent, string tool, string argsJson = "{}")
     {
-        var task = System.InvokeToolForTest(Brain, tool, argsJson);
+        var task = System.InvokeToolForTest(agent, tool, argsJson);
         await PoolManager.WaitUntil(Pair.Server, () => task.IsCompleted, maxTicks: 900);
 
         if (!task.IsCompleted)
