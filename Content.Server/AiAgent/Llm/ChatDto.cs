@@ -150,11 +150,20 @@ public sealed class ChatRequestDto
     [JsonPropertyName("top_p")]
     public float TopP { get; set; }
 
+    /// <summary>
+    /// Сэмплер llama.cpp, не параметр OpenAI. Nullable именно поэтому.
+    ///
+    /// Не-nullable значение <c>WhenWritingNull</c> выбросить не может, так что до появления
+    /// профилей <c>top_k</c> и <c>min_p</c> уходили в каждый запрос — включая те, что адресованы
+    /// строгой API, отвечающей на неизвестное поле кодом 400. Кто их получает, решает
+    /// <see cref="LlmDialectRules.AllowsSamplerExtras"/>.
+    /// </summary>
     [JsonPropertyName("top_k")]
-    public int TopK { get; set; }
+    public int? TopK { get; set; }
 
+    /// <inheritdoc cref="TopK"/>
     [JsonPropertyName("min_p")]
-    public float MinP { get; set; }
+    public float? MinP { get; set; }
 
     /// <summary>
     /// Null means "no ceiling", and that is the default.
@@ -168,9 +177,12 @@ public sealed class ChatRequestDto
     [JsonPropertyName("max_tokens")]
     public int? MaxTokens { get; set; }
 
-    /// <summary>llama.cpp extension: reuse the slot's prefix KV cache.</summary>
+    /// <summary>
+    /// llama.cpp extension: reuse the slot's prefix KV cache. Null — не посылать вовсе, потому что
+    /// у всех остальных провайдеров это неизвестное поле.
+    /// </summary>
     [JsonPropertyName("cache_prompt")]
-    public bool CachePrompt { get; set; } = true;
+    public bool? CachePrompt { get; set; }
 
     /// <summary>
     /// DeepSeek's thinking switch. Null leaves the model on its own default, and is serialised
@@ -191,6 +203,18 @@ public sealed class ChatRequestDto
     /// </summary>
     [JsonPropertyName("id_slot")]
     public int? IdSlot { get; set; }
+
+    /// <summary>
+    /// Форма OpenAI для того же, что DeepSeek принимает объектом <see cref="Thinking"/>. Посылается
+    /// только строгому OpenAI-совместимому эндпоинту — два поля сразу означали бы двойную настройку
+    /// с непредсказуемым победителем.
+    ///
+    /// Стоит последним и потому не сдвигает ни одно существующее поле: пока значение null, байты
+    /// запроса к llama.cpp и к DeepSeek остаются в точности теми же, что были до появления
+    /// профилей, и префиксный кэш этого не замечает.
+    /// </summary>
+    [JsonPropertyName("reasoning_effort")]
+    public string? ReasoningEffort { get; set; }
 }
 
 /// <summary>
@@ -211,6 +235,15 @@ public sealed class ThinkingDto
 }
 
 /// <summary>What the agent loop actually consumes from a completion.</summary>
+/// <param name="Profile">
+/// Кто ответил. Нужен в журнале: с цепочкой фаллбеков разобрать постфактум, чья это была выдача,
+/// иначе невозможно — а именно на плохих ходах и хочется знать, локальная модель это была или нет.
+/// </param>
+/// <param name="ReportsCache">
+/// Сообщает ли этот провайдер долю промпта из кэша. У того, кто не сообщает, нулевой
+/// <see cref="CachedTokens"/> означает «неизвестно», а не «кэш сломан», и алярм
+/// <see cref="Content.Server.AiAgent.Context.CacheMetrics"/> обязан промолчать.
+/// </param>
 public sealed record LlmResponse(
     string? Content,
     IReadOnlyList<ToolCallDto> ToolCalls,
@@ -219,7 +252,9 @@ public sealed record LlmResponse(
     int CompletionTokens,
     double DurationSeconds,
     string? FinishReason = null,
-    int ReasoningTokens = 0)
+    int ReasoningTokens = 0,
+    string? Profile = null,
+    bool ReportsCache = true)
 {
     /// <summary>
     /// The completion was cut off mid-sentence by max_tokens.

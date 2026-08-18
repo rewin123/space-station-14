@@ -193,6 +193,7 @@ public sealed class TurnRunner
         Conv.Calibrate(response.PromptTokens);
         ctx.RecordResponse(response.CacheRatio, response.ToolCalls.Count);
 
+        _cache.NoteProvider(response.Profile, response.ReportsCache);
         _cache.Record(response.PromptTokens, response.CachedTokens, Conv.PrefixHash, Conv.SystemPrompt);
         Conv.AppendAssistant(response);
 
@@ -211,6 +212,10 @@ public sealed class TurnRunner
             ["seconds"] = Math.Round(response.DurationSeconds, 2),
             ["tools"] = response.ToolCalls.Count,
             ["mode"] = _state.Mode.ToString(),
+
+            // Кто ответил. С цепочкой фаллбеков без этого поля разобрать постфактум, чья была
+            // выдача, невозможно — а спрашивают об этом именно на плохих ходах.
+            ["profile"] = response.Profile,
         });
 
         if (!string.IsNullOrWhiteSpace(response.Content))

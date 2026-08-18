@@ -1,0 +1,45 @@
+# Мост к подписочным моделям: держит OAuth Codex и Grok Build и отдаёт их
+# OpenAI-совместимым API на 127.0.0.1:8317.
+#
+# НЕ УСТАНОВЛЕН. Установка требует скачать чужой бинарь на машину с публичным игровым сервером и
+# пройти OAuth-логин в браузере — и то и другое решает владелец, а не сборка. Порядок:
+#
+#   1. Взять релиз github.com/router-for-me/CLIProxyAPI (Go, один бинарь) в /home/rewin/cliproxyapi/
+#   2. config.yaml рядом с ним:  port: 8317,  auth-dir: "/home/rewin/.cli-proxy-api"
+#   3. Логин один раз на каждую подписку — их CLI, интерактивно, через браузер
+#   4. cp этот файл в ~/.config/systemd/user/cliproxyapi.service, затем
+#      systemctl --user daemon-reload && systemctl --user enable --now cliproxyapi
+#   5. Проверить, что мост жив и знает модели:  curl -s 127.0.0.1:8317/v1/models
+#   6. И только потом:  cvar ai.llm_chain "codex,grok,local"  в консоли сервера
+#
+# ПРАВИЛО ЕДИНСТВЕННОГО ВЛАДЕЛЬЦА. После шага 3 логиниться из `codex` в терминале и из
+# hermes-gateway напрямую к OpenAI нельзя: refresh-токен одноразовый и ротируется на стороне
+# вендора, второй потребитель отзывает первого. Именно так это уже сломалось 2026-08-07 —
+# `refresh_token_reused` в ~/.hermes/auth.json. Все потребители должны ходить через этот мост.
+#
+# Проявится нарушение не ошибкой сборки, а профилем в состоянии «МЁРТВ» в `aiagent llm`.
+
+[Unit]
+Description=CLIProxyAPI — OAuth-мост к подписочным моделям (Codex, Grok Build)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rewin/cliproxyapi
+ExecStart=/home/rewin/cliproxyapi/cli-proxy-api --config /home/rewin/cliproxyapi/config.yaml
+
+# Немецкий выход несёт мост, а не игра: chatgpt.com и x.ai отсюда напрямую недостижимы. Точно так
+# же это уже сделано для hermes-gateway дроп-ином proxy.conf. Игровой сервер прокси не наследует —
+# у него он задаётся по профилю, потому что запрос на loopback, ушедший в удалённый выход, зависает.
+Environment="HTTP_PROXY=http://127.0.0.1:10809"
+Environment="HTTPS_PROXY=http://127.0.0.1:10809"
+Environment="NO_PROXY=127.0.0.1,localhost,::1"
+
+# Мост становится критической зависимостью раунда: без него профили codex и grok отваливаются, и
+# цепочка съезжает на локальную модель. Съезд отработает штатно, но перезапуск дешевле.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -31,6 +31,12 @@ public sealed class CacheMetrics
     private double _ratioSum;
     private int _consecutiveLow;
 
+    /// <summary>Кто отвечал на прошлом ходу — чтобы заметить смену провайдера.</summary>
+    private string? _lastProfile;
+
+    /// <summary>Текущий провайдер не сообщает долю из кэша, так что судить о ней нечем.</summary>
+    private bool _cacheUnreported;
+
     /// <summary>Size of the previous prompt — the ceiling on what could possibly be reused.</summary>
     private int _previousPromptTokens;
 
@@ -44,6 +50,35 @@ public sealed class CacheMetrics
         ExpectedPrefixHash = hash;
         _consecutiveLow = 0;
         _previousPromptTokens = 0;
+    }
+
+    /// <summary>
+    /// Кто отвечал на этом ходу. Вызывать перед <see cref="Record"/>.
+    ///
+    /// <para>
+    /// Нужно из-за цепочки фаллбеков, и по двум разным причинам. Первая: смена провайдера
+    /// <em>законно</em> обесценивает кэш — у новой стороны нашего префикса просто нет, — так что
+    /// первый ход после переключения не повод для алярма, ровно как первый ход после компакции.
+    /// Вторая: не всякий провайдер вообще сообщает, сколько промпта пришло из кэша, и у такого ноль
+    /// в <c>cached_tokens</c> означает «неизвестно», а не «кэш сломан». Алярм, кричащий ERROR без
+    /// поломки, обесценивает сам себя — а он здесь единственный способ поймать настоящую поломку,
+    /// которая иначе полностью бесшумна.
+    /// </para>
+    /// </summary>
+    public void NoteProvider(string? profile, bool reportsCache)
+    {
+        _cacheUnreported = !reportsCache;
+
+        if (profile == _lastProfile)
+            return;
+
+        if (_lastProfile != null)
+        {
+            _sawmill.Info($"провайдер сменился: {_lastProfile} → {profile ?? "—"}, промах кэша на этом ходу ожидаем");
+            ExpectMiss = true;
+        }
+
+        _lastProfile = profile;
     }
 
     /// <summary>Record one completion. Returns false when the alarm fired.</summary>
@@ -84,6 +119,14 @@ public sealed class CacheMetrics
         var reusable = Math.Min(_previousPromptTokens, promptTokens);
         var reuse = reusable <= 0 ? 1.0 : (double)cachedTokens / reusable;
         _previousPromptTokens = promptTokens;
+
+        // Провайдер, не сообщающий о кэше, не даёт повода судить: у него нулевая доля — это
+        // «неизвестно», и алярм здесь молчит, а не отчитывается о поломке, которой не видел.
+        if (_cacheUnreported)
+        {
+            _consecutiveLow = 0;
+            return true;
+        }
 
         if (reuse >= 0.90)
         {

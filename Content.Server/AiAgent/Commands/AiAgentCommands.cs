@@ -16,8 +16,9 @@ public sealed class AiAgentCommand : IConsoleCommand
 {
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
-    public string Help => "aiagent status | cost | claim [uid] | release | inject <канал> <текст> | " +
-                          "tool <имя> [json] | curate | skills | timers | debug | dryrun on|off";
+    public string Help => "aiagent status | cost | llm [use <профиль>|revive <профиль>] | claim [uid] | " +
+                          "release | inject <канал> <текст> | tool <имя> [json] | curate | skills | " +
+                          "timers | debug | dryrun on|off";
 
     public void Execute(IConsoleShell shell, string argStr, string[] args)
     {
@@ -60,6 +61,10 @@ public sealed class AiAgentCommand : IConsoleCommand
 
             case "cost":
                 Cost(shell, system);
+                break;
+
+            case "llm":
+                Llm(shell, system, cfg, args);
                 break;
 
             case "inject":
@@ -169,6 +174,64 @@ public sealed class AiAgentCommand : IConsoleCommand
                 shell.WriteError($"неизвестная подкоманда '{sub}'. {Help}");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Цепочка провайдеров: кто сейчас отвечает, кто спит и до каких пор, сколько израсходовано.
+    ///
+    /// Расход показывается по двум причинам сразу. Для платных профилей это деньги. Для подписок —
+    /// единственный способ узнать потолок: ни OpenAI, ни xAI своих настоящих лимитов не публикуют,
+    /// известно лишь, что у Codex окно пятичасовое, а у Grok Build пул недельный. Так что «сколько
+    /// обращений за окно» здесь не украшение, а измерительный прибор.
+    /// </summary>
+    private static void Llm(
+        IConsoleShell shell,
+        StationAiAgentSystem system,
+        IConfigurationManager cfg,
+        string[] args)
+    {
+        var verb = args.Length > 1 ? args[1].ToLowerInvariant() : "show";
+
+        if (verb is "use" or "revive")
+        {
+            if (args.Length < 3)
+            {
+                shell.WriteError($"aiagent llm {verb} <профиль>");
+                return;
+            }
+
+            if (system.Router is not { } target)
+            {
+                shell.WriteError("цепочка не собрана — задай ai.llm_chain и дождись первого хода агента.");
+                return;
+            }
+
+            var ok = verb == "use"
+                ? target.TryUse(args[2], out var why)
+                : target.Revive(args[2], out why);
+
+            if (ok)
+                shell.WriteLine(why);
+            else
+                shell.WriteError(why);
+
+            return;
+        }
+
+        var chain = cfg.GetCVar(AiCVars.LlmChain);
+
+        if (system.Router is not { } router)
+        {
+            // Клиент собирается лениво, при первом обращении к модели. До этого момента показать
+            // состояние нечего, и сказать об этом прямо честнее, чем напечатать пустую таблицу.
+            shell.WriteLine(string.IsNullOrWhiteSpace(chain)
+                ? $"цепочка не задана: работает одиночный эндпоинт {cfg.GetCVar(AiCVars.Endpoint)} " +
+                  $"({cfg.GetCVar(AiCVars.Model)})"
+                : $"ai.llm_chain = «{chain}», но клиент ещё не собран — соберётся на первом ходу агента.");
+            return;
+        }
+
+        shell.WriteLine(router.Describe());
     }
 
     /// <summary>

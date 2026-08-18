@@ -104,6 +104,19 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     private readonly Dictionary<EntityUid, AgentSession> _sessions = new();
     private ILlmClient? _llm;
 
+    /// <summary>
+    /// Сны, исчерпанные квоты и счётчики провайдеров.
+    ///
+    /// Живёт рядом с системой, а НЕ внутри клиента, и это принципиально:
+    /// <see cref="ResetLlmClient"/> выбрасывает клиента на каждом рестарте раунда, а раундов за
+    /// сутки десятки. Внутри клиента это состояние означало бы, что каждый рестарт заново лезет в
+    /// исчерпанную подписку и добивает остаток недельного пула.
+    /// </summary>
+    private LlmQuotaState? _quota;
+
+    /// <summary>Роутер, если цепочка собрана. Null на одиночном эндпоинте и в тестах со скриптом.</summary>
+    public ILlmRouter? Router => _llm as ILlmRouter;
+
     public IReadOnlyDictionary<EntityUid, AgentSession> Sessions => _sessions;
 
     public override void Initialize()
@@ -211,6 +224,11 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         StopDebugServer();
         (_llm as IDisposable)?.Dispose();
         _llm = null;
+
+        // Счётчики окна и недели пишутся не чаще раза в полминуты, так что без этого остановка
+        // сервера теряла бы последние обращения — а именно недельный расход и надо копить точно:
+        // ни OpenAI, ни xAI своего потолка не публикуют, и наш счётчик — единственный источник.
+        _quota?.Flush();
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -581,9 +599,21 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// </summary>
     private int EffectiveCompactHigh(AgentSession session)
     {
-        var configured = _cfg.GetCVar(AiCVars.CompactHigh);
+        // Порог текущего профиля важнее общего: у профилей контекст разный на порядок, и одно
+        // печатное число на всех означало бы, что на модели с четырьмястами тысячами токенов агент
+        // компактится так же часто, как на локальной, теряя историю без всякой нужды.
+        var fromProfile = Router?.CurrentCompactHigh ?? 0;
+        var configured = fromProfile > 0 ? fromProfile : _cfg.GetCVar(AiCVars.CompactHigh);
 
         var limit = _cfg.GetCVar(AiCVars.CtxLimit);
+
+        // Окно текущего профиля — до снятого при старте сессии. Размер контекста спрашивается ОДИН
+        // раз, при запуске, а профиль за раунд может смениться на модель с окном вдвое меньше;
+        // порог, посчитанный против прошлого окна, даёт отказ, у которого в журнале до самого конца
+        // виден здоровый размер промпта.
+        if (limit <= 0)
+            limit = Router?.CurrentCtxLimit ?? 0;
+
         if (limit <= 0)
             limit = session.ContextLimit;
 
@@ -803,24 +833,149 @@ public sealed partial class StationAiAgentSystem : EntitySystem
             return _llm;
         }
 
-        var sampling = new LlmSampling(
-            _cfg.GetCVar(AiCVars.Temperature),
-            _cfg.GetCVar(AiCVars.TopP),
-            _cfg.GetCVar(AiCVars.TopK),
-            _cfg.GetCVar(AiCVars.MinP),
-            _cfg.GetCVar(AiCVars.MaxTokens),
-            IdSlot: 0,
-            ThinkingEffort: _cfg.GetCVar(AiCVars.ThinkingEffort));
-
-        _llm = new LlamaClient(
-            _cfg.GetCVar(AiCVars.Endpoint),
-            _cfg.GetCVar(AiCVars.Model),
-            _cfg.GetCVar(AiCVars.ApiKey),
-            sampling,
-            TimeSpan.FromSeconds(_cfg.GetCVar(AiCVars.RequestTimeout)),
-            _sawmill);
-
+        _llm = BuildChain() ?? BuildSingleEndpoint();
         return _llm;
+    }
+
+    /// <summary>
+    /// Собрать цепочку из <c>ai.llm_chain</c>, или null — если её не задали или ни один профиль не
+    /// нашёлся.
+    ///
+    /// Null здесь — рабочий исход, а не ошибка: одиночный эндпоинт из <c>ai.endpoint</c> остаётся
+    /// полноценным режимом, и именно он даёт откат одной строкой в консоли, если цепочка сломает
+    /// раунд.
+    /// </summary>
+    private ILlmClient? BuildChain()
+    {
+        var raw = _cfg.GetCVar(AiCVars.LlmChain);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var ids = raw.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var chain = new List<(LlmProfileConfig, LlmEndpoint, LlmSampling)>();
+
+        foreach (var id in ids)
+        {
+            if (!_protoMan.TryIndex<AiLlmProfilePrototype>(id, out var profile))
+            {
+                // ERROR, а не тихий пропуск: опечатка в цепочке иначе означала бы, что главная
+                // модель молча не та, которую вписали, и понять это можно было бы только по
+                // счётчикам через сутки.
+                _sawmill.Error($"ai.llm_chain: профиля aiLlmProfile «{id}» не существует, пропускаю");
+                continue;
+            }
+
+            chain.Add((LlmProfileConfig.From(profile), EndpointFor(profile), SamplingFor(profile)));
+        }
+
+        if (chain.Count == 0)
+        {
+            _sawmill.Error($"ai.llm_chain = «{raw}», но ни один профиль не найден — работаю по ai.endpoint");
+            return null;
+        }
+
+        _quota ??= new LlmQuotaState(DataDir(), _sawmill);
+
+        var options = new LlmRouterOptions(
+            _cfg.GetCVar(AiCVars.LlmCooldownSeconds),
+            _cfg.GetCVar(AiCVars.LlmQuotaCooldownSeconds),
+            _cfg.GetCVar(AiCVars.LlmRecheckSeconds),
+            _cfg.GetCVar(AiCVars.LlmTotalTimeout));
+
+        return new RoutingLlmClient(chain, _quota, options, _sawmill);
+    }
+
+    /// <summary>Как было до профилей: один эндпоинт из CVar'ов.</summary>
+    private ILlmClient BuildSingleEndpoint()
+    {
+        var endpoint = _cfg.GetCVar(AiCVars.Endpoint);
+
+        // Диалект приходится выводить, потому что у одиночной настройки его негде взять — и вывод
+        // подобран так, чтобы ни одна существующая конфигурация не изменила поведения. Всё, кроме
+        // DeepSeek, получает набор полей llama.cpp, то есть ровно то, что уходило в провод раньше;
+        // DeepSeek теперь перестаёт получать четыре поля, которых он не документирует и которые
+        // терпел молча. Явный диалект — это профиль, и путь через профили и есть правильный.
+        var dialect = endpoint.Contains("deepseek.com", StringComparison.OrdinalIgnoreCase)
+            ? LlmDialect.DeepSeek
+            : LlmDialect.LlamaCpp;
+
+        _sawmill.Info($"одиночный эндпоинт {endpoint}, диалект {dialect} (цепочка ai.llm_chain не задана)");
+
+        return new LlamaClient(
+            new LlmEndpoint(
+                Id: "single",
+                BaseUrl: endpoint,
+                Model: _cfg.GetCVar(AiCVars.Model),
+                ApiKey: _cfg.GetCVar(AiCVars.ApiKey),
+                Dialect: dialect,
+                Timeout: TimeSpan.FromSeconds(_cfg.GetCVar(AiCVars.RequestTimeout)),
+                CtxProbe: LlmCtxProbe.Props),
+            new LlmSampling(
+                _cfg.GetCVar(AiCVars.Temperature),
+                _cfg.GetCVar(AiCVars.TopP),
+                _cfg.GetCVar(AiCVars.TopK),
+                _cfg.GetCVar(AiCVars.MinP),
+                _cfg.GetCVar(AiCVars.MaxTokens),
+                IdSlot: 0,
+                ThinkingEffort: _cfg.GetCVar(AiCVars.ThinkingEffort)),
+            _sawmill);
+    }
+
+    private LlmEndpoint EndpointFor(AiLlmProfilePrototype profile) => new(
+        Id: profile.ID,
+        BaseUrl: profile.Endpoint,
+        Model: profile.Model,
+        ApiKey: KeyFor(profile),
+        Dialect: profile.Dialect,
+        Timeout: TimeSpan.FromSeconds(profile.TimeoutSeconds > 0f
+            ? profile.TimeoutSeconds
+            : _cfg.GetCVar(AiCVars.RequestTimeout)),
+        Proxy: profile.Proxy,
+        SocksProxy: _cfg.GetCVar(AiCVars.LlmSocksProxy),
+        CtxProbe: profile.CtxProbe,
+        CtxLimit: profile.CtxLimit,
+        ReportsCache: profile.ReportsCache);
+
+    private LlmSampling SamplingFor(AiLlmProfilePrototype profile) => new(
+        _cfg.GetCVar(AiCVars.Temperature),
+        _cfg.GetCVar(AiCVars.TopP),
+        _cfg.GetCVar(AiCVars.TopK),
+        _cfg.GetCVar(AiCVars.MinP),
+        _cfg.GetCVar(AiCVars.MaxTokens),
+        IdSlot: profile.Dialect == LlmDialect.LlamaCpp ? 0 : null,
+        ThinkingEffort: string.IsNullOrWhiteSpace(profile.ReasoningEffort)
+            ? _cfg.GetCVar(AiCVars.ThinkingEffort)
+            : profile.ReasoningEffort);
+
+    /// <summary>
+    /// Ключ профиля: из файла в <c>ai.data_dir</c>, иначе из <c>ai.api_key</c>.
+    ///
+    /// Имя файла, а не значение, лежит в прототипе по одной причине:
+    /// <c>Content.Server/Acz/ContentMagicAczProvider.cs</c> раздаёт всю папку <c>Resources/</c>
+    /// каждому подключившемуся игроку, так что ключ в YAML уехал бы к первому зашедшему.
+    /// </summary>
+    private string KeyFor(AiLlmProfilePrototype profile)
+    {
+        if (string.IsNullOrWhiteSpace(profile.KeyFile))
+            return _cfg.GetCVar(AiCVars.ApiKey);
+
+        var path = System.IO.Path.Combine(DataDir(), profile.KeyFile);
+
+        try
+        {
+            if (!System.IO.File.Exists(path))
+            {
+                _sawmill.Error($"профиль {profile.ID}: файла ключа {path} нет — запросы пойдут без авторизации");
+                return string.Empty;
+            }
+
+            return System.IO.File.ReadAllText(path).Trim();
+        }
+        catch (Exception e)
+        {
+            _sawmill.Error($"профиль {profile.ID}: не удалось прочитать {path}: {e.Message}");
+            return string.Empty;
+        }
     }
 
     // ----------------------------------------------------------------- perception

@@ -1,15 +1,40 @@
 using System.Collections.Generic;
+using System.Globalization;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Robust.Shared.Analyzers;
 
 namespace Content.Server.AiAgent.Llm;
 
 /// <summary>
-/// OpenAI-compatible client aimed at llama-swap / llama-server.
+/// Всё, что клиенту нужно знать про один эндпоинт.
+///
+/// Отдельной записью, а не набором аргументов конструктора: провайдеров теперь несколько, у каждого
+/// свой прокси, свой диалект и свой таймаут, и семь позиционных параметров подряд — приглашение
+/// перепутать два из них местами.
+/// </summary>
+public sealed record LlmEndpoint(
+    string Id,
+    string BaseUrl,
+    string Model,
+    string ApiKey,
+    LlmDialect Dialect,
+    TimeSpan Timeout,
+    LlmProxyMode Proxy = LlmProxyMode.None,
+    string SocksProxy = "",
+    LlmCtxProbe CtxProbe = LlmCtxProbe.None,
+    int CtxLimit = 0,
+    bool ReportsCache = true);
+
+/// <summary>
+/// OpenAI-compatible client aimed at llama-swap / llama-server, DeepSeek and any strict
+/// OpenAI-shaped endpoint. Which of the three it is talking to is decided by
+/// <see cref="LlmEndpoint.Dialect"/>.
 ///
 /// <c>Content.Server</c> is not sandbox-checked (<c>ServerOptions.Sandboxing = false</c>, and
 /// upstream's own <c>SandboxTest</c> only inspects Content.Client and Content.Shared), so
@@ -20,34 +45,53 @@ public sealed class LlamaClient : ILlmClient, IDisposable
 {
     private readonly HttpClient _http;
     private readonly ISawmill _sawmill;
+    private readonly LlmEndpoint _endpoint;
     private readonly string _baseUrl;
     private readonly string _model;
     private readonly LlmSampling _sampling;
 
-    /// <param name="baseUrl">Such as <c>http://127.0.0.1:9292/v1</c>.</param>
-    public LlamaClient(string baseUrl, string model, string apiKey, LlmSampling sampling, TimeSpan timeout, ISawmill sawmill)
+    public LlmEndpoint Endpoint => _endpoint;
+
+    public LlamaClient(LlmEndpoint endpoint, LlmSampling sampling, ISawmill sawmill)
     {
-        _baseUrl = baseUrl.TrimEnd('/');
-        _model = model;
+        _endpoint = endpoint;
+        _baseUrl = endpoint.BaseUrl.TrimEnd('/');
+        _model = endpoint.Model;
         _sampling = sampling;
         _sawmill = sawmill;
 
-        // Explicitly proxy-free. This box exports HTTP_PROXY=http://127.0.0.1:10809 and
-        // ALL_PROXY=socks5h://127.0.0.1:10808 globally, which swallows requests to localhost and
-        // hangs them. Relying on NO_PROXY is not enough: HttpClient.DefaultProxy is read from the
-        // environment once at process start and NO_PROXY wildcard semantics vary between runtimes.
+        // Прокси задаётся по профилю, и «никакого прокси» — не значение по умолчанию, а требование.
+        //
+        // Эта машина экспортирует HTTP_PROXY=http://127.0.0.1:10809 и
+        // ALL_PROXY=socks5h://127.0.0.1:10808 глобально, и запрос на loopback, ушедший в прокси,
+        // просто зависает. Полагаться на NO_PROXY нельзя: HttpClient.DefaultProxy читается из
+        // окружения один раз при старте процесса, а семантика подстановочных знаков в NO_PROXY
+        // отличается между рантаймами. Поэтому локальные профили ходят с выключенным прокси
+        // принудительно, а облачные — с явно указанным SOCKS, и ни один из двух случаев не зависит
+        // от того, что оказалось в окружении сервиса.
         var handler = new SocketsHttpHandler
         {
-            UseProxy = false,
-            Proxy = null,
             AllowAutoRedirect = false,
             PooledConnectionLifetime = TimeSpan.FromMinutes(10),
         };
 
-        _http = new HttpClient(handler) { Timeout = timeout };
+        if (endpoint.Proxy == LlmProxyMode.Socks && !string.IsNullOrWhiteSpace(endpoint.SocksProxy))
+        {
+            // .NET 6+ понимает socks4://, socks4a:// и socks5:// прямо в WebProxy — своей
+            // библиотеки для SOCKS не требуется.
+            handler.Proxy = new WebProxy(endpoint.SocksProxy);
+            handler.UseProxy = true;
+        }
+        else
+        {
+            handler.Proxy = null;
+            handler.UseProxy = false;
+        }
 
-        if (!string.IsNullOrWhiteSpace(apiKey))
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        _http = new HttpClient(handler) { Timeout = endpoint.Timeout };
+
+        if (!string.IsNullOrWhiteSpace(endpoint.ApiKey))
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
     }
 
     public async Task<LlmResponse> ChatAsync(
@@ -55,6 +99,8 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         IReadOnlyList<ToolDto>? tools,
         CancellationToken ct)
     {
+        var dialect = _endpoint.Dialect;
+
         var request = new ChatRequestDto
         {
             Model = _model,
@@ -65,13 +111,24 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             Stream = false,
             Temperature = _sampling.Temperature,
             TopP = _sampling.TopP,
-            TopK = _sampling.TopK,
-            MinP = _sampling.MinP,
-            MaxTokens = _sampling.MaxTokens > 0 ? _sampling.MaxTokens : null,
-            CachePrompt = true,
-            IdSlot = _sampling.IdSlot,
 
-            Thinking = ThinkingRequest.Build(_sampling.ThinkingEffort),
+            // Ниже — поля, которых у OpenAI нет. Каждое отправляется только тому, кто его понимает:
+            // llama-server незнакомое поле игнорирует молча, строгая API отвечает 400, и без этого
+            // фильтра «провайдер лежит» было не отличить от «провайдер не понял четвёртое поле».
+            TopK = LlmDialectRules.AllowsSamplerExtras(dialect) ? _sampling.TopK : null,
+            MinP = LlmDialectRules.AllowsSamplerExtras(dialect) ? _sampling.MinP : null,
+
+            MaxTokens = _sampling.MaxTokens > 0 ? _sampling.MaxTokens : null,
+            CachePrompt = LlmDialectRules.AllowsCachePrompt(dialect) ? true : null,
+            IdSlot = LlmDialectRules.AllowsIdSlot(dialect) ? _sampling.IdSlot : null,
+
+            Thinking = LlmDialectRules.AllowsThinking(dialect)
+                ? ThinkingRequest.Build(_sampling.ThinkingEffort)
+                : null,
+
+            ReasoningEffort = LlmDialectRules.AllowsReasoningEffort(dialect)
+                ? ReasoningEffortRequest.Build(_sampling.ThinkingEffort)
+                : null,
         };
 
         var body = JsonSerializer.Serialize(request, LlmJson.Options);
@@ -85,10 +142,113 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         {
             // Include the body: llama-server puts the actual reason (bad template, context
             // overflow, unknown model alias) there, and without it every failure looks the same.
-            throw new LlmException($"HTTP {(int)response.StatusCode} from {_baseUrl}: {Truncate(raw, 600)}");
+            throw new LlmHttpException(
+                (int) response.StatusCode,
+                Truncate(raw, 600),
+                RetryAfterOf(response),
+                $"HTTP {(int) response.StatusCode} from {_baseUrl}: {Truncate(raw, 600)}");
         }
 
         return Parse(raw, (DateTime.UtcNow - started).TotalSeconds);
+    }
+
+    /// <summary>
+    /// Когда провайдер разрешил повторить попытку, если он это сказал.
+    ///
+    /// Для подписки это самое ценное поле во всём ответе: исчерпанная квота — состояние с известным
+    /// концом, и знать его точно означает не тратить остаток пробами. <c>Retry-After</c> по
+    /// стандарту приходит либо секундами, либо HTTP-датой; заголовки сброса лимитов пишут все
+    /// по-своему, поэтому берём первый, который удаётся понять.
+    /// </summary>
+    private static DateTime? RetryAfterOf(HttpResponseMessage response)
+    {
+        var retry = response.Headers.RetryAfter;
+        if (retry != null)
+        {
+            if (retry.Delta is { } delta)
+                return DateTime.UtcNow + delta;
+            if (retry.Date is { } date)
+                return date.UtcDateTime;
+        }
+
+        foreach (var name in RateLimitResetHeaders)
+        {
+            if (!response.Headers.TryGetValues(name, out var values))
+                continue;
+
+            foreach (var value in values)
+            {
+                if (TryParseReset(value, out var when))
+                    return when;
+            }
+        }
+
+        return null;
+    }
+
+    private static readonly string[] RateLimitResetHeaders =
+    {
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens",
+        "x-ratelimit-reset",
+        "ratelimit-reset",
+    };
+
+    /// <summary>
+    /// Формы, в которых встречается время сброса: «12s», «1m30s», «45» (секунды) и unix-секунды.
+    /// Всё, что не разобралось, честно отдаётся как «не знаю», а не как ноль.
+    /// </summary>
+    private static bool TryParseReset(string value, out DateTime when)
+    {
+        when = default;
+        value = value.Trim();
+        if (value.Length == 0)
+            return false;
+
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var plain))
+        {
+            // Больше года в секундах — значит это unix-время, а не задержка.
+            when = plain > 31_536_000
+                ? DateTimeOffset.FromUnixTimeSeconds((long) plain).UtcDateTime
+                : DateTime.UtcNow.AddSeconds(plain);
+            return true;
+        }
+
+        double seconds = 0;
+        var number = 0d;
+        var seen = false;
+        var hasNumber = false;
+
+        foreach (var c in value)
+        {
+            if (char.IsDigit(c))
+            {
+                number = number * 10 + (c - '0');
+                hasNumber = true;
+                continue;
+            }
+
+            if (!hasNumber)
+                return false;
+
+            switch (char.ToLowerInvariant(c))
+            {
+                case 'h': seconds += number * 3600; break;
+                case 'm': seconds += number * 60; break;
+                case 's': seconds += number; break;
+                default: return false;
+            }
+
+            seen = true;
+            number = 0;
+            hasNumber = false;
+        }
+
+        if (!seen)
+            return false;
+
+        when = DateTime.UtcNow.AddSeconds(seconds);
+        return true;
     }
 
     private LlmResponse Parse(string raw, double seconds)
@@ -182,11 +342,20 @@ public sealed class LlamaClient : ILlmClient, IDisposable
                 "вызов инструмента мог не дописаться; подними ai.max_tokens");
         }
 
-        return new LlmResponse(text, calls, prompt, cached, completion, seconds, finishReason, reasoning);
+        return new LlmResponse(
+            text, calls, prompt, cached, completion, seconds, finishReason, reasoning,
+            _endpoint.Id, _endpoint.ReportsCache);
     }
 
     public async Task<int?> GetContextSizeAsync(CancellationToken ct)
     {
+        // Спрашивать /props умеет только llama-server. У всех остальных это 404, и раньше он
+        // приходил, логировался предупреждением и оставлял порог компакции на печатном
+        // ai.compact_high — то есть на модели с контекстом в четыреста тысяч токенов агент
+        // компактился так же часто, как на локальной.
+        if (_endpoint.CtxProbe != LlmCtxProbe.Props)
+            return _endpoint.CtxLimit > 0 ? _endpoint.CtxLimit : null;
+
         // /props lives on llama-server itself, one level above the /v1 prefix. Through llama-swap
         // it needs the model in the query string so the proxy knows which upstream to ask.
         var root = _baseUrl.EndsWith("/v1", StringComparison.Ordinal)
@@ -199,7 +368,7 @@ public sealed class LlamaClient : ILlmClient, IDisposable
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
-                return null;
+                return _endpoint.CtxLimit > 0 ? _endpoint.CtxLimit : null;
 
             var raw = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(raw);
@@ -212,13 +381,15 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             }
 
             var direct = GetInt(doc.RootElement, "n_ctx");
-            return direct > 0 ? direct : null;
+            if (direct > 0)
+                return direct;
         }
         catch (Exception e)
         {
             _sawmill.Debug($"could not read /props: {e.Message}");
-            return null;
         }
+
+        return _endpoint.CtxLimit > 0 ? _endpoint.CtxLimit : null;
     }
 
     private static int GetInt(JsonElement el, string name)
@@ -256,6 +427,28 @@ public static partial class ThinkingRequest
     };
 }
 
+/// <summary>
+/// То же усилие, но в форме строгого OpenAI — плоским полем <c>reasoning_effort</c>.
+///
+/// Отдельно от <see cref="ThinkingRequest"/>, потому что наборы значений не совпадают. У DeepSeek
+/// «выключить» выражается объектом <c>{"type":"disabled"}</c>; у OpenAI такого значения нет вовсе,
+/// и <c>reasoning_effort: "off"</c> — это HTTP 400. Общая настройка <c>ai.thinking_effort</c> одна
+/// на всех, так что перевод обязан быть здесь, а не в конфиге: иначе выставленное для локальной
+/// модели «off» роняло бы подписочный профиль, и роутер честно счёл бы его несовместимым.
+/// </summary>
+public static class ReasoningEffortRequest
+{
+    public static string? Build(string effort) => effort.Trim().ToLowerInvariant() switch
+    {
+        "" or "off" or "disabled" or "none" => null,
+        "minimal" or "low" or "medium" or "high" => effort.Trim().ToLowerInvariant(),
+
+        // Неизвестный уровень не посылаем вовсе: у провайдера останется его собственный
+        // умолчательный, что заведомо лучше отказа на каждом ходу из-за опечатки в CVar.
+        _ => null,
+    };
+}
+
 public sealed record LlmSampling(
     float Temperature,
     float TopP,
@@ -265,9 +458,41 @@ public sealed record LlmSampling(
     int? IdSlot,
     string ThinkingEffort = "");
 
-public sealed class LlmException : Exception
+/// <summary>
+/// Отказ модели. <c>[Virtual]</c>, а не sealed, чтобы <see cref="LlmHttpException"/> мог его
+/// уточнить: RobustToolbox запрещает неявное наследование анализатором RA0003.
+/// </summary>
+[Virtual]
+public class LlmException : Exception
 {
     public LlmException(string message) : base(message)
     {
+    }
+}
+
+/// <summary>
+/// Отказ, у которого есть код и, если повезло, время следующей попытки.
+///
+/// Раньше всякая неудача была одной и той же <see cref="LlmException"/> со строкой внутри, и
+/// роутеру пришлось бы разбирать текст, чтобы отличить «квота на подписке кончилась до вечера» от
+/// «токен отозван, нужен человек» и от «провайдер не понял поле». Разница здесь принципиальная:
+/// первое лечится длинным сном, второе — только руками, третье вообще нельзя повторять.
+/// </summary>
+public sealed class LlmHttpException : LlmException
+{
+    public int StatusCode { get; }
+
+    /// <summary>Тело ответа, обрезанное. У llama-server там настоящая причина.</summary>
+    public string Body { get; }
+
+    /// <summary>Когда провайдер разрешил повторить, если сказал.</summary>
+    public DateTime? RetryAfterUtc { get; }
+
+    public LlmHttpException(int statusCode, string body, DateTime? retryAfterUtc, string message)
+        : base(message)
+    {
+        StatusCode = statusCode;
+        Body = body;
+        RetryAfterUtc = retryAfterUtc;
     }
 }
