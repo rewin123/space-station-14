@@ -106,6 +106,19 @@ public sealed class ScriptTools
             Handler = (args, ct) => Task.FromResult(Stop(table, args)),
         });
 
+        registry.Register(new AiTool
+        {
+            Name = "help",
+            Description = "Справка по функциям: что принимает инструмент.",
+            SchemaJson =
+                """
+                {"type":"object","additionalProperties":false,"properties":{
+                "tool":{"type":"string"}}}
+                """,
+            Wire = false,
+            Handler = (args, ct) => Task.FromResult(Help(session, args)),
+        });
+
         // Последней строкой: до неё провод должен быть собран целиком.
         registry.WireAllow = WireNames;
     }
@@ -196,6 +209,89 @@ public sealed class ScriptTools
             process.Detail ?? "скрипт не доработал",
             retry: "other_target",
             effect: effect);
+    }
+
+    /// <summary>
+    /// Справка по функциям, читаемая из самих схем инструментов.
+    ///
+    /// <para>
+    /// Появилась не для удобства, а чтобы закрыть дыру режима. В классическом режиме описания и
+    /// схемы инструментов уходят модели полем <c>tools</c> и являются единственным источником
+    /// правды о том, что инструмент принимает. Режим скрипта их с провода снимает — и всё, чего
+    /// не пересказал промпт, для модели перестаёт существовать. На боевом прогоне это стоило
+    /// запуска реактора: агент десять ходов не мог вставить банку в контроллер, потому что не
+    /// знал про аргумент <c>with_item</c>, а тот жил только в схеме.
+    /// </para>
+    /// <para>
+    /// Пересказывать схемы в промпте было бы вторым источником правды, который разойдётся с
+    /// первым на первой же правке инструмента. Здесь справка читается из реестра, поэтому
+    /// расходиться нечему.
+    /// </para>
+    /// </summary>
+    private static ToolResult Help(AgentSession session, JsonElement args)
+    {
+        StationAiAgentSystem.TryGetString(args, "tool", out var wanted);
+
+        if (!string.IsNullOrWhiteSpace(wanted))
+        {
+            if (!session.Registry.TryGet(wanted!, out var one))
+            {
+                return ToolResult.Fail(ToolError.UnknownTool, $"нет функции «{wanted}»",
+                    retry: "other_target", alternatives: session.Registry.Nearest(wanted!));
+            }
+
+            return ToolResult.Success(new Dictionary<string, object?>
+            {
+                ["функция"] = one.Name,
+                ["описание"] = one.Description,
+                ["аргументы"] = one.SchemaJson,
+            });
+        }
+
+        var rows = new List<string>();
+
+        foreach (var tool in session.Registry.Tools.OrderBy(t => t.Name, StringComparer.Ordinal))
+        {
+            if (WireNames.Contains(tool.Name))
+                continue;
+
+            var name = ScriptRuntime.AliasOf(tool.Name) ?? tool.Name;
+            rows.Add($"{name}{{{Signature(tool)}}} — {tool.Description}");
+        }
+
+        return ToolResult.Success(new Dictionary<string, object?> { ["функции"] = rows });
+    }
+
+    /// <summary>Имена аргументов из схемы; обязательные помечены звёздочкой.</summary>
+    private static string Signature(AiTool tool)
+    {
+        try
+        {
+            using var schema = JsonDocument.Parse(tool.SchemaJson);
+
+            if (!schema.RootElement.TryGetProperty("properties", out var properties))
+                return "";
+
+            var required = new HashSet<string>(StringComparer.Ordinal);
+
+            if (schema.RootElement.TryGetProperty("required", out var list)
+                && list.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in list.EnumerateArray())
+                {
+                    var value = item.GetString();
+                    if (value != null)
+                        required.Add(value);
+                }
+            }
+
+            return string.Join(", ", properties.EnumerateObject()
+                .Select(p => required.Contains(p.Name) ? p.Name + "*" : p.Name));
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
     }
 
     private static ToolResult Output(ScriptProcessTable table, JsonElement args)

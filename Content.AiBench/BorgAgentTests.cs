@@ -1,5 +1,6 @@
 using System.Linq;
 using System;
+using System.Globalization;
 using System.Numerics;
 using System.Threading.Tasks;
 using Content.Server.AiAgent;
@@ -52,6 +53,125 @@ public sealed class BorgAgentTests
 
         await w.Pair.Server.WaitRunTicks(5);
         return borg;
+    }
+
+    [Test]
+    public async Task LookDelta_IsInTheSameFrameAsSelfAndGoto()
+    {
+        // Три числа обязаны жить в одной системе координат: «я» из SELF, Δ из look и точка,
+        // которую понимает goto. Пока Δ считалась в координатах КАРТЫ, а всё остальное в
+        // координатах СЕТКИ, арифметика модели молча давала чужой тайл — расхождение видно только
+        // на повёрнутой сетке, поэтому сетка здесь поворачивается нарочно. На боевом прогоне это
+        // выглядело так: робот считал координату соседней клетки, шёл по ней и оказывался в
+        // соседнем отсеке, раз за разом.
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+
+        await w.Post(() =>
+        {
+            var xforms = w.Pair.Server.System<SharedTransformSystem>();
+            xforms.SetWorldRotation(w.Grid, Angle.FromDegrees(90));
+        });
+        await w.Pair.Server.WaitRunTicks(10);
+
+        var seen = await w.InvokeOn(borg, "look");
+        var rows = seen.EffectJson().Split('"').Where(x => x.Contains(" | Δ(", StringComparison.Ordinal)).ToList();
+        Assert.That(rows, Is.Not.Empty, $"обзор пуст: {seen.EffectJson()}");
+
+        // Берём первый объект с ненулевой Δ: на нулевой поворот не проверить.
+        var checkedAny = false;
+
+        foreach (var row in rows)
+        {
+            var handle = row[..row.IndexOf(' ')];
+            var delta = row[(row.IndexOf("Δ(", StringComparison.Ordinal) + 2)..].TrimEnd(')');
+            var parts = delta.Split(',');
+            var dx = float.Parse(parts[0], CultureInfo.InvariantCulture);
+            var dy = float.Parse(parts[1], CultureInfo.InvariantCulture);
+
+            if (Math.Abs(dx) < 1 && Math.Abs(dy) < 1)
+                continue;
+
+            var expected = await w.Read(() =>
+            {
+                var session = w.System.GetSession(borg);
+                if (session == null || !session.Handles.TryResolve(handle, out var uid))
+                    return (Vector2?) null;
+
+                var xforms = w.Pair.Server.System<SharedTransformSystem>();
+                var toGrid = xforms.GetInvWorldMatrix(w.Grid);
+                var here = Vector2.Transform(xforms.GetMapCoordinates(borg).Position, toGrid);
+                var there = Vector2.Transform(xforms.GetMapCoordinates(uid).Position, toGrid);
+                return there - here;
+            });
+
+            if (expected == null)
+                continue;
+
+            checkedAny = true;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(dx, Is.EqualTo(expected.Value.X).Within(0.6f),
+                    $"{handle}: Δx разъехалась — look={dx}, сетка={expected.Value.X}");
+                Assert.That(dy, Is.EqualTo(expected.Value.Y).Within(0.6f),
+                    $"{handle}: Δy разъехалась — look={dy}, сетка={expected.Value.Y}");
+            });
+
+            break;
+        }
+
+        Assert.That(checkedAny, Is.True, "не нашлось ни одного объекта с ненулевой Δ — проверять нечего");
+    }
+
+    [Test]
+    public async Task CarriedItem_SurvivesAModuleSwitch_AndCanStillBeDropped()
+    {
+        // Живая поломка, стоившая роботу всей работы с предметами. Апстрим вешает
+        // UnremoveableComponent на всё, что оказалось в руке модуля без белого списка
+        // (SharedBorgSystem.Module.cs, IsItemInHandUnremovable). Для штатных модулей это верно —
+        // лом приварен к руке. Для пустого манипулятора это значило: взял флэтпак, переключил
+        // модуль — и груз приварился навсегда, дальше «нет свободной руки» на каждую попытку
+        // что-либо взять. На бою робот полтора десятка ходов перебирал модули, пытаясь его
+        // выложить.
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+
+        var crowbar = EntityUid.Invalid;
+        await w.Post(() => crowbar = w.Ent.SpawnEntity("Crowbar",
+            w.Ent.GetComponent<TransformComponent>(borg).Coordinates));
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var handle = await w.Read(() => w.System.HandleFor(borg, crowbar));
+
+        await w.InvokeOn(borg, "module", """{"name":"manipulator"}""");
+        var took = await w.InvokeOn(borg, "pickup", $$"""{"target":"{{handle}}"}""");
+        Assert.That(took.Ok, Is.True, took.ToJson());
+
+        // Круг по модулям — именно он и приваривал груз.
+        await w.InvokeOn(borg, "module", """{"name":"tool"}""");
+        await w.InvokeOn(borg, "module", """{"name":"manipulator"}""");
+
+        var stuck = await w.Read(() =>
+            w.Ent.HasComponent<Content.Shared.Interaction.Components.UnremoveableComponent>(crowbar));
+        var put = await w.InvokeOn(borg, "drop");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stuck, Is.False, "груз приварился к руке при смене модуля");
+            Assert.That(put.Ok, Is.True, $"взятое обязано выкладываться обратно: {put.ToJson()}");
+        });
+
+        // Лишний цикл модулей после выкладывания — не ритуал, а уборка чужой бухгалтерии.
+        //
+        // Апстрим помнит содержимое рук деселектнутого модуля в StoredItems и не чистит эту запись
+        // при выкладывании предмета. На разборе стенда он пытается вынуть уже удалённую сущность
+        // из контейнера и пишет ERRO про пропавший TransformComponent — а пул считает провалом
+        // ЛЮБОЙ ERRO в логе, и падал от этого СЛЕДУЮЩИЙ тест фикстуры, а не этот.
+        await w.InvokeOn(borg, "module", """{"name":"tool"}""");
+        await w.InvokeOn(borg, "module", """{"name":"manipulator"}""");
+        await w.Post(() => w.Ent.DeleteEntity(crowbar));
+        await w.Pair.Server.WaitRunTicks(5);
     }
 
     /// <summary>

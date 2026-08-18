@@ -183,8 +183,8 @@ public sealed partial class AiBorgSystem
             Handler = (a, ct) => _host.DeviceUiAsync(s, a, ct, param: "target", gate: (sess, uid) =>
                 _interaction.InRangeUnobstructed(sess.Brain, uid, 1.5f)
                     ? null
-                    : ToolResult.Fail(ToolError.NotVisible,
-                        "отсюда не дотянуться — сначала goto к этой машине", retry: "move_first")),
+                    : ToolResult.Fail(ToolError.NotVisible, Unreachable(sess.Brain, uid),
+                        retry: "move_first")),
         });
 
         // ------------------------------------------------------------------ речь
@@ -313,17 +313,22 @@ public sealed partial class AiBorgSystem
             if (args.TryGetProperty("count", out var cEl) && cEl.ValueKind == JsonValueKind.Number)
                 count = Math.Clamp(cEl.GetInt32(), 1, 10);
 
+            // Английские названия приняты наравне с русскими.
+            //
+            // Промпт и схема просят русские, но модель думает на смеси и регулярно пишет
+            // step{dir='north'}: поймано дважды на одном прогоне, каждый раз это стоило хода на
+            // отказ и хода на справку. Принимать оба написания дешевле, чем учить не ошибаться.
             var delta = dir!.ToLowerInvariant() switch
             {
-                "север" => new Vector2(0, 1),
-                "юг" => new Vector2(0, -1),
-                "запад" => new Vector2(-1, 0),
-                "восток" => new Vector2(1, 0),
+                "север" or "north" => new Vector2(0, 1),
+                "юг" or "south" => new Vector2(0, -1),
+                "запад" or "west" => new Vector2(-1, 0),
+                "восток" or "east" => new Vector2(1, 0),
                 _ => Vector2.Zero,
             };
 
             if (delta == Vector2.Zero)
-                return ToolResult.Fail(ToolError.BadArgs, $"step: не знаю направления '{dir}'");
+                return ToolResult.Fail(ToolError.BadArgs, $"step: не знаю направления '{dir}'. Годятся: север, юг, запад, восток (или north, south, west, east)");
 
             var xform = Transform(borg);
             var target = new EntityCoordinates(
@@ -351,7 +356,17 @@ public sealed partial class AiBorgSystem
             StationAiAgentSystem.TryGetString(args, "kind", out var kind);
 
             var rows = new List<string>();
-            var origin = _xform.GetMapCoordinates(borg);
+
+            // Δ считается в координатах СЕТКИ, а не карты.
+            //
+            // Расхождение систем координат ловится только на повёрнутой сетке — и ловится дорого.
+            // Модель читает своё положение из строки SELF (координаты сетки), прибавляет Δ из look
+            // и идёт по получившейся точке через goto, который тоже понимает сетку. Пока Δ считалась
+            // в координатах карты, эта арифметика молча давала чужой тайл: на боевом прогоне робот
+            // раз за разом уходил из АМЭ в соседний отсек с ТЭГ и не понимал, почему.
+            var grid = Transform(borg).GridUid;
+            var toGrid = grid != null ? _xform.GetInvWorldMatrix(grid.Value) : Matrix3x2.Identity;
+            var origin = Vector2.Transform(_xform.GetMapCoordinates(borg).Position, toGrid);
 
             foreach (var uid in VisibleFrom(borg))
             {
@@ -360,8 +375,8 @@ public sealed partial class AiBorgSystem
                     continue;
 
                 var handle = s.Handles.GetOrCreate(uid, k);
-                var there = _xform.GetMapCoordinates(uid);
-                var d = there.Position - origin.Position;
+                var there = Vector2.Transform(_xform.GetMapCoordinates(uid).Position, toGrid);
+                var d = there - origin;
 
                 rows.Add($"{handle} | {Identity.Name(uid, EntityManager)} | {_host.ShortState(uid)} " +
                          $"| Δ({d.X:F0},{d.Y:F0})");
@@ -397,6 +412,24 @@ public sealed partial class AiBorgSystem
                 ["описание"] = text,
             });
         }, ct);
+    }
+
+    /// <summary>
+    /// Почему до машины не дотянуться — с расстоянием, а не «сначала подойди».
+    ///
+    /// Отказ «сначала goto к этой машине» на боевом прогоне пришёл роботу ПОСЛЕ того, как он к ней
+    /// сходил: клетки вокруг были заняты ящиками, ближе он подойти не мог, и совет повторить то,
+    /// что уже сделано, отправил его на второй круг. Расстояние отличает «ты далеко» от «ты рядом,
+    /// но между вами что-то стоит», а это два разных следующих шага.
+    /// </summary>
+    private string Unreachable(EntityUid borg, EntityUid target)
+    {
+        var gap = (_xform.GetMapCoordinates(target).Position - _xform.GetMapCoordinates(borg).Position).Length();
+
+        return gap > 1.5f
+            ? $"не дотянуться: до цели {gap:F1} тайла, надо ближе"
+            : $"не дотянуться, хотя до цели всего {gap:F1} тайла — между вами что-то стоит. " +
+              "Обойди с другой стороны или убери помеху";
     }
 
     private Task<ToolResult> UseAsync(AgentSession s, JsonElement args, CancellationToken ct)

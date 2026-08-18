@@ -116,6 +116,29 @@ public sealed class ScriptToolTests
         Assert.That(result.ToJson(), Does.Contain("панель 3 поставлена"));
     }
 
+    [Test]
+    public async Task Help_ComesFromTheToolSchemas_NotFromTheProse()
+    {
+        // Дыра, которая стоила запуска реактора: в режиме скрипта схемы инструментов на провод не
+        // уходят, и всё, чего не пересказал промпт, для модели перестаёт существовать. Агент
+        // десять ходов не мог вставить банку в контроллер, потому что аргумент with_item жил
+        // только в схеме. Справка обязана читаться из реестра, иначе она разойдётся с ним на
+        // первой же правке инструмента.
+        await using var w = await AiWorld.CreateScripted();
+
+        var listed = await w.Invoke("script", """{"code":"local r = help() for _, l in ipairs(r.effect['функции']) do print(l) end"}""");
+        var one = await w.Invoke("script", """{"code":"local r = help{tool='device_action'} print(r.effect['аргументы'])"}""");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(listed.Ok, Is.True, listed.ToJson());
+            Assert.That(listed.ToJson(), Does.Contain("device_action"), "справка обязана перечислять инструменты тела");
+            Assert.That(listed.ToJson(), Does.Not.Contain("bp_stop"), "управление процессами — не функция скрипта");
+            Assert.That(one.Ok, Is.True, one.ToJson());
+            Assert.That(one.ToJson(), Does.Contain("action"), "схема обязана приехать целиком: " + one.ToJson());
+        });
+    }
+
     // ------------------------------------------------------------------ ошибки
 
     [Test]
