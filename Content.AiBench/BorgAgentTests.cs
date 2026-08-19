@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Globalization;
@@ -1121,6 +1122,341 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>Позиция предмета в координатах сетки, даже если он лежит в таре.</summary>
+
+    /// <summary>
+    /// Полная сборка экранирования: девять упаковок превращаются в квадрат 3×3, у которого
+    /// появляется ядро.
+    ///
+    /// <para>
+    /// Зачем отдельно от <see cref="Borg_StartsTheReactor"/>. Тот доказывает вторую половину дела —
+    /// топливо и запуск впрыска — но обходится ОДНОЙ упаковкой, а одна упаковка ядра не даёт:
+    /// ядром становится клетка, у которой все восемь соседей тоже экранирование
+    /// (<c>AmeNodeGroup.LoadNodes</c>). То есть впрыск включался, а мощность оставалась нулевой, и
+    /// именно этого на живых прогонах агент добиться не мог.
+    /// </para>
+    /// <para>
+    /// Тест ходит теми же инструментами, что и модель, в том же порядке, который записан в навыке:
+    /// от дальней клетки к выходу, с шагом назад перед распаковкой. Если он зелёный — инструментов
+    /// роботу хватает, и живой прогон проверяет уже только сообразительность модели. Если красный —
+    /// он называет ровно тот шаг, которого не хватает.
+    /// </para>
+    /// <para>
+    /// <b>Сейчас он красный, и это его работа.</b> Он поймал то, чего не видно ни на одном другом
+    /// сценарии: <c>goto</c> по координатам НЕ СТАВИТ робота на заказанную клетку. Строки
+    /// «НЕ ДОШЁЛ до (29,-41): встал на (28,-41)» повторяются все девять раз, а <c>goto</c> при
+    /// этом отвечает успехом. Для «подойти к двери» промах на клетку незаметен и никогда не
+    /// всплывал; для стройки он смертелен — упаковки ложатся мимо, квадрат не сходится, ядро не
+    /// появляется. Часть причины уже найдена и убрана (порог прибытия к последней клетке был
+    /// больше половины клетки), но промах остался, и корень сидит глубже — в выборе целевого
+    /// тайла маршрутом. Тест оставлен красным намеренно: он и есть постановка задачи.
+    /// </para>
+    /// </summary>
+    [Test]
+    [Explicit("длинный сценарий на карте ротации")]
+    public async Task Borg_BuildsShieldingSquare_AndGetsACore()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+
+        var borg = EntityUid.Invalid;
+        await w.Pair.Server.WaitPost(() =>
+        {
+            var sys = w.Pair.Server.System<AiBorgSystem>();
+            Assert.That(sys.TrySpawnBorg("AME", out borg, out var placed), Is.True, placed);
+            Assert.That(sys.TryClaim(borg, out var why), Is.True, why);
+        });
+
+        await w.Pair.Server.WaitRunTicks(120);
+
+        var controller = await w.Read(() =>
+        {
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeControllerComponent>();
+            return q.MoveNext(out var uid, out _) ? uid : EntityUid.Invalid;
+        });
+
+        Assert.That(controller.IsValid(), Is.True, "на карте нет пульта АМЭ");
+
+        // ---- шаг 1: вскрыть тару с упаковками ----
+        var crate = await w.Read(() =>
+        {
+            var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
+            var q = ent.EntityQueryEnumerator<MetaDataComponent>();
+
+            while (q.MoveNext(out var uid, out var meta))
+            {
+                if (meta.EntityPrototype?.ID != "AmePartFlatpack")
+                    continue;
+
+                if (!container.TryGetContainingContainer((uid, null, null), out var c))
+                    continue;
+
+                return c.Owner;
+            }
+
+            return EntityUid.Invalid;
+        });
+
+        Assert.That(crate.IsValid(), Is.True, "не нашёл тару с упаковками AME");
+
+        var crateHandle = await w.Read(() => w.System.HandleFor(borg, crate));
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + crateHandle + "\"}");
+        await WalkUntilNear(w, borg, crate, 1.4f);
+        // Нажатие на тару — переключатель, и первое снимает замок по ID, а не открывает.
+        // Ровно на этом агент терял ходы: жал по кругу и видел пустой пол.
+        var loose = 0;
+
+        for (var attempt = 0; attempt < 4 && loose == 0; attempt++)
+        {
+            var press = await w.InvokeOn(borg, "use", "{\"target\":\"" + crateHandle + "\"}");
+            await w.Pair.Server.WaitRunTicks(10);
+            loose = await w.Read(() => LoosePacks(ent).Count);
+            TestContext.Out.WriteLine($"ЯЩИК: нажатие {attempt + 1} ok={press.Ok} {press.Error}; на полу {loose}");
+        }
+
+        TestContext.Out.WriteLine($"ЯЩИК: упаковок на полу {loose}");
+        Assert.That(loose, Is.GreaterThanOrEqualTo(9), "для квадрата 3×3 нужно девять упаковок");
+
+        // ---- шаг 2: выбрать место под квадрат ----
+        var square = await w.Read(() => FindSquare(ent, w.Grid, controller));
+        Assert.That(square, Is.Not.Null, "рядом с пультом нет свободного места 3×3");
+
+        TestContext.Out.WriteLine("КВАДРАТ: " + string.Join(" ", square!.Select(c => $"({c.X},{c.Y})")));
+
+        var shieldsBefore = await w.Read(() => CountShields(ent));
+        TestContext.Out.WriteLine($"ЩИТОВ ДО НАЧАЛА: {shieldsBefore}");
+
+        // ---- шаг 3: разложить и распаковать, отступая к выходу ----
+        var built = 0;
+
+        foreach (var cell in square!)
+        {
+            var pack = await w.Read(() => LoosePacks(ent).FirstOrDefault());
+            TestContext.Out.WriteLine($"КЛЕТКА ({cell.X},{cell.Y}): беру упаковку {pack}");
+
+            if (!pack.IsValid())
+            {
+                TestContext.Out.WriteLine("упаковки кончились");
+                break;
+            }
+
+            var packHandle = await w.Read(() => w.System.HandleFor(borg, pack));
+
+            await w.InvokeOn(borg, "module", "{\"name\":\"manipulator\"}");
+            await w.InvokeOn(borg, "goto", "{\"to\":\"" + packHandle + "\"}");
+            await WalkUntilNear(w, borg, pack, 1.4f);
+
+            var took = await w.InvokeOn(borg, "pickup", "{\"target\":\"" + packHandle + "\"}");
+            if (!took.Ok)
+            {
+                TestContext.Out.WriteLine($"({cell.X},{cell.Y}): не взял упаковку — {took.Error} {took.Detail}");
+                break;
+            }
+
+            var goRes = await w.InvokeOn(borg, "goto", "{\"to\":\"" + cell.X + "," + cell.Y + "\"}");
+            var arrived = await WalkUntilAt(w, borg, cell);
+
+            if (!arrived)
+            {
+                var stoppedAt = await w.Read(() => ToTile(_worldOf(ent, borg)));
+                TestContext.Out.WriteLine(
+                    $"НЕ ДОШЁЛ до ({cell.X},{cell.Y}): встал на ({stoppedAt.X},{stoppedAt.Y}); goto ok={goRes.Ok} {goRes.Error} {goRes.Detail}");
+            }
+
+            await w.InvokeOn(borg, "drop");
+            await w.Pair.Server.WaitRunTicks(5);
+
+            // Шаг назад ПЕРЕД распаковкой: распакуешь под собой — окажешься внутри стены.
+            await w.InvokeOn(borg, "step", "{\"dir\":\"юг\",\"count\":1}");
+            await w.Pair.Server.WaitRunTicks(20);
+
+            await w.InvokeOn(borg, "module", "{\"name\":\"tool\"}");
+
+            // Ждущая версия — та самая, которую в режиме скрипта видно как use. Обычная
+            // возвращается на «действие НАЧАЛОСЬ», и тест, смотрящий только на ok, принял бы
+            // начатое за сделанное.
+            var unpacked = await w.InvokeOn(borg, "use_wait",
+                "{\"target\":\"" + packHandle + "\",\"tool\":\"multitool\"}");
+            await w.Pair.Server.WaitRunTicks(30);
+
+            var shields = await w.Read(() => CountShields(ent));
+            TestContext.Out.WriteLine(
+                $"({cell.X},{cell.Y}): распаковка ok={unpacked.Ok} {unpacked.Error} {unpacked.EffectJson()}; щитов теперь {shields}");
+
+            built = shields;
+        }
+
+        // ---- шаг 4: появилось ли ядро ----
+        var cores = await w.Read(() =>
+        {
+            var n = 0;
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeShieldComponent>();
+
+            while (q.MoveNext(out _, out var shield))
+            {
+                if (shield.IsCore)
+                    n++;
+            }
+
+            return n;
+        });
+
+        var where = await w.Read(() =>
+        {
+            var list = new List<string>();
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeShieldComponent>();
+
+            while (q.MoveNext(out var uid, out var shield))
+            {
+                var at = ToTile(_worldOf(ent, uid));
+                list.Add($"({at.X},{at.Y}){(shield.IsCore ? "*" : "")}");
+            }
+
+            return string.Join(" ", list);
+        });
+
+        TestContext.Out.WriteLine("ЩИТЫ СТОЯТ: " + where);
+        TestContext.Out.WriteLine($"ИТОГ: щитов {built}, ядер {cores}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(built, Is.GreaterThanOrEqualTo(9), "квадрат не собрался: щитов меньше девяти");
+            Assert.That(cores, Is.GreaterThanOrEqualTo(1), "щиты есть, а ядра нет — квадрат сложен неправильно");
+        });
+    }
+
+    /// <summary>Упаковки, лежащие на полу, а не в таре.</summary>
+    private static List<EntityUid> LoosePacks(IEntityManager ent)
+    {
+        var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
+        var found = new List<EntityUid>();
+        var q = ent.EntityQueryEnumerator<MetaDataComponent>();
+
+        while (q.MoveNext(out var uid, out var meta))
+        {
+            if (meta.EntityPrototype?.ID == "AmePartFlatpack" && !container.IsEntityInContainer(uid))
+                found.Add(uid);
+        }
+
+        return found;
+    }
+
+    private static int CountShields(IEntityManager ent)
+    {
+        var n = 0;
+        var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeShieldComponent>();
+
+        while (q.MoveNext(out _, out _))
+            n++;
+
+        return n;
+    }
+
+    /// <summary>
+    /// Девять клеток 3×3 рядом с пультом, в порядке «от дальней к выходу».
+    ///
+    /// Порядок здесь не украшение: он ровно тот, что записан в навыке, и именно он не даёт роботу
+    /// замуровать себя. Дальний ряд кладётся первым, ближний — последним, и после него робот уже
+    /// снаружи.
+    /// </summary>
+    private static List<Vector2i>? FindSquare(IEntityManager ent, EntityUid grid, EntityUid controller)
+    {
+        var maps = ent.System<SharedMapSystem>();
+        var lookup = ent.System<EntityLookupSystem>();
+        var gridComp = ent.GetComponent<MapGridComponent>(grid);
+        var origin = ToTile(_worldOf(ent, controller));
+
+        bool Free(Vector2i tile)
+        {
+            if (!maps.TryGetTileRef(grid, gridComp, tile, out var tileRef) || tileRef.Tile.IsEmpty)
+                return false;
+
+            var box = new Box2(tile.X + 0.1f, tile.Y + 0.1f, tile.X + 0.9f, tile.Y + 0.9f);
+            var here = new HashSet<EntityUid>();
+            lookup.GetLocalEntitiesIntersecting(grid, box, here, LookupFlags.Static | LookupFlags.Approximate);
+
+            foreach (var uid in here)
+            {
+                if (!ent.TryGetComponent<Robust.Shared.Physics.Components.PhysicsComponent>(uid, out var body))
+                    continue;
+
+                if (body.CanCollide && body.Hard && body.BodyType == Robust.Shared.Physics.BodyType.Static)
+                    return false;
+            }
+
+            return true;
+        }
+
+        // Квадраты вокруг пульта, ближние сначала.
+        for (var dy = -4; dy <= 2; dy++)
+        {
+            for (var dx = -4; dx <= 2; dx++)
+            {
+                var corner = new Vector2i(origin.X + dx, origin.Y + dy);
+                var cells = new List<Vector2i>();
+                var ok = true;
+
+                for (var y = 2; y >= 0 && ok; y--)
+                {
+                    for (var x = 0; x < 3 && ok; x++)
+                    {
+                        var tile = new Vector2i(corner.X + x, corner.Y + y);
+                        if (!Free(tile))
+                            ok = false;
+                        else
+                            cells.Add(tile);
+                    }
+                }
+
+                // Ниже квадрата нужна свободная клетка: туда робот отступает перед распаковкой.
+                if (ok && Free(new Vector2i(corner.X + 1, corner.Y - 1)))
+                    return cells;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Дождаться, пока робот подойдёт к цели ближе, чем на <paramref name="range"/>.</summary>
+    private static async Task WalkUntilNear(AiStation w, EntityUid borg, EntityUid target, float range)
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+
+            var close = await w.Read(() =>
+                (_worldOf(w.Ent, borg) - _worldOf(w.Ent, target)).Length() < range);
+
+            if (close)
+                return;
+        }
+    }
+
+    /// <summary>Дождаться, пока робот встанет ровно на клетку.</summary>
+    private static async Task<bool> WalkUntilAt(AiStation w, EntityUid borg, Vector2i cell)
+    {
+        for (var i = 0; i < 200; i++)
+        {
+            await w.Pair.Server.WaitRunTicks(10);
+
+            var there = await w.Read(() => ToTile(_worldOf(w.Ent, borg)) == cell);
+            if (there)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Позиция в НОМЕР КЛЕТКИ, с округлением вниз.
+    ///
+    /// Приведение (Vector2i) отсекает дробную часть К НУЛЮ, а не вниз: -41.5 превращается в -41,
+    /// хотя клетка это -42. Половина станции на карте живёт в отрицательных координатах, поэтому
+    /// такое приведение ошибается ровно там, где идёт вся работа. Тест сборки на этом молча
+    /// разложил упаковки по дороге: ожидание «встал на клетку» не совпадало никогда.
+    /// </summary>
+    private static Vector2i ToTile(Vector2 position) =>
+        new((int) MathF.Floor(position.X), (int) MathF.Floor(position.Y));
+
     private static Vector2 _worldOf(IEntityManager ent, EntityUid uid)
     {
         var xform = ent.GetComponent<TransformComponent>(uid);

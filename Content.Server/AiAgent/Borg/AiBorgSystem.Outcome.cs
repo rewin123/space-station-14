@@ -40,7 +40,16 @@ public sealed partial class AiBorgSystem
 
     private TargetSnapshot Snapshot(EntityUid uid)
     {
-        if (!Exists(uid) || TerminatingOrDeleted(uid))
+        // Очередь на удаление — это тоже «вещи больше нет».
+        //
+        // Половина полезных применений УНИЧТОЖАЕТ цель: упаковка превращается в машину, деталь
+        // уходит в конструкцию, реагент расходуется. Удаляют такое через QueueDel, то есть
+        // ОТЛОЖЕННО, до конца тика; а снимок «после» снимается тут же, в том же тике. Без этой
+        // проверки Exists ещё true, разницы не видно — и инструмент докладывал «НЕ ПОЛУЧИЛОСЬ,
+        // инструмент к этой вещи не применяется» ровно в тот момент, когда всё получилось.
+        // Поймано тестом сборки экранирования: девять упаковок стали щитами, и все девять раз
+        // робот услышал, что мультитул тут не при чём.
+        if (!Exists(uid) || TerminatingOrDeleted(uid) || EntityManager.IsQueuedForDeletion(uid))
             return new TargetSnapshot(null, null, null, null, 0f, false);
 
         string? door = null;
