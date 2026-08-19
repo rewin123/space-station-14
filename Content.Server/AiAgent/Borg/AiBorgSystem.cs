@@ -3,6 +3,7 @@ using System.Linq;
 using Content.Server.AiAgent.Components;
 using Content.Server.AiAgent.Core;
 using Content.Shared.DoAfter;
+using Robust.Shared.Containers;
 using Content.Server.GameTicking;
 using Content.Shared.GameTicking;
 using Content.Server.Mind;
@@ -32,6 +33,7 @@ public sealed partial class AiBorgSystem : EntitySystem
     [Dependency] private SharedBorgSystem _borg = default!;
     [Dependency] private MobStateSystem _mobState = default!;
     [Dependency] private SharedDoAfterSystem _doAfter = default!;
+    [Dependency] private SharedContainerSystem _container = default!;
     [Dependency] private MetaDataSystem _metaData = default!;
     [Dependency] private IConfigurationManager _cfg = default!;
     [Dependency] private ILogManager _logManager = default!;

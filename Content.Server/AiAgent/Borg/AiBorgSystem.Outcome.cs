@@ -6,6 +6,7 @@ using Content.Shared.Doors.Components;
 using Content.Shared.Lock;
 using Content.Shared.Storage.Components;
 using Content.Shared.Tools.Components;
+using Robust.Shared.Containers;
 
 namespace Content.Server.AiAgent.Borg;
 
@@ -36,6 +37,7 @@ public sealed partial class AiBorgSystem
         bool? Welded,
         bool? Locked,
         float Damage,
+        int Contained,
         bool Exists);
 
     private TargetSnapshot Snapshot(EntityUid uid)
@@ -50,7 +52,7 @@ public sealed partial class AiBorgSystem
         // Поймано тестом сборки экранирования: девять упаковок стали щитами, и все девять раз
         // робот услышал, что мультитул тут не при чём.
         if (!Exists(uid) || TerminatingOrDeleted(uid) || EntityManager.IsQueuedForDeletion(uid))
-            return new TargetSnapshot(null, null, null, null, 0f, false);
+            return new TargetSnapshot(null, null, null, null, 0f, 0, false);
 
         string? door = null;
         if (TryComp<DoorComponent>(uid, out var d))
@@ -69,7 +71,21 @@ public sealed partial class AiBorgSystem
             ? _damageable.GetTotalDamage(uid).Float()
             : 0f;
 
-        return new TargetSnapshot(door, open, welded, locked, damage, true);
+        // Сколько всего вложено во все контейнеры цели.
+        //
+        // Половина работы с машинами — это «вставить»: канистру в контроллер, батарею в слот,
+        // плату в консоль. Ни одно из полей выше такого не замечает, и инструмент честно
+        // докладывал «ничего не изменилось» о вставленной канистре. Считаем не конкретный слот, а
+        // всё содержимое: так же ловится и извлечение, и любой ящик, о котором мы не думали.
+        var contained = 0;
+
+        if (TryComp<ContainerManagerComponent>(uid, out var containers))
+        {
+            foreach (var container in _container.GetAllContainers(uid, containers))
+                contained += container.ContainedEntities.Count;
+        }
+
+        return new TargetSnapshot(door, open, welded, locked, damage, contained, true);
     }
 
     /// <summary>
@@ -93,6 +109,12 @@ public sealed partial class AiBorgSystem
 
         if (before.Locked != after.Locked && after.Locked is { } locked)
             changes.Add(locked ? "заперто" : "замок открыт");
+
+        if (after.Contained > before.Contained)
+            changes.Add($"внутрь вложено (стало {after.Contained})");
+
+        if (after.Contained < before.Contained && after.Exists)
+            changes.Add($"изнутри извлечено (осталось {after.Contained})");
 
         if (after.Damage > before.Damage + 0.01f)
             changes.Add($"получила повреждений: +{after.Damage - before.Damage:F0}");

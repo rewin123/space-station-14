@@ -1153,7 +1153,7 @@ public sealed class BorgAgentTests
     /// </summary>
     [Test]
     [Explicit("длинный сценарий на карте ротации")]
-    public async Task Borg_BuildsShieldingSquare_AndGetsACore()
+    public async Task Borg_AssemblesTheReactor_AndStartsIt()
     {
         await using var w = await AiStation.CreateOnMap("Packed");
         var ent = w.Ent;
@@ -1252,14 +1252,24 @@ public sealed class BorgAgentTests
                 break;
             }
 
-            var goRes = await w.InvokeOn(borg, "goto", "{\"to\":\"" + cell.X + "," + cell.Y + "\"}");
-            var arrived = await WalkUntilAt(w, borg, cell);
+            // Три попытки дойти, а не одна.
+            //
+            // Ходьба иногда не доводит с первого раза: робот упирается в чужое тело, дверь или
+            // собственный только что положенный груз. Уронить упаковку там, где встал, — это
+            // молча испортить квадрат; повторить заход — ровно то, что сделал бы толковый агент.
+            var arrived = false;
 
-            if (!arrived)
+            for (var tries = 0; tries < 3 && !arrived; tries++)
             {
-                var stoppedAt = await w.Read(() => ToTile(_worldOf(ent, borg)));
-                TestContext.Out.WriteLine(
-                    $"НЕ ДОШЁЛ до ({cell.X},{cell.Y}): встал на ({stoppedAt.X},{stoppedAt.Y}); goto ok={goRes.Ok} {goRes.Error} {goRes.Detail}");
+                var goRes = await w.InvokeOn(borg, "goto", "{\"to\":\"" + cell.X + "," + cell.Y + "\"}");
+                arrived = await WalkUntilAt(w, borg, cell);
+
+                if (!arrived)
+                {
+                    var stoppedAt = await w.Read(() => ToTile(_worldOf(ent, borg)));
+                    TestContext.Out.WriteLine(
+                        $"НЕ ДОШЁЛ до ({cell.X},{cell.Y}), попытка {tries + 1}: встал на ({stoppedAt.X},{stoppedAt.Y}); goto ok={goRes.Ok} {goRes.Error} {goRes.Detail}");
+                }
             }
 
             await w.InvokeOn(borg, "drop");
@@ -1322,7 +1332,114 @@ public sealed class BorgAgentTests
             Assert.That(built, Is.GreaterThanOrEqualTo(9), "квадрат не собрался: щитов меньше девяти");
             Assert.That(cores, Is.GreaterThanOrEqualTo(1), "щиты есть, а ядра нет — квадрат сложен неправильно");
         });
+
+        // ---- шаг 5: топливо и запуск ----
+        var jar = await w.Read(() =>
+        {
+            var q = ent.EntityQueryEnumerator<Content.Shared.Ame.Components.AmeFuelContainerComponent>();
+            return q.MoveNext(out var uid, out _) ? uid : EntityUid.Invalid;
+        });
+
+        Assert.That(jar.IsValid(), Is.True, "на карте нет канистры с топливом");
+
+        // Канистра может лежать в своей таре — её тоже надо вскрыть.
+        var jarCrate = await w.Read(() =>
+        {
+            var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
+            return container.TryGetContainingContainer((jar, null, null), out var c) ? c.Owner : EntityUid.Invalid;
+        });
+
+        if (jarCrate.IsValid())
+        {
+            var jarCrateHandle = await w.Read(() => w.System.HandleFor(borg, jarCrate));
+            await w.InvokeOn(borg, "goto", "{\"to\":\"" + jarCrateHandle + "\"}");
+            await WalkUntilNear(w, borg, jarCrate, 1.4f);
+
+            for (var attempt = 0; attempt < 4; attempt++)
+            {
+                await w.InvokeOn(borg, "use", "{\"target\":\"" + jarCrateHandle + "\"}");
+                await w.Pair.Server.WaitRunTicks(10);
+
+                var out2 = await w.Read(() =>
+                    !ent.System<Robust.Shared.Containers.SharedContainerSystem>().IsEntityInContainer(jar));
+
+                if (out2)
+                    break;
+            }
+        }
+
+        await w.InvokeOn(borg, "module", "{\"name\":\"manipulator\"}");
+
+        var jarHandle = await w.Read(() => w.System.HandleFor(borg, jar));
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + jarHandle + "\"}");
+        await WalkUntilNear(w, borg, jar, 1.4f);
+
+        var tookJar = await w.InvokeOn(borg, "pickup", "{\"target\":\"" + jarHandle + "\"}");
+        TestContext.Out.WriteLine($"КАНИСТРА: взял ok={tookJar.Ok} {tookJar.Error} {tookJar.Detail}");
+
+        var ctrlHandle = await w.Read(() => w.System.HandleFor(borg, controller));
+        await w.InvokeOn(borg, "goto", "{\"to\":\"" + ctrlHandle + "\"}");
+        await WalkUntilNear(w, borg, controller, 1.4f);
+
+        // Вставляет только применение того, что держишь: обычное нажатие открывает экран, а
+        // канистра остаётся в руке. На живых прогонах агент терял на этом десяток ходов.
+        var inserted = await w.InvokeOn(borg, "use_wait",
+            "{\"target\":\"" + ctrlHandle + "\",\"with_item\":true}");
+
+        var fuelIn = await w.Read(() =>
+            ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(controller).FuelSlot.Item != null);
+
+        TestContext.Out.WriteLine($"ТОПЛИВО: вставка ok={inserted.Ok} {inserted.EffectJson()}; в слоте={fuelIn}");
+
+        // Впрыск доводим ровно до безопасного значения — вдвое больше числа ядер.
+        //
+        // Не «нажать пару раз»: у пульта есть своё начальное значение, нажатие меняет силу на ±2,
+        // а принять он готов до CoreCount * 8. Выкрутить в потолок значит собрать реактор и тут же
+        // подорвать его. Поэтому читаем текущее и добираем в нужную сторону — так и поступил бы
+        // инженер, а не «понажимал и ушёл».
+        var safe = cores * 2;
+
+        for (var i = 0; i < 6; i++)
+        {
+            var now = await w.Read(() =>
+                ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(controller).InjectionAmount);
+
+            if (now == safe)
+                break;
+
+            var button = now < safe ? "IncreaseFuel" : "DecreaseFuel";
+
+            await w.InvokeOn(borg, "console",
+                "{\"target\":\"" + ctrlHandle + "\",\"action\":\"ui_button_pressed\",\"args\":{\"button\":\"" + button + "\"}}");
+            await w.Pair.Server.WaitRunTicks(5);
+        }
+
+        var toggled = await w.InvokeOn(borg, "console",
+            "{\"target\":\"" + ctrlHandle + "\",\"action\":\"ui_button_pressed\",\"args\":{\"button\":\"ToggleInjection\"}}");
+
+        await w.Pair.Server.WaitRunTicks(30);
+
+        var final = await w.Read(() =>
+        {
+            var c = ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(controller);
+            return (c.Injecting, c.InjectionAmount, Fuel: c.FuelSlot.Item != null);
+        });
+
+        TestContext.Out.WriteLine(
+            $"ЗАПУСК: кнопка ok={toggled.Ok} {toggled.Error} {toggled.Detail}; впрыск={final.Injecting} " +
+            $"сила={final.InjectionAmount} топливо={final.Fuel}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(final.Fuel, Is.True, "канистра не встала в контроллер");
+            Assert.That(final.Injecting, Is.True, "реактор собран, но впрыск не включился");
+            Assert.That(final.InjectionAmount, Is.GreaterThan(0),
+                "впрыск включён, но сила нулевая — щиты и пульт в разных узловых сетях");
+            Assert.That(final.InjectionAmount, Is.LessThanOrEqualTo(cores * 2),
+                $"сила {final.InjectionAmount} выше безопасной при {cores} ядрах — это перегрев");
+        });
     }
+
 
     /// <summary>Упаковки, лежащие на полу, а не в таре.</summary>
     private static List<EntityUid> LoosePacks(IEntityManager ent)
@@ -1365,8 +1482,19 @@ public sealed class BorgAgentTests
         var gridComp = ent.GetComponent<MapGridComponent>(grid);
         var origin = ToTile(_worldOf(ent, controller));
 
+        var navMap = ent.GetComponent<Content.Shared.Pinpointer.NavMapComponent>(grid);
+
         bool Free(Vector2i tile)
         {
+            // Той же меркой, что и робот.
+            //
+            // Первая версия проверяла клетку по-своему — есть пол, нет статичной коллизии — и
+            // выбирала квадрат, часть клеток которого маршрут считал непроходимыми. Робот честно
+            // сворачивал на соседние, упаковки ложились мимо, а выглядело это как его промах.
+            // Тест, меряющий не тем прибором, что проверяемый, находит только собственные ошибки.
+            if (!Content.Server.AiAgent.Borg.BorgPathfinder.Passable(navMap, tile))
+                return false;
+
             if (!maps.TryGetTileRef(grid, gridComp, tile, out var tileRef) || tileRef.Tile.IsEmpty)
                 return false;
 
@@ -1407,8 +1535,38 @@ public sealed class BorgAgentTests
                     }
                 }
 
+                if (!ok)
+                    continue;
+
                 // Ниже квадрата нужна свободная клетка: туда робот отступает перед распаковкой.
-                if (ok && Free(new Vector2i(corner.X + 1, corner.Y - 1)))
+                if (!Free(new Vector2i(corner.X + 1, corner.Y - 1)))
+                    continue;
+
+                // И квадрат обязан ПРИМЫКАТЬ к пульту.
+                //
+                // Иначе щиты и контроллер оказываются в разных узловых сетях: ядро у щитов есть, а
+                // пульт о нём не знает, и GetMaxInjectionAmount (CoreCount * 8 по группе ПУЛЬТА)
+                // возвращает ноль. Внешне это выглядит издевательски: реактор собран, впрыск
+                // включён, сила нулевая. В навыке требование записано, а тест его не проверял.
+                var touches = cells.Any(c =>
+                    Math.Abs(c.X - origin.X) + Math.Abs(c.Y - origin.Y) == 1);
+
+                if (!touches)
+                    continue;
+
+                // И к пульту должен остаться подход.
+                //
+                // Квадрат обязан примыкать — но если он съест ВСЕХ свободных соседей пульта, к
+                // самому пульту не подойти: канистру не вставить, кнопку не нажать. Робот
+                // добросовестно собирает реактор и запирает его от себя же. Это та же ошибка, что
+                // «не строй вокруг себя», только с другой стороны.
+                var approach = new[]
+                {
+                    new Vector2i(origin.X + 1, origin.Y), new Vector2i(origin.X - 1, origin.Y),
+                    new Vector2i(origin.X, origin.Y + 1), new Vector2i(origin.X, origin.Y - 1),
+                };
+
+                if (approach.Any(a => Free(a) && !cells.Contains(a)))
                     return cells;
             }
         }
