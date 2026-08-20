@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using Content.Server.AiAgent.Bus;
 using Content.Server.AiAgent.Llm;
@@ -26,27 +27,15 @@ public sealed partial class StationAiAgentSystem
     /// <b>An HTTP thread must never look a session up itself.</b> <c>_sessions</c> is a plain
     /// <c>Dictionary</c> mutated from the main thread, and a <c>TryGetValue</c> that lands on a
     /// resize does not throw — it can spin forever inside the bucket chain, and the symptom is a
-    /// server that reports a live agent and quietly stops ticking. So the main thread publishes the
-    /// reference here at claim and clears it at release, and the debug path only ever reads this
-    /// field.
+    /// server that reports a live agent and quietly stops ticking. So the main thread публикует
+    /// хендлы в витрину при захвате и снимает их при освобождении, а путь отладки читает только её.
     /// </summary>
-    private volatile AgentSession? _debugSession;
+    private readonly AgentDirectory _agents = new();
 
     private AgentDebugServer? _debugServer;
 
-    /// <summary>
-    /// Ярлык сессии, который отладчик показывает по умолчанию.
-    ///
-    /// <para>
-    /// Кадры на шину уходят с настоящим идентификатором тела (<c>session.Body.Id</c>), а вот
-    /// маршрутизатор HTTP по-прежнему показывает одного агента — того, кто занял тело последним.
-    /// Это <b>осознанное ограничение</b>, а не недоделка: отладчик выключен по умолчанию
-    /// (<c>ai.debug_enabled</c>), а выбор агента в его UI — отдельная работа, которой в этой задаче
-    /// не место. Важно было другое: чтобы освобождение ВТОРОГО агента не гасило отладку ПЕРВОГО,
-    /// см. <see cref="DetachDebugSession"/>.
-    /// </para>
-    /// </summary>
-    private const string DebugSessionId = "current";
+    /// <summary>Витрина агентов, какой её видит HTTP-поток. Пуста, пока никто не захватил тело.</summary>
+    public AgentDirectory DebugAgents => _agents;
 
     /// <summary>The live bus, or null when <c>ai.debug_enabled</c> is off.</summary>
     public AgentEventBus? DebugBus => _bus;
@@ -72,13 +61,11 @@ public sealed partial class StationAiAgentSystem
         var router = new AgentDebugRouter(
             _bus,
             _cfg.GetCVar(AiCVars.DebugToken),
-            DebugSessionId,
-            () => _debugSession,
+            _agents,
             () => Memory,
             () => Skills,
             () => Notes,
             CurrentRoundId,
-            text => (SendUserMessage(text, out var reason), reason),
             ChangeMemory,
             ChangeSkill);
 
@@ -103,10 +90,40 @@ public sealed partial class StationAiAgentSystem
         _debugServer = null;
     }
 
-    /// <summary>A new agent took a core. Main thread only.</summary>
+    /// <summary>
+    /// Новый агент занял тело. Только главный поток.
+    /// </summary>
+    /// <remarks>
+    /// <b>Порядок здесь — контракт.</b> Сначала хендл встаёт на витрину, и только потом уходит
+    /// кадр <c>session.started</c>. Клиент реагирует на этот кадр запросом снимка агента, и при
+    /// обратном порядке получил бы <c>null</c> — то есть «агент не запустился» ровно про того,
+    /// кто только что запустился.
+    /// </remarks>
     private void AttachDebugSession(AgentSession session)
     {
-        _debugSession = session;
+        var id = session.Body.Id;
+        var round = CurrentRoundId();
+        var startedSeq = _bus?.Seq ?? 0;
+
+        var handle = new AgentHandle
+        {
+            Id = id,
+            Name = session.Body.Name,
+            Brain = (int) session.Brain,
+            Round = round,
+            StartedSeq = startedSeq,
+            Alive = true,
+            Capture = () => AgentDebugState.CaptureSession(session, id, round),
+            Roster = () => AgentDebugState.Roster(session, id, session.Body.Name, round, startedSeq),
+            Send = text => (Deliver(session, text, out var why), why),
+        };
+
+        if (!_agents.Add(handle))
+        {
+            // Не молча: совпадение идентификаторов означает общий каталог памяти и общий файл
+            // диалога у двух агентов, и витрина — единственное место, где это вообще заметно.
+            _sawmill.Warning($"агент {id} уже на витрине отладки — второй с тем же идентификатором не показан");
+        }
 
         _bus?.Publish(AgentEventKind.SessionStarted, session.Body.Id, JsonSerializer.Serialize(new
         {
@@ -125,16 +142,61 @@ public sealed partial class StationAiAgentSystem
     /// </summary>
     private void DetachDebugSession(AgentSession session, string why)
     {
-        // Только если уходит именно тот, кого показывает отладчик. Безусловное обнуление означало
-        // бы, что освобождение борга гасит отладку ядра, которое продолжает работать.
-        if (ReferenceEquals(_debugSession, session))
-            _debugSession = null;
+        // Снимаем с витрины ДО публикации: после кадра session.ended запрос снимка обязан
+        // вернуть null, а не картинку сессии, которую вот-вот отменят.
+        //
+        // Снимается только свой хендл, по ссылке. Безусловное удаление по идентификатору снесло бы
+        // с витрины НОВОГО агента, если борга переклеймили в том же тике.
+        foreach (var handle in _agents.All)
+        {
+            if (handle.Id == session.Body.Id)
+                _agents.Remove(handle.Id, handle);
+        }
 
         _bus?.Publish(AgentEventKind.SessionEnded, session.Body.Id, JsonSerializer.Serialize(new
         {
             brain = (int)session.Brain,
             reason = why,
         }, LlmJson.Options));
+    }
+
+    private float _sinceRoster;
+
+    /// <summary>
+    /// Обновить живость на витрине и подмести хендлы без сессий. Только главный поток.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Раз в секунду, а не каждый тик: <c>Alive</c> у ядра — это <c>IsPlayable</c>, то есть
+    /// обращение к миру, и делать его тридцать раз в секунду ради индикатора не за что.
+    /// <b>Отсюда и ограничение: значение годится только для индикатора.</b> Логику на нём строить
+    /// нельзя — первую секунду после смерти оно врёт.
+    /// </para>
+    /// <para>
+    /// Подметание — страховка от утечки. Появись когда-нибудь путь, убирающий сессию мимо
+    /// <c>Release</c>, хендл остался бы жить со ссылкой на закрытую петлю, и снимок агента упёрся
+    /// бы в отменённый токен.
+    /// </para>
+    /// </remarks>
+    private void RefreshAgentDirectory(float frameTime)
+    {
+        if (_bus == null)
+            return;
+
+        _sinceRoster += frameTime;
+
+        if (_sinceRoster < 1f)
+            return;
+
+        _sinceRoster = 0f;
+
+        foreach (var session in _sessions.Values)
+        {
+            if (_agents.Find(session.Body.Id) is { } handle)
+                handle.Alive = session.Body.Alive();
+        }
+
+        _agents.RetainOnly(_sessions.Values.Select(s => s.Body.Id).ToList());
     }
 
     // ------------------------------------------------------------ входящие команды
@@ -146,16 +208,23 @@ public sealed partial class StationAiAgentSystem
     /// restart would be delivered into a fresh conversation, out of context and unattributable.
     /// Callable from any thread — the inbox has its own lock and the loop claims from it.
     /// </summary>
-    public bool SendUserMessage(string text, out string reason)
+    public bool SendUserMessage(string agentId, string text, out string reason)
     {
-        var session = _debugSession;
+        var handle = _agents.Find(agentId);
 
-        if (session == null)
+        if (handle == null)
         {
-            reason = "нет активного агента";
+            reason = $"нет агента '{agentId}'";
             return false;
         }
 
+        (var ok, reason) = handle.Send(text);
+        return ok;
+    }
+
+    /// <summary>Положить сообщение в ящик конкретной сессии. Любой поток: у ящика свой замок.</summary>
+    private static bool Deliver(AgentSession session, string text, out string reason)
+    {
         if (string.IsNullOrWhiteSpace(text))
         {
             reason = "пустое сообщение";

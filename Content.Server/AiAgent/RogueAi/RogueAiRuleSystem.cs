@@ -1,3 +1,4 @@
+using Robust.Shared.Prototypes;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -50,6 +51,7 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
     [Dependency] private ChatSystem _chat = default!;
     [Dependency] private StationSystem _station = default!;
     [Dependency] private StationJobsSystem _stationJobs = default!;
+    [Dependency] private Borg.AiBorgSystem _borgs = default!;
 
     private ISawmill _sawmill = default!;
 
@@ -222,6 +224,8 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
             GrantAccess(station, rule);
         }
 
+        SpawnSupportBorgs(rule);
+
         if (rule is { AnnounceOnStart: true, Announcement: { } announcement })
         {
             var text = Loc.GetString(announcement);
@@ -326,6 +330,81 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
         return granted;
     }
 
+    /// <summary>
+    /// Поставить на станцию киборгов поддержки.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Здесь, на раздаче должностей, а не на старте правила: правило стартует до
+    /// <c>LoadMaps</c>-соседей и до того, как навигационная карта грида готова, а место под
+    /// робота ищется именно по ней. К моменту <c>RulePlayerJobsAssignedEvent</c> станция уже
+    /// собрана целиком.
+    /// </para>
+    /// <para>
+    /// Роботы поднимаются ДО того, как мозг займёт ядро (это происходит на
+    /// <c>RunLevel = InRound</c>), и это нормально: автозахват тел висит на том же переходе, а
+    /// общий потолок числа агентов проверяется в <c>StartSession</c> и одинаков для всех.
+    /// </para>
+    /// <para>
+    /// Неполный набор — не отказ раунда. Свободного пола у маяка может не найтись, и играть
+    /// с двумя роботами вместо трёх лучше, чем не начать смену вовсе; расхождение видно
+    /// строкой в журнале и в разборе раунда.
+    /// </para>
+    /// </remarks>
+    public int SpawnSupportBorgs(RogueAiRuleComponent rule)
+    {
+        if (rule.SupportBorgs.Count == 0)
+            return 0;
+
+        // Аварийный тормоз того же вида, что у раздачи доступа: выключить включённое в прототипе
+        // отсюда можно, включить выключенное — нет.
+        if (!_cfg.GetCVar(AiCVars.RogueSupportBorgs))
+        {
+            _sawmill.Info("киборги поддержки отключены через ai.rogue_support_borgs");
+            return 0;
+        }
+
+        foreach (var proto in rule.SupportBorgs)
+        {
+            if (TrySpawnAtPreferredBeacon(rule, proto, out var reason))
+                rule.SpawnedBorgs++;
+            else
+                _sawmill.Warning($"киборг поддержки {proto.Id} не поставлен: {reason}");
+        }
+
+        _sawmill.Info($"киборгов поддержки: {rule.SpawnedBorgs} из {rule.SupportBorgs.Count}");
+        return rule.SpawnedBorgs;
+    }
+
+    /// <summary>
+    /// Поставить робота у первого маяка из списка предпочтений, какой найдётся.
+    /// </summary>
+    /// <remarks>
+    /// Падать в «любой маяк», когда ни один из названных не нашёлся, — сознательное решение, но
+    /// с громкой строкой в журнале. Раунд без роботов хуже раунда с роботами не там, где хотелось;
+    /// а молчаливый откат — это ровно та поломка, которую этот список и чинит: в прошлый раз
+    /// «любой» означал запертую комнату ядра, и понять это удалось только по игре.
+    /// </remarks>
+    private bool TrySpawnAtPreferredBeacon(RogueAiRuleComponent rule, EntProtoId proto, out string reason)
+    {
+        reason = string.Empty;
+
+        foreach (var beacon in rule.SupportBorgBeacons)
+        {
+            if (_borgs.TrySpawnBorg(beacon, out _, out reason, proto))
+                return true;
+        }
+
+        if (rule.SupportBorgBeacons.Count > 0)
+        {
+            _sawmill.Warning(
+                $"ни одного из маяков [{string.Join(", ", rule.SupportBorgBeacons)}] не нашлось — " +
+                "ставлю робота у любого подходящего; проверь, что он не оказался в запертом отсеке");
+        }
+
+        return _borgs.TrySpawnBorg(null, out _, out reason, proto);
+    }
+
     // ------------------------------------------------------------- разбор раунда
 
     protected override void AppendRoundEndText(EntityUid uid,
@@ -343,6 +422,13 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
             ("turrets", component.GrantedTurrets)));
 
         args.AddLine(Loc.GetString("rogue-ai-round-end-laws", ("lawset", component.Lawset.Id)));
+
+        if (component.SupportBorgs.Count > 0)
+        {
+            args.AddLine(Loc.GetString("rogue-ai-round-end-borgs",
+                ("borgs", component.SpawnedBorgs),
+                ("wanted", component.SupportBorgs.Count)));
+        }
     }
 }
 

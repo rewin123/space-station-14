@@ -55,13 +55,13 @@ public sealed class BusServerTests
         skills.LoadFromDisk();
 
         var router = new AgentDebugRouter(
-            bus, Token, "current",
-            () => null,
+            bus, Token,
+            // Пустая витрина: тела никто не занял. Проверяется транспорт, а не агенты.
+            new AgentDirectory(),
             () => memory,
             () => skills,
             () => new PlayerNoteStore(dir, Sawmill),
             () => 7,
-            _ => (false, "нет активного агента"),
             (_, _, c) => memory.Add(c),
             (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
 
@@ -150,9 +150,9 @@ public sealed class BusServerTests
             var skills = new SkillStore(dir, Sawmill);
 
             var router = new AgentDebugRouter(
-                bus, "", "current", () => null, () => memory, () => skills,
+                bus, "", new AgentDirectory(), () => memory, () => skills,
                 () => new PlayerNoteStore(dir, Sawmill), () => 7,
-                _ => (false, ""), (_, _, c) => memory.Add(c),
+                (_, _, c) => memory.Add(c),
                 (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
 
             var server = AgentDebugServer.TryStart($"127.0.0.1:{FreePort()}", "", router, Sawmill);

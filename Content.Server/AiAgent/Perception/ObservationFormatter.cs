@@ -71,6 +71,42 @@ public static class ObservationFormatter
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Блок событий, подмешиваемый в разговор ПОСРЕДИ хода — сразу за результатами инструментов.
+    ///
+    /// <para>
+    /// <b>Зачем отдельно от <see cref="Format"/>.</b> Здесь нет строки SELF и нет отметки времени
+    /// в начале: и то и другое принадлежит НАЧАЛУ хода, где агент осматривается заново. Посреди
+    /// хода состояние он только что прочитал из <c>effect</c> каждого инструмента, и повторять его
+    /// значило бы платить за одно и то же дважды на каждом шаге длинного хода — а ходы бывают по
+    /// двадцать пять шагов.
+    /// </para>
+    /// <para>
+    /// Порядок видов — тот же <see cref="OrderedKinds"/>, то есть реплики сверху, а увиденное
+    /// последним. Довод тот же, что и там, и посреди хода он даже сильнее: если экипаж передумал
+    /// на середине действия, эта строка должна попасться модели первой.
+    /// </para>
+    /// </summary>
+    public static string? FormatSteering(IReadOnlyList<Observation> items, int dropped, TimeSpan roundTime)
+    {
+        if (items.Count == 0 && dropped == 0)
+            return null;
+
+        var sb = new StringBuilder();
+        sb.Append("NEW_EVENTS [").Append(FormatRoundTime(roundTime)).Append("] пришло, пока ты работал:\n");
+
+        foreach (var kind in OrderedKinds)
+        {
+            foreach (var o in items.Where(i => i.Kind == kind))
+                sb.Append(FormatLine(o)).Append('\n');
+        }
+
+        if (dropped > 0)
+            sb.Append("DROPPED ").Append(dropped.ToString(CultureInfo.InvariantCulture)).Append(" older lines\n");
+
+        return sb.ToString();
+    }
+
     private static readonly ObsKind[] OrderedKinds =
     {
         ObsKind.Radio,

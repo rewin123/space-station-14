@@ -40,39 +40,34 @@ public sealed class AgentDebugRouter
     public static readonly TimeSpan PollTimeout = TimeSpan.FromSeconds(25);
 
     private readonly AgentEventBus _bus;
-    private readonly Func<AgentSession?> _session;
+    private readonly AgentDirectory _agents;
     private readonly Func<MemoryStore> _memory;
     private readonly Func<SkillStore> _skills;
     private readonly Func<PlayerNoteStore> _notes;
     private readonly Func<int> _round;
-    private readonly Func<string, (bool Ok, string Reason)> _sendUserMessage;
+
     private readonly Func<string, string, string, MemoryResult> _changeMemory;
     private readonly Func<string, string?, string?, string?, string?, SkillResult> _changeSkill;
     private readonly string _token;
-    private readonly string _sessionId;
 
     public AgentDebugRouter(
         AgentEventBus bus,
         string token,
-        string sessionId,
-        Func<AgentSession?> session,
+        AgentDirectory agents,
         Func<MemoryStore> memory,
         Func<SkillStore> skills,
         Func<PlayerNoteStore> notes,
         Func<int> round,
-        Func<string, (bool Ok, string Reason)> sendUserMessage,
         Func<string, string, string, MemoryResult> changeMemory,
         Func<string, string?, string?, string?, string?, SkillResult> changeSkill)
     {
         _bus = bus;
         _token = token;
-        _sessionId = sessionId;
-        _session = session;
+        _agents = agents;
         _memory = memory;
         _skills = skills;
         _notes = notes;
         _round = round;
-        _sendUserMessage = sendUserMessage;
         _changeMemory = changeMemory;
         _changeSkill = changeSkill;
     }
@@ -108,6 +103,7 @@ public sealed class AgentDebugRouter
         {
             ("GET", "/health") => Health(),
             ("GET", "/state") => State(),
+            ("GET", "/session") => Session(query),
             ("GET", "/events") => await Events(query, ct).ConfigureAwait(false),
             ("POST", "/command") => Command(body),
 
@@ -134,24 +130,50 @@ public sealed class AgentDebugRouter
         return CryptographicOperations.FixedTimeEquals(offered, expected);
     }
 
-    private AgentDebugResponse Health()
-    {
-        var session = _session();
-
-        return AgentDebugResponse.Ok(new
+    private AgentDebugResponse Health() =>
+        AgentDebugResponse.Ok(new
         {
             ok = true,
             instance = _bus.Instance,
             seq = _bus.Seq,
             ring = _bus.Capacity,
             ring_used = _bus.Count,
-            session = session == null ? null : _sessionId,
-            pending_input = session?.Inbox.HasPending ?? false,
+            round = _round(),
+
+            // Раньше здесь стояло поле session с константой «current» и одиночный pending_input.
+            // Оба врали ровно с того дня, как агентов стало двое: показывали того, кто занял тело
+            // последним, и его же ящик. Теперь и то, и другое — свойство строки ростера.
+            agents = _agents.Roster(),
         });
-    }
 
     private AgentDebugResponse State() =>
-        AgentDebugResponse.Ok(AgentDebugState.Capture(_bus, _session(), _memory(), _skills(), _notes(), _sessionId, _round()));
+        AgentDebugResponse.Ok(AgentDebugState.CaptureGlobal(_bus, _agents, _memory(), _skills(), _notes(), _round()));
+
+    /// <summary>
+    /// Снимок одного агента.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Неизвестный идентификатор — <b>200 с полем agent: null</b>, а не 404. Агент мог уйти между
+    /// кадром <c>session.started</c> и этим запросом, и это штатная гонка, а не ошибка клиента.
+    /// Клиент считает 404 терминальным и после него навсегда останавливает опрос — то есть
+    /// «правильный» код погасил бы весь отладчик из-за нормального события.
+    /// </para>
+    /// <para>
+    /// А вот отсутствие параметра — 400, и это не непоследовательность. Молча выбрать «первого
+    /// попавшегося» значило бы вернуть ту самую ошибку, ради устранения которой этот маршрут и
+    /// появился: показать не того агента, ничем не выдав подмены.
+    /// </para>
+    /// </remarks>
+    private AgentDebugResponse Session(IReadOnlyDictionary<string, string> query)
+    {
+        var id = query.GetValueOrDefault("agent");
+
+        if (string.IsNullOrWhiteSpace(id))
+            return AgentDebugResponse.Error(400, "нужен параметр agent — список даёт GET /state");
+
+        return AgentDebugResponse.Ok(AgentDebugState.CaptureAgent(_bus, _agents.Find(id)));
+    }
 
     private async Task<AgentDebugResponse> Events(IReadOnlyDictionary<string, string> query, CancellationToken ct)
     {
@@ -169,6 +191,14 @@ public sealed class AgentDebugRouter
         sb.Append("{\"instance\":").Append(JsonSerializer.Serialize(read.Instance, AgentDebugJson.Options));
         sb.Append(",\"seq\":").Append(read.Seq);
         sb.Append(",\"resync\":").Append(read.Resync ? "true" : "false");
+
+        // Ростер едет вместе с лентой, но КАДРОМ НЕ ЯВЛЯЕТСЯ: к нему не относятся ни курсор, ни
+        // resync, и применять его как событие нельзя. Он снимается в момент возврата длинного
+        // опроса, то есть может быть моложе запроса на все двадцать пять секунд. Сеять агента по
+        // ростеру поэтому нельзя — только по кадру session.started.
+        sb.Append(",\"agents\":")
+          .Append(JsonSerializer.Serialize(_agents.Roster(), AgentDebugJson.Options));
+
         sb.Append(",\"events\":[");
 
         for (var i = 0; i < read.Events.Count; i++)
@@ -218,10 +248,22 @@ public sealed class AgentDebugRouter
     private AgentDebugResponse SendMessage(JsonElement root)
     {
         var text = Str(root, "text") ?? "";
+        var id = Str(root, "agent");
+
+        // Адресат обязателен, и подставлять умолчание нельзя. Сообщение оператора уходит в ящик
+        // конкретного агента и всплывает у него в следующем ходу; отправленное «кому-нибудь», оно
+        // с равным успехом попало бы боевому роботу вместо ядра, и заметить это было бы негде.
+        if (string.IsNullOrWhiteSpace(id))
+            return AgentDebugResponse.Error(400, "нужно поле agent — список даёт GET /state");
+
+        var handle = _agents.Find(id);
+
+        if (handle == null)
+            return AgentDebugResponse.Error(409, $"нет агента '{id}'");
 
         // 409 rather than a queue: text that outlived a round restart would be delivered into a
         // fresh conversation, out of context and with nothing to attribute it to.
-        var (ok, reason) = _sendUserMessage(text);
+        var (ok, reason) = handle.Send(text);
 
         if (!ok)
             return AgentDebugResponse.Error(409, reason);
@@ -229,6 +271,7 @@ public sealed class AgentDebugRouter
         return AgentDebugResponse.Ok(new
         {
             ok = true,
+            agent = handle.Id,
             message = reason,
             applied = "next_turn",
             seq = _bus.Seq,
@@ -255,7 +298,9 @@ public sealed class AgentDebugRouter
             // but the model goes on reading the frozen zone-0 text until the next prefix rebuild —
             // so an operator edits memory, sees the agent behave identically, and concludes the
             // endpoint does not work.
-            visible_to_model = "next_compaction",
+            // Компакция теперь у каждого агента своя, и «следующая» — это четыре разных момента.
+            visible_to_model = "next_compaction_of_each_agent",
+            scope = "process",
             seq = _bus.Seq,
         });
     }
@@ -282,6 +327,7 @@ public sealed class AgentDebugRouter
             // Only `when` reaches zone 0, and only at a rebuild; the body is fetched on demand
             // through skill_view, so an edited body IS live immediately. Worth stating exactly.
             visible_to_model = "body_now_index_next_compaction",
+            scope = "process",
             seq = _bus.Seq,
         });
     }

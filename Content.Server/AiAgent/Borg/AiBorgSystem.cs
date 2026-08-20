@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Content.Server.AiAgent.Components;
@@ -112,6 +113,12 @@ public sealed partial class AiBorgSystem : EntitySystem
             return false;
         }
 
+        // Идентификатор — раньше разума и раньше сессии, потому что именно он выбирает каталог,
+        // куда лягут журнал и файл диалога. Ошибиться здесь дороже всего: два робота с одним id
+        // не падают, а тихо пишут друг поверх друга.
+        if (!TryAssignAgentId(comp, out reason))
+            return false;
+
         // Разум — условие активации, а не украшение. См. remarks.
         if (!_mind.TryGetMind(borg, out var existing, out _))
         {
@@ -189,6 +196,74 @@ public sealed partial class AiBorgSystem : EntitySystem
         if (!TerminatingOrDeleted(mind))
             QueueDel(mind);
     }
+
+    /// <summary>
+    /// Выдать роботу идентификатор агента, если прототип не назвал его явно.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Занятым считается id, который держит либо живая сессия, либо уже заклеймленный робот.
+    /// Второе условие нужно ровно для того случая, ради которого аллокатор и написан: правило
+    /// режима спавнит трёх боргов подряд, и первый из них к моменту выдачи id третьему может
+    /// ещё не иметь сессии — <c>StartSession</c> идёт позже по этому же методу.
+    /// </para>
+    /// <para>
+    /// Явно заданный и уже занятый id — ОТКАЗ, а не молчаливое наложение. Это единственное место,
+    /// где ошибку в прототипе ещё видно; дальше она выглядит как «робот почему-то помнит чужую
+    /// смену».
+    /// </para>
+    /// </remarks>
+    private bool TryAssignAgentId(AiBorgComponent comp, out string reason)
+    {
+        var taken = TakenAgentIds();
+
+        if (!string.IsNullOrWhiteSpace(comp.AgentId))
+        {
+            if (taken.Contains(comp.AgentId))
+            {
+                reason = $"идентификатор «{comp.AgentId}» уже занят другим агентом";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
+        }
+
+        var prefix = string.IsNullOrWhiteSpace(comp.AgentIdPrefix) ? "borg" : comp.AgentIdPrefix.Trim();
+
+        for (var n = 1; n <= 64; n++)
+        {
+            var id = $"{prefix}-{n}";
+
+            if (taken.Contains(id))
+                continue;
+
+            comp.AgentId = id;
+            reason = string.Empty;
+            return true;
+        }
+
+        reason = $"не нашлось свободного идентификатора с префиксом «{prefix}»";
+        return false;
+    }
+
+    /// <summary>Идентификаторы, которые уже кем-то заняты: живыми сессиями и заклеймленными телами.</summary>
+    private HashSet<string> TakenAgentIds()
+    {
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var session in _host.Sessions.Values)
+            taken.Add(session.Body.Id);
+
+        foreach (var claimed in _claimed.Values)
+        {
+            if (!string.IsNullOrWhiteSpace(claimed.AgentId))
+                taken.Add(claimed.AgentId);
+        }
+
+        return taken;
+    }
+
 
     /// <summary>
     /// Описание тела «шасси борга».

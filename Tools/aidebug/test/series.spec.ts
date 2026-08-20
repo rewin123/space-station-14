@@ -11,7 +11,6 @@ function stats(turn: number, cache = 0.98, tokens = 9000): AgentStats {
     consecutive_failures: 0,
     broken_promises: 0,
     compactions: 0,
-    compaction_armed: true,
     last_prompt_tokens: tokens,
     chars_per_token: 3,
     body_chars: 400,

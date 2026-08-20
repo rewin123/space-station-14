@@ -4,6 +4,8 @@ import type {
   AgentMessage,
   AgentPlayerNote,
   AgentSkill,
+  AgentRosterEntry,
+  AgentSession,
   AgentStateSnapshot,
   AgentStats,
   AgentTurn,
@@ -29,13 +31,22 @@ import { type StatsSeries, emptySeries, pushSample, resetSeries } from '../lib/s
  * себя в `BusReplayTests`. Ровно тот же аргумент, которым `AgentDebugRouter` оправдывает своё
  * существование на сервере.
  */
-export interface AgentViewState {
-  instance: string
-  seq: number
+export interface GlobalViewState {
+  memory: AgentMemory | null
+  skills: AgentSkill[]
+  notes: AgentPlayerNote[]
+  /** Потолок одной заметки. Приходит только со снимком, как и memory_limit. */
+  noteLimit: number
+  round: number
+  roster: AgentRosterEntry[]
+}
 
-  sessionId: string | null
+/** Один мозг. Всё, что здесь есть, принадлежит ему одному. */
+export interface AgentViewState {
+  id: string
   brain: number
   round: number
+  startedSeq: number
   prefixHash: string
   systemPrompt: string
   toolsJson: string
@@ -44,28 +55,32 @@ export interface AgentViewState {
   stats: AgentStats | null
   lastTurn: AgentTurn | null
 
-  memory: AgentMemory | null
-  skills: AgentSkill[]
-  notes: AgentPlayerNote[]
-  /** Потолок одной заметки. Приходит только со снимком, как и memory_limit. */
-  noteLimit: number
-
   series: StatsSeries
 
-  /** Сессия завершилась, новая ещё не началась — сессионные кадры игнорируются. */
-  sessionGone: boolean
+  /** Сессия завершилась: разговор показываем, приходящие следом кадры не применяем. */
+  ended: boolean
 }
 
 /** Что `apply` просит сделать снаружи: сам он ничего не качает. */
 export type ApplyOutcome = 'ok' | 'resync'
 
-export function emptyState(): AgentViewState {
+export function emptyGlobals(): GlobalViewState {
   return {
-    instance: '',
-    seq: 0,
-    sessionId: null,
+    memory: null,
+    skills: [],
+    notes: [],
+    noteLimit: 0,
+    round: 0,
+    roster: [],
+  }
+}
+
+export function emptyAgent(id: string): AgentViewState {
+  return {
+    id,
     brain: 0,
     round: 0,
+    startedSeq: 0,
     prefixHash: '',
     systemPrompt: '',
     toolsJson: '',
@@ -73,112 +88,108 @@ export function emptyState(): AgentViewState {
     messages: [],
     stats: null,
     lastTurn: null,
-    memory: null,
-    skills: [],
-    notes: [],
-    noteLimit: 0,
     series: emptySeries(),
-    sessionGone: false,
+    ended: false,
   }
 }
 
-/** Посадить снимок. Ряд графиков сбрасывается: он копится только из потока. */
-export function seed(state: AgentViewState, snapshot: AgentStateSnapshot): void {
-  const instanceChanged = state.instance !== snapshot.instance
-
-  state.instance = snapshot.instance
-  state.seq = snapshot.seq
-  state.memory = snapshot.memory
-  state.skills = [...snapshot.skills]
+/** Посадить процессный снимок. */
+export function seedGlobals(globals: GlobalViewState, snapshot: AgentStateSnapshot): void {
+  globals.memory = snapshot.memory
+  globals.skills = [...snapshot.skills]
   // С запасом на рассинхрон версий: страница и сервер выкатываются РАЗНЫМИ шагами, и между ними
   // всегда есть окно, когда свежий клиент говорит со старым сервером. Отладчик, падающий в этом
   // окне на `[...undefined]`, отнимает ровно тот инструмент, которым разбираются, что случилось.
-  // Отсутствие поля — это «сервер о заметках ещё не знает», а не ошибка.
-  state.notes = [...(snapshot.notes ?? [])]
-  state.noteLimit = snapshot.note_limit ?? 0
-
-  const session = snapshot.session
-
-  if (session === null) {
-    state.sessionId = null
-    state.messages = []
-    state.stats = null
-    state.lastTurn = null
-    state.bodyEpoch = 0
-    state.sessionGone = false
-    resetSeries(state.series)
-    return
-  }
-
-  const sessionChanged = state.sessionId === null || state.brain !== session.brain
-  state.sessionId = session.id
-  state.brain = session.brain
-  state.round = session.round
-  state.prefixHash = session.prefix_hash
-  state.systemPrompt = session.system_prompt
-  state.toolsJson = session.tools_json
-  state.bodyEpoch = session.body_epoch
-  state.messages = [...session.messages]
-  state.stats = session.stats
-  state.lastTurn = session.last_turn
-  state.sessionGone = false
-
-  // Ряд копится клиентом, потому что сервер истории не хранит. Снимок даёт ровно одну точку, так
-  // что после смены процесса или агента продолжать старый ряд — значит рисовать склейку двух
-  // разных жизней одной линией.
-  if (instanceChanged || sessionChanged)
-    resetSeries(state.series)
-
-  if (session.stats)
-    pushSample(state.series, session.stats)
+  globals.notes = [...(snapshot.notes ?? [])]
+  globals.noteLimit = snapshot.note_limit ?? 0
+  globals.round = snapshot.round ?? 0
+  globals.roster = [...(snapshot.agents ?? [])]
 }
 
 /**
- * Применить один кадр.
+ * Посадить снимок одного агента.
  *
- * Возвращает `'resync'`, когда кадр невозможно применить честно и единственный правильный ответ —
- * перечитать `/state`. Гадать нельзя: молча разъехавшаяся лента выглядит правдоподобно.
+ * Ряд графиков сбрасывается, когда агент сменился: сервер истории не хранит, ряд копится клиентом
+ * из потока, и продолжать старый после переклейма значит рисовать склейку двух разных жизней
+ * одной линией.
  */
-export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutcome {
-  // Кадры процессных сторов (память, скиллы) приходят с пустым session и живут своей жизнью —
-  // они переживают и сессию, и раунд, поэтому проверок на сессию для них нет.
+export function seedAgent(view: AgentViewState, session: AgentSession): void {
+  const changed = view.brain !== session.brain || view.bodyEpoch !== session.body_epoch
+
+  view.id = session.id
+  view.brain = session.brain
+  view.round = session.round
+  view.prefixHash = session.prefix_hash
+  view.systemPrompt = session.system_prompt
+  view.toolsJson = session.tools_json
+  view.bodyEpoch = session.body_epoch
+  view.messages = [...session.messages]
+  view.stats = session.stats
+  view.lastTurn = session.last_turn
+  view.ended = false
+
+  if (changed)
+    resetSeries(view.series)
+
+  if (session.stats)
+    pushSample(view.series, session.stats)
+}
+
+/** Виды кадров, которые относятся к процессным хранилищам, а не к агенту. */
+export function isGlobalFrame(type: string): boolean {
+  return (
+    type === 'memory.updated' ||
+    type === 'skill.updated' ||
+    type === 'skills.reloaded' ||
+    type === 'note.updated' ||
+    type === 'notes.reloaded'
+  )
+}
+
+/**
+ * Применить кадр процессного хранилища.
+ *
+ * Такие кадры приходят с пустым `session` и относятся ко ВСЕМ агентам сразу: память, навыки и
+ * заметки одни на процесс. Выбранный агент на них не влияет никак.
+ */
+export function applyGlobal(globals: GlobalViewState, frame: AgentEventFrame): ApplyOutcome {
   switch (frame.type) {
     case 'memory.updated': {
       const p = frame.payload as MemoryUpdatedPayload
-      if (!state.memory)
+      if (!globals.memory)
         return 'resync'
 
-      state.memory = { ...state.memory, memory_live: [...p.entries] }
+      globals.memory = { ...globals.memory, memory_live: [...p.entries] }
 
       // Замороженный текст меняется ТОЛЬКО при перестройке префикса, и сервер шлёт этот же кадр,
       // когда она случается. Отличить одно от другого по payload нельзя, поэтому живую колонку
-      // обновляем всегда, а замороженную догоняет reseed по prefix.replaced.
+      // обновляем всегда, а замороженную догоняет пересев по prefix.replaced.
       return 'ok'
     }
 
     case 'skill.updated': {
       const skill = frame.payload as SkillUpdatedPayload
-      const at = state.skills.findIndex((s) => s.name === skill.name)
+      const at = globals.skills.findIndex((s) => s.name === skill.name)
       if (at >= 0)
-        state.skills[at] = skill
+        globals.skills[at] = skill
       else
-        state.skills = [...state.skills, skill].sort((a, b) => (a.name < b.name ? -1 : 1))
+        globals.skills = [...globals.skills, skill].sort((a, b) => (a.name < b.name ? -1 : 1))
       return 'ok'
     }
 
     case 'note.updated': {
       const note = frame.payload as PlayerNoteUpdatedPayload
-      const at = state.notes.findIndex((n) => n.slug === note.slug)
+      const at = globals.notes.findIndex((n) => n.slug === note.slug)
 
       // Пустой entries — надгробие: удаление последней записи сносит и файл. Не удалить ключ
       // здесь значит рисовать человека, о котором уже ничего не известно, до самой перезагрузки
       // хранилища.
       if (note.entries.length === 0)
-        state.notes = state.notes.filter((n) => n.slug !== note.slug)
+        globals.notes = globals.notes.filter((n) => n.slug !== note.slug)
       else if (at >= 0)
-        state.notes[at] = note
+        globals.notes[at] = note
       else
-        state.notes = [...state.notes, note].sort((a, b) => (a.slug < b.slug ? -1 : 1))
+        globals.notes = [...globals.notes, note].sort((a, b) => (a.slug < b.slug ? -1 : 1))
 
       return 'ok'
     }
@@ -186,7 +197,7 @@ export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutco
     case 'notes.reloaded': {
       // Целиком, по тому же доводу, что и у скиллов: заметку могли удалить с диска руками.
       const p = frame.payload as PlayerNotesReloadedPayload
-      state.notes = [...p.notes].sort((a, b) => (a.slug < b.slug ? -1 : 1))
+      globals.notes = [...p.notes].sort((a, b) => (a.slug < b.slug ? -1 : 1))
       return 'ok'
     }
 
@@ -194,22 +205,33 @@ export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutco
       // Целиком, а не по одному: перечитывание — единственный способ для скилла ИСЧЕЗНУТЬ, и
       // поштучные обновления о пропавших молчат.
       const p = frame.payload as SkillsReloadedPayload
-      state.skills = [...p.skills].sort((a, b) => (a.name < b.name ? -1 : 1))
+      globals.skills = [...p.skills].sort((a, b) => (a.name < b.name ? -1 : 1))
       return 'ok'
     }
   }
 
-  // Дальше — только сессионное.
+  return 'ok'
+}
+
+/**
+ * Применить кадр одного агента.
+ *
+ * Возвращает `'resync'`, когда кадр невозможно применить честно и единственный правильный ответ —
+ * перечитать снимок ЭТОГО агента. Гадать нельзя: молча разъехавшаяся лента выглядит правдоподобно.
+ * Важно, что пересев теперь поагентный: соседей и общий курсор он не трогает.
+ */
+export function applyAgent(view: AgentViewState, frame: AgentEventFrame): ApplyOutcome {
   switch (frame.type) {
     case 'session.started': {
-      // Полный reseed, а не локальный сброс: payload несёт {brain, round, prefix_hash} и никакого
+      // Полный пересев, а не локальный сброс: payload несёт {brain, round, prefix_hash} и никакого
       // состояния. Плюс порядок на проводе — prefix.replaced ДО session.started, а
       // history.replaced ПОСЛЕ, — так что собрать сессию из одних кадров всё равно нельзя.
       const p = frame.payload as SessionStartedPayload
-      state.brain = p.brain
-      state.round = p.round
-      state.sessionGone = false
-      resetSeries(state.series)
+      view.brain = p.brain
+      view.round = p.round
+      view.startedSeq = frame.seq
+      view.ended = false
+      resetSeries(view.series)
       return 'resync'
     }
 
@@ -218,16 +240,16 @@ export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutco
       void p
       // Помечаем, а не чистим: смотреть на разговор умершего агента полезно, а вот применять к
       // нему приходящие следом кадры — нет.
-      state.sessionGone = true
+      view.ended = true
       return 'ok'
     }
   }
 
   // Окно зомби. `Release` публикует session.ended, затем отменяет токен и уходит, не дожидаясь
   // петли; её `finally` ещё допишет синтетические результаты турного бюджета и последний stats.
-  // Эти кадры приходят под тем же session id ("current" — константа), так что отличить их можно
-  // только по тому, что мы уже видели конец.
-  if (state.sessionGone)
+  // Эти кадры приходят под тем же идентификатором агента, так что отличить их можно только по
+  // тому, что мы уже видели конец.
+  if (view.ended)
     return 'ok'
 
   switch (frame.type) {
@@ -240,36 +262,40 @@ export function apply(state: AgentViewState, frame: AgentEventFrame): ApplyOutco
       // проехавшее посреди снятия, попадёт и в данные, и в поток. Для всех остальных видов повтор
       // безвреден (каждый несёт новое значение целиком), а вот повторный append задвоил бы
       // сообщение. Несовпадение индекса или эпохи ловит и это, и потерю, и вторую петлю.
-      if (p.body_epoch !== state.bodyEpoch || p.index !== state.messages.length)
+      if (p.body_epoch !== view.bodyEpoch || p.index !== view.messages.length)
         return 'resync'
 
-      state.messages.push(p.message)
+      view.messages.push(p.message)
       return 'ok'
     }
 
     case 'history.replaced': {
       const p = frame.payload as HistoryReplacedPayload
-      state.bodyEpoch = p.body_epoch
-      state.messages = [...p.messages]
+      view.bodyEpoch = p.body_epoch
+      view.messages = [...p.messages]
       return 'ok'
     }
 
     case 'prefix.replaced': {
       const p = frame.payload as PrefixReplacedPayload
-      state.prefixHash = p.prefix_hash
-      state.systemPrompt = p.system_prompt
-      state.toolsJson = p.tools_json
+      view.prefixHash = p.prefix_hash
+      view.systemPrompt = p.system_prompt
+      view.toolsJson = p.tools_json
 
-      // Перестройка префикса — единственный момент, когда догоняет замороженный текст памяти и
-      // перечитывается библиотека скиллов. Оба события сервер шлёт сам, но снимок дешевле и
-      // надёжнее, чем угадывать порядок.
-      return 'resync'
+      // Применяется НА МЕСТЕ, снимка не требует, и это изменение против прежнего поведения.
+      //
+      // Раньше перестройка префикса означала пересев всей ленты — на одном агенте терпимо. На
+      // четырёх компакции случаются вчетверо чаще, и прежнее правило означало бы отладчик,
+      // который непрерывно моргает. Payload несёт всё, что нужно: хеш, промпт и описание
+      // инструментов. Догоняющий замороженный текст памяти приезжает отдельным кадром
+      // memory.updated, который сервер шлёт при той же перестройке.
+      return 'ok'
     }
 
     case 'stats': {
       const p = frame.payload as StatsPayload
-      state.stats = p
-      pushSample(state.series, p)
+      view.stats = p
+      pushSample(view.series, p)
       return 'ok'
     }
   }

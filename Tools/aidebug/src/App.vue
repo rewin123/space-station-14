@@ -31,6 +31,26 @@ const tab = ref<TabId>('conversation')
 // терминально встаёт и говорит об этом — молчать было бы хуже.
 onMounted(() => agent.connect())
 
+const SLICE_TEXT: Record<string, string> = {
+  absent: 'не загружен',
+  seeding: 'снимок…',
+  live: 'на связи',
+  ended: 'ушёл',
+}
+
+function chipTitle(row: { id: string; alive: boolean; turns: number; last_error: string | null }): string {
+  const parts = [
+    `${row.id}: ${SLICE_TEXT[agent.sliceState(row.id)]}`,
+    row.alive ? 'тело живо' : 'ТЕЛО МЕРТВО',
+    `ходов ${row.turns}`,
+  ]
+
+  if (row.last_error)
+    parts.push(`ошибка: ${row.last_error}`)
+
+  return parts.join(' · ')
+}
+
 const STATUS_TEXT: Record<string, string> = {
   idle: 'не подключено',
   connecting: 'снимок…',
@@ -59,12 +79,46 @@ const STATUS_TEXT: Record<string, string> = {
       </span>
 
       <span class="cursor mono">
-        <template v-if="agent.state.sessionId">
-          раунд {{ agent.state.round }} ·
-        </template>
+        <template v-if="agent.globals.round">раунд {{ agent.globals.round }} · </template>
         seq {{ agent.state.seq }} · {{ agent.state.instance || '—' }}
       </span>
     </header>
+
+    <!--
+      Переключатель мозгов.
+
+      Порядок задаёт СЕРВЕР (ядро первым, дальше по алфавиту) — здесь ростер не пересортировывается
+      нарочно: две независимые сортировки разъехались бы, и вкладка по умолчанию прыгала бы.
+
+      Кадры уже открытых агентов продолжают применяться в фоне, поэтому возврат к ним мгновенен.
+      Не открытые не копят ничего: четыре истории по сотне тысяч токенов в одной вкладке — это
+      десятки мегабайт строк.
+    -->
+    <div v-if="agent.roster.length" class="agents">
+      <button
+        v-for="row in agent.roster"
+        :key="row.id"
+        class="chip"
+        :class="{ on: row.id === agent.selected, dead: !row.alive, bad: !!row.last_error }"
+        :title="chipTitle(row)"
+        @click="agent.select(row.id)"
+      >
+        <span class="dot" :class="agent.sliceState(row.id)" />
+        {{ row.name }}
+        <span class="id mono">{{ row.id }}</span>
+        <span v-if="row.pending_input" class="mark">✉</span>
+        <span v-if="row.last_error" class="mark">!</span>
+      </button>
+
+      <button
+        v-if="agent.selected && agent.sliceState(agent.selected) !== 'absent'"
+        class="chip unload"
+        title="Убрать историю этого агента из памяти вкладки"
+        @click="agent.unload(agent.selected)"
+      >
+        выгрузить
+      </button>
+    </div>
 
     <nav>
       <button
@@ -175,4 +229,48 @@ main {
 .hint.bad {
   color: var(--bad);
 }
+
+.agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agents .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.agents .chip.on {
+  border-color: var(--accent, #6ab);
+  background: rgba(106, 187, 255, 0.12);
+}
+
+.agents .chip.dead { opacity: 0.55; }
+.agents .chip.bad { border-color: #c55; }
+
+.agents .chip .id { opacity: 0.6; font-size: 11px; }
+.agents .chip .mark { color: #c55; }
+
+.agents .chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.agents .chip .dot.live { background: #6c6; }
+.agents .chip .dot.seeding { background: #cc6; }
+.agents .chip .dot.ended { background: #c66; }
+.agents .chip.unload { opacity: 0.6; }
 </style>

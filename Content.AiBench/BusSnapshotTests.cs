@@ -138,7 +138,7 @@ public sealed class BusSnapshotTests
         {
             for (var i = 0; i < 200 && !stop.IsCancellationRequested; i++)
             {
-                var snapshot = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
+                var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
                 Assert.That(snapshot.Instance, Is.EqualTo(bus.Instance));
             }
         });
@@ -165,7 +165,7 @@ public sealed class BusSnapshotTests
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
-        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
+        var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
 
         Assert.Multiple(() =>
         {
@@ -178,7 +178,7 @@ public sealed class BusSnapshotTests
         });
 
         memory.RefreshSnapshot();
-        var after = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
+        var after = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
 
         Assert.That(after.Memory.MemoryFrozen,
             Does.Contain("записано после того, как префикс заморозили"),
@@ -194,12 +194,12 @@ public sealed class BusSnapshotTests
         var skills = new SkillStore(_dir, Sawmill);
         skills.LoadFromDisk();
 
-        var snapshot = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7);
+        var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
 
         Assert.Multiple(() =>
         {
-            Assert.That(snapshot.Session, Is.Null,
-                "между раундами ядро никем не занято — это нормальный ответ, а не ошибка");
+            Assert.That(snapshot.Agents, Is.Empty,
+                "между раундами тела никем не заняты — это нормальный ответ, а не ошибка");
             Assert.That(snapshot.Memory, Is.Not.Null, "память процессная и переживает сессию");
             Assert.That(snapshot.Skills, Is.Not.Null);
         });
@@ -221,7 +221,7 @@ public sealed class BusSnapshotTests
         var memory = new MemoryStore(_dir, Sawmill);
         memory.LoadFromDisk();
 
-        var names = AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7)
+        var names = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7)
             .Skills.Select(s => s.Name).ToList();
 
         Assert.That(names, Is.EqualTo(names.OrderBy(n => n, StringComparer.Ordinal).ToList()));
@@ -239,7 +239,7 @@ public sealed class BusSnapshotTests
         skills.LoadFromDisk();
 
         var json = JsonSerializer.Serialize(
-            AgentDebugState.Capture(bus, null, memory, skills, Notes(), "current", 7), LlmJson.Options);
+            AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7), LlmJson.Options);
 
         Assert.Multiple(() =>
         {

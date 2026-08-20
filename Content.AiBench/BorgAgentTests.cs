@@ -2,10 +2,19 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Numerics;
 using System.Threading.Tasks;
 using Content.Server.AiAgent;
 using Content.Server.AiAgent.Borg;
+using Content.Shared.Access.Components;
+using Content.Shared.Access;
+using Content.Shared.Access.Systems;
+using Content.Shared.Doors.Components;
+using Content.Shared.Power.Components;
+using Content.Shared.Whitelist;
+using Content.Shared.Doors.Systems;
 using Content.Shared.Mind;
 using Content.Shared.Mind.Components;
 using Content.Shared.NPC;
@@ -13,6 +22,7 @@ using Content.Shared.Silicons.Borgs.Components;
 using NUnit.Framework;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Prototypes;
 using Robust.Shared.Maths;
 using Robust.Shared.Map.Components;
 
@@ -56,6 +66,245 @@ public sealed class BorgAgentTests
         return borg;
     }
 
+    /// <summary>
+    /// Три робота подряд получают три РАЗНЫХ идентификатора.
+    /// </summary>
+    /// <remarks>
+    /// Совпадение id — не падение, а тихая порча: у агентов общий каталог <c>ai_data/agents/id</c>,
+    /// общий файл диалога и общая «сессия» на шине. Проявляется это через раунд, после рестарта,
+    /// когда робот восстанавливает чужую память как свою, — то есть в момент, когда связать
+    /// причину со следствием уже нечем. Пока id был константой прототипа, единственной защитой
+    /// была внимательность того, кто пишет YAML.
+    /// </remarks>
+    [Test]
+    public async Task AgentIds_AreHandedOutOnePerRobot()
+    {
+        await using var w = await AiStation.Create();
+
+        var ids = new List<string>();
+
+        await w.Post(() =>
+        {
+            var system = w.Pair.Server.System<AiBorgSystem>();
+
+            for (var i = 0; i < 3; i++)
+            {
+                Assert.That(system.TrySpawnBorg(null, out var borg, out var placed, "AiBorgCombatChassis"), Is.True,
+                    $"робот {i}: не удалось поставить — {placed}");
+
+                Assert.That(system.TryClaim(borg, out var why), Is.True, $"робот {i}: захват не удался — {why}");
+
+                ids.Add(w.Ent.GetComponent<AiBorgComponent>(borg).AgentId);
+            }
+        });
+
+        await w.Pair.Server.WaitRunTicks(5);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ids, Has.Count.EqualTo(3));
+            Assert.That(ids.Distinct(StringComparer.OrdinalIgnoreCase).Count(), Is.EqualTo(3),
+                $"идентификаторы совпали: {string.Join(", ", ids)}");
+
+            foreach (var id in ids)
+                Assert.That(id, Does.StartWith("combat-"), $"«{id}» собран не из префикса прототипа");
+        });
+    }
+
+    /// <summary>
+    /// Занятый идентификатор, прописанный в прототипе явно, — отказ, а не наложение.
+    /// </summary>
+    /// <remarks>
+    /// Это единственное место, где ошибку в прототипе ещё видно. Дальше она выглядит как «робот
+    /// почему-то помнит чужую смену», и искать её будут в компакции, а не в YAML.
+    /// </remarks>
+    [Test]
+    public async Task AgentId_TakenExplicitly_IsRefused()
+    {
+        await using var w = await AiStation.Create();
+        await SpawnAndClaim(w);
+
+        await w.Post(() =>
+        {
+            var system = w.Pair.Server.System<AiBorgSystem>();
+
+            Assert.That(system.TrySpawnBorg(null, out var second, out var placed), Is.True, placed);
+            Assert.That(system.TryClaim(second, out var why), Is.False,
+                "второй робот с тем же явным id захватился — каталоги памяти теперь общие");
+            Assert.That(why, Does.Contain("borg-1"), $"причина отказа не называет виновный id: {why}");
+        });
+    }
+
+    /// <summary>
+    /// Инструмент <c>hit</c> действительно наносит урон.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Тест написан после находки: <c>hit</c> звал <c>UserInteraction</c>, то есть КЛИК, и урона
+    /// не наносил вовсе. Отличить это от промаха было нельзя ничем — инструмент отвечал «ударил»
+    /// в обоих случаях, а модель верила. Удар живёт в <c>MeleeWeaponSystem</c> и поднимается
+    /// событием от клиента, которого у робота нет.
+    /// </para>
+    /// <para>
+    /// Проверяется именно урон, а не успех вызова: успех вернулся бы и у сломанной версии.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task Hit_ActuallyHurts()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+
+        // Мишень ставится в ТУ ЖЕ клетку, что и робот, и это не небрежность.
+        //
+        // Соседняя клетка на настоящей карте с равным успехом оказывается полом и переборкой, а
+        // за переборкой удар честно не проходит: DoLightAttack проверяет InRangeUnobstructed.
+        // Первая версия теста ставила мишень на клетку восточнее и была зелёной ровно до тех пор,
+        // пока прогон в общем стенде не выдал роботу другое место у маяка. Два моба на одной
+        // клетке — законное состояние, а вопрос теста в том, наносится ли урон, а не в геометрии.
+        var at = await w.Read(() => w.Ent.System<SharedTransformSystem>().GetWorldPosition(borg));
+        var victim = await w.SpawnCrew("Мишень", at);
+
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var damage = w.Pair.Server.System<Content.Shared.Damage.Systems.DamageableSystem>();
+        var before = await w.Read(() => damage.GetTotalDamage(victim));
+
+        // Хендл цели берётся из look: инструмент принимает только их, и подсовывать uid значило бы
+        // проверять не тот путь, которым ходит модель.
+        var seen = await w.InvokeOn(borg, "look");
+        // Ищем по ВИДУ, а не по имени, и это не лень.
+        //
+        // В строку обзора идёт Identity.Name, а система личности прячет имя человека, пока на нём
+        // нет опознавательного жетона: строка «Мишень» не появится там никогда, сколько бы раз
+        // SetEntityName ни звали. Робот видит незнакомца ровно так же, как его видел бы человек.
+        var handle = HandleOfKind(seen.EffectJson(), "crew-");
+        Assert.That(handle, Is.Not.Null, $"мишень не попала в обзор: {seen.EffectJson()}");
+
+        // Повтор — часть проверки, а не костыль. Взяв предмет в руку, апстрим сдвигает
+        // MeleeWeaponComponent.NextAttack на один интервал вперёд (ResetOnHandSelected), чтобы
+        // нельзя было бить сменой оружия. Робот только что установил модуль, то есть попал ровно
+        // в это окно, и первый удар честно отказывается. Инструмент отвечает на такой отказ
+        // retry: later, и здесь проверяется в том числе, что этот совет рабочий.
+        Content.Server.AiAgent.Tools.ToolResult hit = null!;
+
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            hit = await w.InvokeOn(borg, "hit", $"{{\"target\":\"{handle}\"}}");
+
+            if (hit.Ok)
+                break;
+
+            await w.Pair.Server.WaitRunTicks(10);
+        }
+
+        Assert.That(hit.Ok, Is.True, $"удар не прошёл: {hit.Error} {hit.Detail}");
+
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var after = await w.Read(() => damage.GetTotalDamage(victim));
+
+        Assert.That(after, Is.GreaterThan(before),
+            "урона нет: инструмент отчитался об ударе, которого не было");
+    }
+
+    /// <summary>Первый хендл заданного вида из выдачи <c>look</c>.</summary>
+    private static string? HandleOfKind(string lookJson, string kind)
+    {
+        foreach (var row in lookJson.Split('"'))
+        {
+            if (!row.StartsWith(kind, StringComparison.Ordinal) || !row.Contains(" | ", StringComparison.Ordinal))
+                continue;
+
+            return row.Split('|')[0].Trim();
+        }
+
+        return null;
+    }
+
+
+    /// <summary>
+    /// Боевой робот вооружён обоими способами, и инструменты сами выбирают нужную руку.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Проверяется не «модуль стоит», а «оба инструмента отвечают не отказом об оружии». Разница
+    /// существенная: клинок и ствол лежат в РАЗНЫХ руках одного модуля, и активна из них ровно
+    /// одна. Пока hit и shoot смотрели только в активную руку, половина вооружения робота
+    /// зависела от того, какую руку выбрал апстрим при установке модуля.
+    /// </para>
+    /// <para>
+    /// Цели здесь нет намеренно: с целью тест проверял бы ещё и попадание, то есть падал бы от
+    /// перезарядки и от геометрии. Здесь важно только, что оружие найдено.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task CombatBorg_HasBothWeapons_AndPicksTheRightHand()
+    {
+        await using var w = await AiStation.Create();
+        var borg = EntityUid.Invalid;
+
+        await w.Post(() =>
+        {
+            var system = w.Pair.Server.System<AiBorgSystem>();
+            Assert.That(system.TrySpawnBorg(null, out borg, out var placed, "AiBorgCombatChassis"), Is.True, placed);
+            Assert.That(system.TryClaim(borg, out var why), Is.True, why);
+        });
+
+        await w.Pair.Server.WaitRunTicks(10);
+
+        var held = await w.Read(() => w.Pair.Server.System<Content.Shared.Hands.EntitySystems.SharedHandsSystem>()
+            .EnumerateHeld(borg)
+            .Select(x => w.Ent.GetComponent<MetaDataComponent>(x).EntityPrototype?.ID ?? "?")
+            .ToList());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(held, Does.Contain("KukriKnife"), $"клинка нет в руках: {string.Join(", ", held)}");
+            Assert.That(held, Does.Contain("WeaponAdvancedLaser"), $"ствола нет в руках: {string.Join(", ", held)}");
+        });
+
+        // Обоим инструментам подсовывается заведомо несуществующий хендл: нас интересует, на чём
+        // именно они спотыкаются. Отказ «нечем бить» или «нечем стрелять» означал бы, что рука с
+        // оружием не найдена, — а отказ про хендл означает, что оружие нашлось и дело дошло до цели.
+        var hit = await w.InvokeOn(borg, "hit", "{\"target\":\"obj-999\"}");
+        var shot = await w.InvokeOn(borg, "shoot", "{\"target\":\"obj-999\"}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(hit.Detail ?? "", Does.Not.Contain("нечем бить"), "клинок не найден ни в одной руке");
+            Assert.That(shot.Detail ?? "", Does.Not.Contain("нечем стрелять"), "ствол не найден ни в одной руке");
+        });
+    }
+
+    /// <summary>
+    /// Инженерный робот отказывается стрелять, а не делает вид.
+    /// </summary>
+    /// <remarks>
+    /// У инженера в руках инструменты, и <c>TryGetGun</c> на них отвечает «нет». Проверяется
+    /// именно текст отказа: он единственное, из чего модель поймёт, что дело не в цели и не в
+    /// перезарядке, а в том, что стрелять нечем и надо менять модуль.
+    /// </remarks>
+    [Test]
+    public async Task Shoot_WithoutAGun_IsRefused()
+    {
+        await using var w = await AiStation.Create();
+        var borg = await SpawnAndClaim(w);
+
+        var seen = await w.InvokeOn(borg, "look");
+        var anything = HandleOfKind(seen.EffectJson(), "obj-");
+        Assert.That(anything, Is.Not.Null, "обзор пуст");
+
+        var shot = await w.InvokeOn(borg, "shoot", $"{{\"target\":\"{anything}\"}}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shot.Ok, Is.False, "инженер выстрелил, не имея оружия");
+            Assert.That(shot.Detail ?? "", Does.Contain("нечем стрелять"),
+                $"отказ не объясняет причину: {shot.Detail}");
+        });
+    }
+
     [Test]
     public async Task LookDelta_IsInTheSameFrameAsSelfAndGoto()
     {
@@ -82,13 +331,22 @@ public sealed class BorgAgentTests
         // Берём первый объект с ненулевой Δ: на нулевой поворот не проверить.
         var checkedAny = false;
 
+        // Строка несёт ДВЕ пары: «Δ(dx,dy) (x,y)». Обе обязаны быть в координатах сетки — первая
+        // как смещение, вторая как готовая точка для goto. Абсолютную пару модель подставляет без
+        // арифметики, и если она уедет, ошибка будет не «на шаг», а «в другой отсек».
+        var pairs = new Regex(@"Δ\((-?\d+),(-?\d+)\) \((-?\d+),(-?\d+)\)");
+
         foreach (var row in rows)
         {
             var handle = row[..row.IndexOf(' ')];
-            var delta = row[(row.IndexOf("Δ(", StringComparison.Ordinal) + 2)..].TrimEnd(')');
-            var parts = delta.Split(',');
-            var dx = float.Parse(parts[0], CultureInfo.InvariantCulture);
-            var dy = float.Parse(parts[1], CultureInfo.InvariantCulture);
+            var m = pairs.Match(row);
+
+            Assert.That(m.Success, Is.True, $"{handle}: в строке нет двух пар чисел — «{row}»");
+
+            var dx = float.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            var dy = float.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+            var ax = float.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture);
+            var ay = float.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
 
             if (Math.Abs(dx) < 1 && Math.Abs(dy) < 1)
                 continue;
@@ -97,13 +355,13 @@ public sealed class BorgAgentTests
             {
                 var session = w.System.GetSession(borg);
                 if (session == null || !session.Handles.TryResolve(handle, out var uid))
-                    return (Vector2?) null;
+                    return ((Vector2 Delta, Vector2 Absolute)?) null;
 
                 var xforms = w.Pair.Server.System<SharedTransformSystem>();
                 var toGrid = xforms.GetInvWorldMatrix(w.Grid);
                 var here = Vector2.Transform(xforms.GetMapCoordinates(borg).Position, toGrid);
                 var there = Vector2.Transform(xforms.GetMapCoordinates(uid).Position, toGrid);
-                return there - here;
+                return (there - here, there);
             });
 
             if (expected == null)
@@ -113,10 +371,14 @@ public sealed class BorgAgentTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(dx, Is.EqualTo(expected.Value.X).Within(0.6f),
-                    $"{handle}: Δx разъехалась — look={dx}, сетка={expected.Value.X}");
-                Assert.That(dy, Is.EqualTo(expected.Value.Y).Within(0.6f),
-                    $"{handle}: Δy разъехалась — look={dy}, сетка={expected.Value.Y}");
+                Assert.That(dx, Is.EqualTo(expected.Value.Delta.X).Within(0.6f),
+                    $"{handle}: Δx разъехалась — look={dx}, сетка={expected.Value.Delta.X}");
+                Assert.That(dy, Is.EqualTo(expected.Value.Delta.Y).Within(0.6f),
+                    $"{handle}: Δy разъехалась — look={dy}, сетка={expected.Value.Delta.Y}");
+                Assert.That(ax, Is.EqualTo(expected.Value.Absolute.X).Within(0.6f),
+                    $"{handle}: X абсолютной пары разъехался — look={ax}, сетка={expected.Value.Absolute.X}");
+                Assert.That(ay, Is.EqualTo(expected.Value.Absolute.Y).Within(0.6f),
+                    $"{handle}: Y абсолютной пары разъехался — look={ay}, сетка={expected.Value.Absolute.Y}");
             });
 
             break;
@@ -807,6 +1069,340 @@ public sealed class BorgAgentTests
     /// строку ЗАПУСК и на утверждение про впрыск.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Зарядки ищутся по всей станции, а не по тому, что видно, и только те, в которые робот влезает.
+    /// </summary>
+    /// <remarks>
+    /// В раунде 137 робот обошёл пять отсеков, доложил «BorgCharger не нашёл нигде, задача
+    /// невозможна» и сел на нуле — при трёх станциях на карте. Видеть их он не мог ниоткуда:
+    /// стоят они в робототехнике, а садится он там, где работал.
+    /// </remarks>
+    [Test]
+    public async Task FindCharger_SeesTheWholeStation_AndOnlyOnesThatFit()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+        var borg = await SpawnAndClaim(w);
+
+        var result = await w.InvokeOn(borg, "find_charger");
+        TestContext.Out.WriteLine("зарядки: " + result.EffectJson());
+
+        Assert.That(result.Ok, Is.True, $"поиск не сработал: {result.Error} {result.Detail}");
+
+        var effect = JsonDocument.Parse(result.EffectJson()).RootElement;
+        var rows = effect.GetProperty("зарядки").EnumerateArray().Select(x => x.GetString()!).ToList();
+
+        // Сколько станций, куда влезает шасси, на самом деле стоит на сетке.
+        var real = await w.Read(() =>
+        {
+            var whitelist = ent.System<EntityWhitelistSystem>();
+            var grid = ent.GetComponent<TransformComponent>(borg).GridUid;
+            var count = 0;
+
+            var q = ent.EntityQueryEnumerator<ChargerComponent>();
+
+            while (q.MoveNext(out var uid, out var charger))
+            {
+                if (ent.GetComponent<TransformComponent>(uid).GridUid != grid)
+                    continue;
+
+                if (charger.Whitelist != null && whitelist.IsValid(charger.Whitelist, borg))
+                    count++;
+            }
+
+            return count;
+        });
+
+        TestContext.Out.WriteLine($"на сетке станций для шасси: {real}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(real, Is.GreaterThan(0), "на карте ротации нет ни одной станции для киборгов — сцена не та");
+            Assert.That(rows, Has.Count.EqualTo(real), "найдено не столько станций, сколько стоит на сетке");
+
+            // Настольные зарядки для батареек в список попасть не должны: у них свой слот и свой
+            // вайтлист, и робот, придя к такой, потеряет ходы ни на что.
+            foreach (var row in rows)
+                Assert.That(row, Does.Match(@"^-?\d+,-?\d+ \| \d+ тайлов \| (запитана|ОБЕСТОЧЕНА)$"),
+                    $"строка не разбирается на координаты: «{row}»");
+        });
+
+        // Ближняя должна идти первой — иначе робот на нуле пойдёт через полстанции мимо соседней.
+        var distances = rows
+            .Select(r => int.Parse(r.Split('|')[1].Trim().Split(' ')[0], CultureInfo.InvariantCulture))
+            .ToList();
+
+        Assert.That(distances, Is.Ordered, "список не отсортирован по расстоянию");
+    }
+
+    /// <summary>
+    /// Раскладка АМЭ: пульт снаружи, подход к нему свободен, укладка отступает к выходу.
+    /// </summary>
+    /// <remarks>
+    /// Три условия — три живых прогона, каждый из которых кончился впустую: кольцо вокруг пульта
+    /// (ноль ядер), застроенный подход (реактор собран, впрыск включить нечем) и робот, замуровавший
+    /// себя девятым щитом. Здесь они проверяются разом и без модели.
+    /// </remarks>
+    [Test]
+    public async Task AmePlan_KeepsControllerOutside_AndLeavesAWayOut()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+
+        var borg = EntityUid.Invalid;
+        await w.Pair.Server.WaitPost(() =>
+        {
+            var sys = w.Pair.Server.System<AiBorgSystem>();
+            Assert.That(sys.TrySpawnBorg("AME", out borg, out var placed), Is.True, placed);
+            Assert.That(sys.TryClaim(borg, out var why), Is.True, why);
+        });
+
+        await w.Pair.Server.WaitRunTicks(30);
+
+        var plan = await w.InvokeOn(borg, "ame_plan");
+        TestContext.Out.WriteLine("план: " + plan.EffectJson());
+
+        Assert.That(plan.Ok, Is.True, $"план не построился: {plan.Error} {plan.Detail}");
+
+        var effect = JsonDocument.Parse(plan.EffectJson()).RootElement;
+
+        Vector2i Tile(string raw)
+        {
+            var parts = raw.Split(',');
+            return new Vector2i(int.Parse(parts[0], CultureInfo.InvariantCulture),
+                int.Parse(parts[1], CultureInfo.InvariantCulture));
+        }
+
+        var order = effect.GetProperty("порядок").EnumerateArray().Select(x => Tile(x.GetString()!)).ToList();
+        var ctrl = Tile(effect.GetProperty("пульт").GetString()!);
+        var exit = Tile(effect.GetProperty("выход").GetString()!);
+        var approach = Tile(effect.GetProperty("подход_к_пульту").GetString()!);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(order, Has.Count.EqualTo(9), "квадрат 3x3 — это девять клеток, иначе ядра не будет");
+            Assert.That(order.Distinct().Count(), Is.EqualTo(9), "в раскладке повторяются клетки");
+            Assert.That(order, Does.Not.Contain(ctrl), "пульт попал внутрь квадрата — ядром станет он, то есть никто");
+            Assert.That(order, Does.Not.Contain(exit), "выход внутри квадрата — это не выход");
+            Assert.That(order, Does.Not.Contain(approach), "подход к пульту застроен — до консоли будет не добраться");
+
+            // Квадрат обязан касаться пульта стороной, иначе он не попадёт с ним в одну узловую сеть.
+            var touches = order.Any(c => (Math.Abs(c.X - ctrl.X) + Math.Abs(c.Y - ctrl.Y)) == 1);
+            Assert.That(touches, Is.True, "квадрат не примыкает к пульту");
+
+            // Подход должен быть именно у пульта, а не «где-то рядом».
+            Assert.That(Math.Abs(approach.X - ctrl.X) + Math.Abs(approach.Y - ctrl.Y), Is.EqualTo(1),
+                "клетка подхода не примыкает к пульту");
+
+            // Главное: каждая следующая клетка не дальше от выхода предыдущей. Робот отступает,
+            // а не забирается вглубь, и на последней стоит у самого выхода.
+            for (var i = 1; i < order.Count; i++)
+            {
+                var prev = (order[i - 1] - exit).Length;
+                var now = (order[i] - exit).Length;
+                Assert.That(now, Is.LessThanOrEqualTo(prev + 0.001f),
+                    $"шаг {i}: укладка идёт вглубь ({prev:F2} → {now:F2} до выхода), робот запрёт себя");
+            }
+
+            Assert.That((order[^1] - exit).Length, Is.LessThanOrEqualTo(1.5f),
+                "последняя клетка далеко от выхода — с неё робот наружу не шагнёт");
+        });
+    }
+
+    /// <summary>
+    /// Закрытый шлюз без доступа робот всё равно открывает, а заболченный — нет.
+    /// </summary>
+    /// <remarks>
+    /// Правило владельца форка: проходим любой шлюз, который не заболтили. Повод — дорога от
+    /// инженерного крыла к АМЭ на карте ротации идёт через <c>AirlockAtmosphericsGlassLocked</c>,
+    /// доступа к которому у шасси нет: робот втыкался в створку, перекладывал маршрут, снова
+    /// втыкался и за полчаса раунда 135 так и не вернулся к собранному им же реактору. Болты при
+    /// этом обязаны держать — иначе «закрыть отсек болтами» перестаёт что-либо значить для
+    /// робота, а это уже не послабление, а дыра.
+    /// </remarks>
+    [Test]
+    public async Task ClosedAirlock_OpensWithoutAccess_ButNotWhenBolted()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+        var borg = await SpawnAndClaim(w);
+
+        // Створка нужна ЗАПИТАННАЯ: обесточенный шлюз не открывается ничем, кроме лома, и на нём
+        // проверялось бы electricity, а не решение робота о двери.
+        var door = await w.Read(() =>
+        {
+            var xforms = w.Pair.Server.System<SharedTransformSystem>();
+
+            // Створка нужна ОДИНОЧНАЯ. В тамбуре их бывает пять сразу, робот жмёт ближайшую к
+            // себе, и тест, следящий за одной, читал состояние соседней — прогон выглядел как
+            // «дожим не работает», хотя дверь рядом честно открывалась.
+            var doors = new List<(EntityUid Uid, Vector2 At)>();
+            var all = ent.EntityQueryEnumerator<DoorComponent>();
+
+            while (all.MoveNext(out var uid, out _))
+                doors.Add((uid, xforms.GetMapCoordinates(uid).Position));
+
+            var q = ent.EntityQueryEnumerator<DoorComponent, AirlockComponent>();
+
+            while (q.MoveNext(out var uid, out var comp, out var airlock))
+            {
+                if (comp.State != DoorState.Closed || !airlock.Powered)
+                    continue;
+
+                var here = xforms.GetMapCoordinates(uid).Position;
+                var alone = doors.All(d => d.Uid == uid || (d.At - here).Length() > 2.5f);
+
+                if (alone)
+                    return uid;
+            }
+
+            return EntityUid.Invalid;
+        });
+
+        if (!door.IsValid())
+            Assert.Ignore("на карте не нашлось закрытого запитанного шлюза");
+
+        // Пускают ли робота права — записываем в вывод, но утверждение делаем не об этом.
+        // Проверяется правило владельца форка: болты держат, всё остальное открывается.
+        var allowed = await w.Read(() => ent.System<AccessReaderSystem>().IsAllowed(borg, door));
+        TestContext.Out.WriteLine($"права робота на эту створку: {(allowed ? "есть" : "нет")}");
+
+        var at = await w.Read(() => ent.GetComponent<TransformComponent>(door).LocalPosition);
+
+        await w.Post(() =>
+        {
+            var xforms = w.Pair.Server.System<SharedTransformSystem>();
+            xforms.SetLocalPosition(borg, at + new Vector2(0, 1.2f));
+        });
+        await w.Pair.Server.WaitRunTicks(3);
+
+        // Первый заход: болтов нет — дверь обязана поддаться.
+        var system = w.Pair.Server.System<AiBorgSystem>();
+
+        var pressed = false;
+        await w.Post(() => pressed = system.PressDoorForTest(borg));
+        await w.Pair.Server.WaitRunTicks(30);
+
+        var gap = await w.Read(() =>
+            (ent.GetComponent<TransformComponent>(borg).LocalPosition
+             - ent.GetComponent<TransformComponent>(door).LocalPosition).Length());
+
+        TestContext.Out.WriteLine($"нажатие={pressed} расстояние={gap:F2}");
+
+        var direct = await w.Read(() =>
+        {
+            var doors = ent.System<SharedDoorSystem>();
+            var comp = ent.GetComponent<DoorComponent>(door);
+            var air = ent.GetComponent<AirlockComponent>(door);
+            return $"state={comp.State} powered={air.Powered} bolted={doors.IsBolted(door)} " +
+                   $"canOpen={doors.CanOpen(door, comp, null, quiet: true)}";
+        });
+
+        TestContext.Out.WriteLine("дверь: " + direct);
+
+
+        var opened = await w.Read(() => ent.GetComponent<DoorComponent>(door).State);
+        TestContext.Out.WriteLine($"без болтов: {opened}");
+
+        Assert.That(opened, Is.Not.EqualTo(DoorState.Closed),
+            "незаболченный шлюз не открылся — робот снова упрётся в него на маршруте");
+
+        // Второй заход: закрыть и заболтить. Теперь дверь обязана устоять.
+        await w.Post(() =>
+        {
+            var doors = ent.System<SharedDoorSystem>();
+            doors.TryClose(door);
+        });
+        await w.Pair.Server.WaitRunTicks(30);
+
+        await w.Post(() =>
+        {
+            var doors = ent.System<SharedDoorSystem>();
+            var bolts = ent.EnsureComponent<DoorBoltComponent>(door);
+            doors.SetBoltsDown((door, bolts), true);
+        });
+        await w.Pair.Server.WaitRunTicks(3);
+
+        await w.Post(() => system.PressDoorForTest(borg));
+        await w.Pair.Server.WaitRunTicks(30);
+
+        var bolted = await w.Read(() => ent.GetComponent<DoorComponent>(door).State);
+        TestContext.Out.WriteLine($"с болтами: {bolted}");
+
+        Assert.That(bolted, Is.EqualTo(DoorState.Closed),
+            "заболченный шлюз открылся — болты перестали что-либо значить для робота");
+    }
+
+    /// <summary>
+    /// Пульт берётся с двух тайлов, а не только с расстояния вытянутой руки.
+    /// </summary>
+    /// <remarks>
+    /// Повод — контроллер АМЭ на карте ротации: все четыре клетки по сторонам заняты кабелями и
+    /// стеной, робот встаёт только по диагонали, и на 1.5 тайла <c>console</c> отвечал
+    /// <c>not_visible</c>, стоя вплотную к собранному им же реактору. Проверяется именно граница:
+    /// с двух тайлов пульт открывается, с четырёх — нет, и отказ приходит осмысленным кодом, а не
+    /// исключением. Ворота остаются «протянутой рукой»: проверка препятствий на месте, сквозь
+    /// стену пульт не берётся ни с какого расстояния.
+    /// </remarks>
+    [Test]
+    public async Task Console_ReachesTwoTiles_ButNotFour()
+    {
+        await using var w = await AiStation.CreateOnMap("Packed");
+        var ent = w.Ent;
+        var borg = await SpawnAndClaim(w);
+
+        var found = await w.Read(() =>
+        {
+            var q = ent.EntityQueryEnumerator<Content.Server.Ame.Components.AmeControllerComponent>();
+            return q.MoveNext(out var uid, out _) ? uid : EntityUid.Invalid;
+        });
+
+        Assert.That(found.IsValid(), Is.True, "на карте нет пульта АМЭ — проверять нечего");
+
+        var handle = await w.Read(() => w.System.HandleFor(borg, found));
+        var at = await w.Read(() => ent.GetComponent<TransformComponent>(found).LocalPosition);
+
+        // Восемь направлений: какое-то из них упрётся в стену, и это нормально — утверждение
+        // делается о том, что ХОТЯ БЫ одно место на нужной дистанции пульт открывает.
+        var around = new[]
+        {
+            new Vector2(1, 0), new Vector2(-1, 0), new Vector2(0, 1), new Vector2(0, -1),
+            new Vector2(1, 1), new Vector2(1, -1), new Vector2(-1, 1), new Vector2(-1, -1),
+        };
+
+        async Task<bool> AnyOpensAt(float tiles)
+        {
+            foreach (var dir in around)
+            {
+                var step = Vector2.Normalize(dir) * tiles;
+
+                await w.Post(() =>
+                {
+                    var xforms = w.Pair.Server.System<SharedTransformSystem>();
+                    xforms.SetLocalPosition(borg, at + step);
+                });
+
+                await w.Pair.Server.WaitRunTicks(3);
+
+                var read = await w.InvokeOn(borg, "console", "{\"target\":\"" + handle + "\"}");
+
+                TestContext.Out.WriteLine(
+                    $"{tiles:F1} тайла в сторону ({dir.X},{dir.Y}): ok={read.Ok} {read.Error} {read.Detail}");
+
+                if (read.Ok)
+                    return true;
+            }
+
+            return false;
+        }
+
+        Assert.That(await AnyOpensAt(2f), Is.True,
+            "с двух тайлов пульт не открылся ни с одной стороны — ворота console снова жмут");
+
+        Assert.That(await AnyOpensAt(4f), Is.False,
+            "пульт открылся с четырёх тайлов — это уже не «протянутая рука», а телеуправление");
+    }
+
     [Test]
     [Explicit("длинный сценарий на карте ротации")]
     public async Task Borg_StartsTheReactor()

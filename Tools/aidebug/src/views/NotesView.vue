@@ -6,7 +6,7 @@ const agent = useAgent()
 
 const selected = ref<string | null>(null)
 
-const current = computed(() => agent.state.notes.find((n) => n.slug === selected.value) ?? null)
+const current = computed(() => agent.globals.notes.find((n) => n.slug === selected.value) ?? null)
 
 /** Так же, как считает стор: записи, склеенные разделителем. Иначе цифра разойдётся с той, что видит агент. */
 const DELIMITER = '\n§\n'
@@ -19,11 +19,11 @@ function used(entries: string[]): number {
 <template>
   <div class="notes">
     <aside>
-      <p v-if="!agent.state.notes.length" class="dim">
+      <p v-if="!agent.globals.notes.length" class="dim">
         Заметок нет. Агент заводит их сам — по файлу на человека, и они переживают смены.
       </p>
       <button
-        v-for="note in agent.state.notes"
+        v-for="note in agent.globals.notes"
         :key="note.slug"
         class="item"
         :class="{ active: note.slug === selected }"
@@ -38,7 +38,7 @@ function used(entries: string[]): number {
       <header>
         <h2>{{ current.name }}</h2>
         <span class="meta mono">
-          {{ current.slug }}.md · {{ used(current.entries) }} / {{ agent.state.noteLimit }}
+          {{ current.slug }}.md · {{ used(current.entries) }} / {{ agent.globals.noteLimit }}
         </span>
       </header>
 

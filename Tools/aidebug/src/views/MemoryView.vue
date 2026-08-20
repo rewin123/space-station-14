@@ -14,9 +14,9 @@ const busy = ref(false)
 const result = ref<AgentCommandResult | null>(null)
 const error = ref('')
 
-const live = computed(() => agent.state.memory?.memory_live ?? [])
-const frozenText = computed(() => agent.state.memory?.memory_frozen ?? '')
-const limit = computed(() => agent.state.memory?.memory_limit ?? 0)
+const live = computed(() => agent.globals.memory?.memory_live ?? [])
+const frozenText = computed(() => agent.globals.memory?.memory_frozen ?? '')
+const limit = computed(() => agent.globals.memory?.memory_limit ?? 0)
 
 const frozen = computed(() => parseFrozen(frozenText.value))
 const pending = computed(() => pendingEntries(live.value, frozen.value.entries))
@@ -47,7 +47,7 @@ async function send(action: 'add' | 'remove', match?: string): Promise<void> {
 </script>
 
 <template>
-  <div v-if="!agent.state.memory" class="empty">Память ещё не загружена.</div>
+  <div v-if="!agent.globals.memory" class="empty">Память ещё не загружена.</div>
 
   <div v-else class="memory">
     <div class="bar">

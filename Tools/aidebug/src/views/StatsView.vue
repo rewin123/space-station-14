@@ -5,8 +5,8 @@ import Sparkline from '../components/Sparkline.vue'
 import NoSession from '../components/NoSession.vue'
 
 const agent = useAgent()
-const stats = computed(() => agent.state.stats)
-const turn = computed(() => agent.state.lastTurn)
+const stats = computed(() => agent.current.stats)
+const turn = computed(() => agent.current.lastTurn)
 
 const percent = (v: number) => `${(v * 100).toFixed(1)}%`
 
@@ -42,14 +42,14 @@ const ROWS: { key: keyof NonNullable<typeof stats.value>; title: string; hint?: 
   <div v-else class="stats">
     <div class="charts">
       <Sparkline
-        :series="agent.state.series"
+        :series="agent.current.series"
         :pick="(s) => s.cacheRatio"
         :max="1"
         :format="percent"
         label="доля префикс-кэша по ходам"
       />
       <Sparkline
-        :series="agent.state.series"
+        :series="agent.current.series"
         :pick="(s) => s.promptTokens"
         label="токенов в промпте по ходам"
       />
@@ -68,10 +68,6 @@ const ROWS: { key: keyof NonNullable<typeof stats.value>; title: string; hint?: 
       <div class="card">
         <div class="k">кэш последний / средний</div>
         <div class="v mono">{{ percent(stats.cache_last_ratio) }} / {{ percent(stats.cache_mean_ratio) }}</div>
-      </div>
-      <div class="card">
-        <div class="k">компакция взведена</div>
-        <div class="v">{{ stats.compaction_armed ? 'да' : 'нет' }}</div>
       </div>
       <div v-for="row in ROWS" :key="row.key" class="card">
         <div class="k">{{ row.title }}</div>

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -294,10 +295,6 @@ public sealed class TurnRunner
             var invocation = await _dispatcher.InvokeAsync(call, gate, ct).ConfigureAwait(false);
             var result = invocation.Result;
 
-            // Every result carries whatever arrived while the model was mid-turn. Reporting a bare
-            // count is not enough: a bot that answers a question it never heard reads as broken, and
-            // "wait, not that one" has to be actionable.
-            result.Unread = _queue.PeekUnread(6);
             Conv.AppendToolResult(call.Id, result.ToJson());
 
             // Without this the log shows "tools=1" and nothing else: which tool ran, with what
@@ -340,6 +337,55 @@ public sealed class TurnRunner
             if (result.Ok && invocation.Tool is { EndsTurn: true })
                 ctx.MarkIdled();
         }
+
+        SteerWithNewEvents(ctx);
+    }
+
+    /// <summary>
+    /// Подмешать события, пришедшие пока модель работала, отдельным сообщением пользователя —
+    /// сразу за результатами инструментов и перед следующим обращением к модели.
+    ///
+    /// <para>
+    /// <b>Раньше это ехало внутри каждого результата инструмента полем <c>unread</c>, и это было
+    /// двойным дублированием.</b> Во-первых, строки подставлялись в КАЖДЫЙ результат батча: на
+    /// трёх параллельных вызовах одна реплика экипажа приезжала модели трижды. Во-вторых, окно
+    /// только подсматривало в очередь, не забирая, — поэтому те же строки приходили ещё раз, уже
+    /// как обычное наблюдение в начале следующего хода. На длинном ходу это раздувало контекст
+    /// повторами одного и того же и учило модель, что события можно читать по диагонали.
+    /// </para>
+    /// <para>
+    /// Теперь события ИЗЫМАЮТСЯ из очереди — доставлено значит удалено, — и вставляются ровно
+    /// одним сообщением после ВСЕГО батча, а не после каждого вызова. Тот же приём и в том же
+    /// порядке использует агент pi (<c>agent-loop.ts</c>, <c>getSteeringMessages</c> после
+    /// <c>turn_end</c>): там это называется steering, дедупликация тоже сделана извлечением из
+    /// очереди, без курсоров и флагов, и там же отдельно оговорено, что вставка ждёт окончания
+    /// всего батча вызовов, а не встревает в его середину.
+    /// </para>
+    /// <para>
+    /// Строки SELF здесь нет намеренно: состояние мира модель только что прочитала из
+    /// <c>effect</c> каждого инструмента, и повторять его на каждом шаге двадцатипятишагового
+    /// хода — платить за одно и то же двадцать пять раз. SELF принадлежит началу хода.
+    /// </para>
+    /// </summary>
+    private void SteerWithNewEvents(TurnContext ctx)
+    {
+        var (items, dropped) = _queue.Drain();
+        if (items.Count == 0 && dropped == 0)
+            return;
+
+        // Время берём у самого свежего события, а не у начала хода и не заводим ради него ещё одну
+        // зависимость: событие само знает, когда случилось, а ход на grok46 идёт по двадцать пять
+        // шагов и его начальная отметка к середине уже врёт на минуты.
+        var when = items.Count > 0 ? items.Max(i => i.RoundTime) : TimeSpan.Zero;
+
+        var text = Perception.ObservationFormatter.FormatSteering(items, dropped, when);
+        if (text == null)
+            return;
+
+        Conv.AppendUser(text);
+
+        _sawmill.Debug($"  steering: подмешано событий {items.Count}" +
+                       (dropped > 0 ? $" (+{dropped} не поместилось)" : string.Empty));
     }
 
     /// <summary>Deliver what the crew was owed and never heard, or explain why we did not.</summary>

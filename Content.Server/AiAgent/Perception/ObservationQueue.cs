@@ -152,86 +152,6 @@ public sealed class ObservationQueue
         }
     }
 
-    /// <summary>
-    /// Look at what has arrived without consuming it.
-    ///
-    /// Used to append an "unread" note to every tool result: while the model is working through a
-    /// multi-step turn it is otherwise deaf, and a bot that answers a question it never heard
-    /// reads as broken. Reporting a bare count is not enough — the agent needs the actual lines to
-    /// react to "wait, not that one".
-    ///
-    /// <para>
-    /// <b>Слова берутся раньше увиденного, и это не предпочтение, а починка.</b> Раньше здесь брался
-    /// просто хвост очереди, и пока в ней лежали одни реплики, хвост и был репликами. С появлением
-    /// строк <see cref="ObsKind.Observed"/> очередь наполняется потоком: любая возня в кадре — и
-    /// последние шесть строк это шесть чужих движений, а обращение по рации, ради которого окно и
-    /// заведено, из него вытеснено. Получалось бы ровно то, что оно должно было предотвратить:
-    /// агент отвечает на вопрос, которого не слышал.
-    /// </para>
-    /// <para>
-    /// Порядок в ответе — исходный, очередной. Выбор «что взять» не должен переставлять строки:
-    /// одинаковое состояние мира обязано давать одинаковые байты.
-    /// </para>
-    /// </summary>
-    public List<string> PeekUnread(int max)
-    {
-        // Под локом — только выбор строк; сборка текста снаружи.
-        //
-        // Метод зовётся из ПОТОКА АГЕНТА на каждый результат инструмента (`TurnRunner`), а лок тот
-        // же, что держит `Push` — а `Push` зовётся с главного потока из обработчиков событий, то
-        // есть из-под клика игрока. Пока форматирование стояло внутри, главный поток мог встать в
-        // очередь за двумя полными обходами до шестисот элементов ПЛЮС интерполяцией строк по
-        // каждой выбранной. Это не всплывало в статистике диспетчера: маршалированного вызова тут
-        // нет, тик просто ждал чужой лок.
-        List<Observation> chosenItems;
-
-        lock (_lock)
-        {
-            if (_items.Count == 0 || max <= 0)
-                return new List<string>();
-
-            var spoken = new List<int>();
-            var seen = new List<int>();
-            var at = 0;
-
-            foreach (var item in _items)
-            {
-                (item.Kind == ObsKind.Observed ? seen : spoken).Add(at);
-                at++;
-            }
-
-            var takeSpoken = Math.Min(max, spoken.Count);
-            var takeSeen = Math.Min(max - takeSpoken, seen.Count);
-
-            var chosen = new HashSet<int>(takeSpoken + takeSeen);
-
-            for (var i = spoken.Count - takeSpoken; i < spoken.Count; i++)
-                chosen.Add(spoken[i]);
-
-            for (var i = seen.Count - takeSeen; i < seen.Count; i++)
-                chosen.Add(seen[i]);
-
-            chosenItems = new List<Observation>(chosen.Count);
-            at = 0;
-
-            foreach (var item in _items)
-            {
-                if (chosen.Contains(at))
-                    chosenItems.Add(item);
-
-                at++;
-            }
-        }
-
-        // Observation — неизменяемая запись, поэтому вынести форматирование за лок безопасно:
-        // взятые строки не могут измениться под нами, а вытеснение из очереди их уже не касается.
-        var result = new List<string>(chosenItems.Count);
-
-        foreach (var item in chosenItems)
-            result.Add(ObservationFormatter.FormatLine(item));
-
-        return result;
-    }
 
     /// <summary>
     /// Has this exact line already been buffered as radio, moments ago?
@@ -242,6 +162,28 @@ public sealed class ObservationQueue
     /// before any broadcast one. So by the time a broadcast handler sees a transmitted line, the
     /// radio copy is already in here, and this is how it recognises it.
     /// </summary>
+    /// <summary>
+    /// Лежит ли в очереди событие ровно с этим текстом.
+    ///
+    /// Нужно ровно одному месту — периодическому напоминанию злому ИИ, — и именно затем, чтобы
+    /// напоминания не копились стопкой, пока агент занят долгим ходом. Сравнение по тексту, а не
+    /// по идентификатору, потому что текст напоминания и есть его идентичность: он задан одной
+    /// строкой в прототипе правила и второго такого в очереди быть не должно.
+    /// </summary>
+    public bool HasEvent(string text)
+    {
+        lock (_lock)
+        {
+            foreach (var item in _items)
+            {
+                if (item.Kind == ObsKind.Event && item.Text == text)
+                    return true;
+            }
+
+            return false;
+        }
+    }
+
     public bool AlreadyHeardOnRadio(string speaker, string text, TimeSpan now, double withinSeconds = 1.0)
     {
         lock (_lock)

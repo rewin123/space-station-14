@@ -30,9 +30,23 @@ public sealed class AiCVars
     public static readonly CVarDef<bool> DryRun =
         CVarDef.Create("ai.dry_run", false, CVar.SERVERONLY);
 
-    /// <summary>More than one agent hammering a single-slot llama-server destroys its prefix cache.</summary>
+    /// <summary>
+    /// Потолок на число одновременно живых агентов — ядро и борги вместе.
+    ///
+    /// <para>
+    /// Проверяется в <c>StationAiAgentSystem.StartSession</c>, то есть в одном месте на оба тела.
+    /// Раньше стоял только на захвате ядра и считал там же боргов — из-за чего робот, занявший
+    /// тело первым, отбирал у мозга место в ядре.
+    /// </para>
+    /// <para>
+    /// Четыре, а не один: столько нужно режиму злого ИИ (ядро плюс три киборга поддержки).
+    /// Прежнее умолчание защищало односотовый llama-server, у которого два агента вытесняют
+    /// префикс-кэш друг друга, — но эта защита живёт не здесь, а в цепочке профилей
+    /// (<c>AgentBody.LlmChain</c>): агенту с чужой моделью чужой слот не мешает.
+    /// </para>
+    /// </summary>
     public static readonly CVarDef<int> MaxAgents =
-        CVarDef.Create("ai.max_agents", 1, CVar.SERVERONLY);
+        CVarDef.Create("ai.max_agents", 4, CVar.SERVERONLY);
 
     // ------------------------------------------------------------------- llm
 
@@ -545,9 +559,16 @@ public sealed class AiCVars
     /// tolerance for a debugger that blinked. Past the end of the ring a client is told to resync
     /// rather than handed a partial history — which is the whole reason the ring is bounded and
     /// nobody is registered as a subscriber.
+    ///
+    /// <para>
+    /// 2048, а не прежние 512, потому что агентов теперь до четырёх: кадров вчетверо больше, а
+    /// всплеск компакции — это четыре <c>history.replaced</c> с полными телами, который выбивает
+    /// кольцо за один заход. Симптом переполнения обманчив: клиент не теряет данные, он их
+    /// перекачивает, и выглядит это как «отладчик постоянно моргает без причины».
+    /// </para>
     /// </summary>
     public static readonly CVarDef<int> DebugRing =
-        CVarDef.Create("ai.debug_ring", 512, CVar.SERVERONLY);
+        CVarDef.Create("ai.debug_ring", 2048, CVar.SERVERONLY);
 
     /// <summary>
     /// Where the debug HTTP server listens. Its own port, not the engine's status host.
@@ -597,6 +618,17 @@ public sealed class AiCVars
         CVarDef.Create("ai.rogue_grant_turrets", true, CVar.SERVERONLY);
 
     /// <summary>
+    /// Ставить ли на станцию киборгов поддержки, перечисленных в прототипе правила.
+    ///
+    /// Тот же аварийный тормоз: выключить перечисленное в прототипе отсюда можно, включить
+    /// невыключенное — нет. Отдельная ручка от раздачи доступа потому, что и отказывают они по
+    /// разному: доступ можно оставить, а роботов убрать, если вечер идёт слишком тяжело для
+    /// экипажа.
+    /// </summary>
+    public static readonly CVarDef<bool> RogueSupportBorgs =
+        CVarDef.Create("ai.rogue_support_borgs", true, CVar.SERVERONLY);
+
+    /// <summary>
     /// В открытом режиме выдавать ассистента и тем, кто просил «оставить в лобби, если должность
     /// занята».
     ///
@@ -623,9 +655,17 @@ public sealed class AiCVars
     /// скриптовый. Отдельному телу переключается полем <c>AgentBody.ScriptMode</c>, чтобы можно
     /// было держать ядро на классическом наборе, а борга — на скриптах, и сравнивать.
     /// </para>
+    /// <para>
+    /// <b>С 20.08.2026 умолчание — включено.</b> Решение владельца. Прежнее <c>false</c> было
+    /// осторожностью новой фичи, а не выводом из замеров: замеры как раз против него — один круг
+    /// через модель на каждый шаг по тайлу стоит 14 секунд и 41k токенов, и на четырёх агентах
+    /// разом это уже не «дороже», а «не помещается в раунд». Откат — <c>cvar ai.script_mode
+    /// false</c> на живом сервере, без пересборки; действует со следующей занятой сессии, потому
+    /// что режим решается один раз при сборке тела (см. <c>AiBorgSystem.Prompt</c>).
+    /// </para>
     /// </summary>
     public static readonly CVarDef<bool> ScriptMode =
-        CVarDef.Create("ai.script_mode", false, CVar.SERVERONLY);
+        CVarDef.Create("ai.script_mode", true, CVar.SERVERONLY);
 
     /// <summary>
     /// Сколько ждать скрипт, прежде чем отпустить его в фон.

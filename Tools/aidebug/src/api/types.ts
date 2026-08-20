@@ -8,16 +8,61 @@
 
 // ---------------------------------------------------------------- снимок
 
+/**
+ * Процессный снимок: то, что общее на всех агентов.
+ *
+ * Сессии здесь нет намеренно. Память, навыки и заметки принадлежат процессу и весят десятки
+ * килобайт; системный промпт и переписка принадлежат агенту и весят мегабайты. Слитый воедино
+ * ответ заставлял бы качать четыре истории, чтобы посмотреть на одну.
+ */
 export interface AgentStateSnapshot {
   instance: string
   seq: number
-  /** null — ядро никем не занято. Это штатный ответ, а не ошибка. */
-  session: AgentSession | null
+  round: number
+  /** Кто сейчас жив. Дешёвые строки: ни промпта, ни истории. */
+  agents: AgentRosterEntry[]
   memory: AgentMemory
   skills: AgentSkill[]
   notes: AgentPlayerNote[]
   /** Потолок ОДНОЙ заметки в символах — общий на хранилище. */
   note_limit: number
+}
+
+/**
+ * Снимок ОДНОГО агента.
+ *
+ * `agent: null` приходит со статусом 200, а не 404: агент мог уйти между кадром `session.started`
+ * и запросом. Это штатная гонка, и обрабатывать её надо как «слайс опустел», а не как ошибку —
+ * 404 у нас терминален и навсегда останавливает петлю опроса.
+ */
+export interface AgentSessionSnapshot {
+  instance: string
+  seq: number
+  agent: AgentSession | null
+}
+
+/**
+ * Строка ростера: столько, сколько нужно на вкладку с индикатором.
+ *
+ * `started_seq` отличает «тот же агент» от «тот же id, новая сессия после переклейма»: номер
+ * раунда посреди раунда не меняется и для этого не годится.
+ */
+export interface AgentRosterEntry {
+  id: string
+  name: string
+  brain: number
+  round: number
+  started_seq: number
+  alive: boolean
+  mode: string
+  turns: number
+  messages: number
+  body_epoch: number
+  last_prompt_tokens: number
+  context_limit: number
+  queue_depth: number
+  pending_input: boolean
+  last_error: string | null
 }
 
 export interface AgentSession {
@@ -86,7 +131,6 @@ export interface AgentStats {
   consecutive_failures: number
   broken_promises: number
   compactions: number
-  compaction_armed: boolean
   last_prompt_tokens: number
   chars_per_token: number
   body_chars: number
@@ -147,6 +191,14 @@ export interface AgentEventsResponse {
   seq: number
   /** Курсор непригоден: другой процесс, из будущего, или кольцо уже перезаписало. */
   resync: boolean
+  /**
+   * Ростер едет вместе с лентой, но КАДРОМ НЕ ЯВЛЯЕТСЯ.
+   *
+   * К нему не относятся ни курсор, ни resync; снимается он в момент возврата долгого опроса и
+   * может отставать от запроса на все двадцать пять секунд. Сеять агента по ростеру поэтому
+   * нельзя — только по кадру `session.started` или по выбору оператора.
+   */
+  agents: AgentRosterEntry[]
   events: AgentEventFrame[]
 }
 
@@ -207,15 +259,15 @@ export interface AgentHealth {
   seq: number
   ring: number
   ring_used: number
-  session: string | null
-  /** Сообщение оператора стоит в очереди и уедет следующим ходом. */
-  pending_input: boolean
+  round: number
+  /** Поля session и pending_input убраны: первое было константой, второе теперь у каждого своё. */
+  agents: AgentRosterEntry[]
 }
 
 // ---------------------------------------------------------------- команды
 
 export type AgentCommand =
-  | { type: 'message.send'; text: string }
+  | { type: 'message.send'; agent: string; text: string }
   | {
       type: 'memory.change'
       action: 'add' | 'replace' | 'remove'
@@ -234,5 +286,9 @@ export interface AgentCommandResult {
   /** Когда её увидит МОДЕЛЬ — это не то же самое, что «применено». */
   visible_to_model?: string
   seq?: number
+  /** Кому ушло сообщение. Есть только у message.send. */
+  agent?: string
+  /** `process` у памяти и скиллов: они общие на всех агентов. */
+  scope?: string
   error?: string
 }

@@ -153,6 +153,26 @@ public sealed class AiAgentCommand : IConsoleCommand
                 shell.WriteLine(system.DebugEndpoint is { } endpoint
                     ? $"эндпоинт {endpoint}"
                     : "HTTP-сервер не поднят — смотри ошибку выше в логе (порт занят или пустой ai.debug_token)");
+
+                // Ростер печатается здесь потому, что это единственный способ проверить витрину,
+                // не открывая браузер. Расхождение «в игре три робота, на витрине один» иначе
+                // видно только по пустому переключателю в интерфейсе.
+                var roster = system.DebugAgents.Roster();
+
+                if (roster.Count == 0)
+                {
+                    shell.WriteLine("на витрине никого — тело не занято, либо шина поднялась позже захвата");
+                    break;
+                }
+
+                foreach (var agent in roster)
+                {
+                    shell.WriteLine($"  {agent.Id} | {agent.Name} | {(agent.Alive ? "жив" : "МЁРТВ")} | " +
+                                    $"ходов {agent.Turns} | сообщений {agent.Messages} | режим {agent.Mode}" +
+                                    (agent.PendingInput ? " | ждёт сообщение оператора" : "") +
+                                    (string.IsNullOrWhiteSpace(agent.LastError) ? "" : $" | ОШИБКА: {agent.LastError}"));
+                }
+
                 break;
             }
 

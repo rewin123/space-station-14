@@ -29,10 +29,10 @@
     # --parallel 2.
     #
     # Локальная модель по решению владельца. ВНИМАНИЕ: она же обслуживает ядро, а слот у
-    # llama-server один — два агента с разными префиксами вытесняют друг друга и платят полный
-    # prefill каждый ход. Для осмысленного прогона держать одного агента
-    # (`cvar ai.auto_claim false` до startround) либо поднять llama-server с --parallel 2.
-    llmChain: local
+    # УСТАРЕЛО с 19.08.2026: llama-server поднят с `--parallel 3`, три агента идут
+    # параллельно и чужой префикс друг у друга не вытесняют. Четвёртый ждёт очереди.
+    # Прежний обход (`cvar ai.auto_claim false` до startround) больше не нужен.
+    llmChain: deepseek
     channels:
     - Binary
     - Common
@@ -98,3 +98,142 @@
     # фикстуры, потому что стенд считает провалом любой ERRO.
     - hand: {}
       forceRemovable: true
+
+
+# ---------------------------------------------------------------------------------------------
+# КИБОРГИ ПОДДЕРЖКИ РЕЖИМА «ЗЛОЙ ИИ». Спавнятся правилом RogueAiOpenRule, вне режима не
+# встречаются нигде — ни на карте, ни в наборах роботехника.
+#
+# Почему НЕ синдикатское шасси, хотя боевое там уже собрано. У BaseBorgChassisSyndicate нет
+# AllAccess (только теги SyndicateAgent/NuclearOperative), фракция Syndicate и лоусет
+# SyndicateStatic. То есть расширенный доступ пришлось бы возвращать руками, а экипаж читал бы
+# антагониста как синдикат — при том что весь режим построен на том, что станцию захватил СВОЙ
+# ИИ. Линия NT даёт AllAccess даром (base_borg_chassis.yml, BaseBorgChassisNT).
+
+# Боевая рука: модуль с одним всегда готовым клинком.
+#
+# КУКРИ, А НЕ ЭНЕРГОМЕЧ, и это не про баланс. Энергомеч — ItemToggle: в выключенном виде это
+# рукоять, которая не наносит почти ничего. Живой игрок щёлкает по нему не задумываясь, а модель
+# про такое состояние не знает вовсе — и «робот бьёт и не наносит урона» выглядело бы точно так
+# же, как сломанный инструмент hit. Нож всегда одинаков, и у него нет состояния, которое можно
+# молча забыть включить.
+- type: entity
+  id: AiBorgModuleArms
+  parent: [ BaseBorgModule, BaseProviderBorgModule ]
+  name: combat cyborg module
+  description: "Боевой манипулятор: клинок и лазерный пистолет."
+  components:
+  - type: Sprite
+    layers:
+    - state: generic
+    - state: icon-tools
+  # Две руки в ОДНОМ модуле, а не два модуля.
+  #
+  # Иначе выбор между ближним и дальним боем превращался бы в смену модуля, то есть в отдельный
+  # ход, который модель должна сообразить сделать посреди драки. Инструменты hit и shoot сами
+  # находят нужную руку и делают её активной — ровно то, что живой игрок делает клавишей.
+  #
+  # Лазер апстримовый и без переделок: у WeaponAdvancedLaser есть BatterySelfRecharger, то есть
+  # робот не останется с пустым стволом навсегда — а в оружейную он сходить не может.
+  - type: ItemBorgModule
+    hands:
+    - item: KukriKnife
+    - item: WeaponAdvancedLaser
+
+# Тип боевого робота. Свой, а не апстримовый: whitelist ограничен BorgModuleGeneric, то есть
+# в него не влезет ни один синдикатский модуль, даже если кто-то положит его роботу в руки.
+- type: borgType
+  id: aicombat
+
+  dummyPrototype: AiBorgCombatChassis
+
+  # Три сверх двух дефолтных — то есть пять слотов, из которых один занимает манипулятор,
+  # приезжающий отдельным ContainerFill. Запас нужен именно поэтому: посчитай слоты впритык,
+  # и манипулятор молча не влезет, а робот останется без свободной руки.
+  extraModuleCount: 3
+  moduleWhitelist:
+    tags:
+    - BorgModuleGeneric
+
+  defaultModules:
+  - AiBorgModuleArms
+  - BorgModulePrying
+
+  radioChannels:
+  - Common
+
+  # Тяжёлый ксеноборг: полный набор состояний в chassis.rsi, вид опасный и при этом не
+  # синдикатский. Своей графики у форка нет, а рисовать её ради одного вечера незачем.
+  inventoryTemplateId: borgShort
+  spriteBodyState: xenoborg_heavy
+  spriteHasMindState: xenoborg_heavy_e
+  spriteNoMindState: xenoborg_heavy_e_r
+  spriteToggleLightState: xenoborg_heavy_l
+
+  petSuccessString: petting-success-generic-cyborg
+  petFailureString: petting-failure-generic-cyborg
+
+- type: entity
+  id: AiBorgCombatChassis
+  parent: BorgChassisSelectable
+  name: боевой киборг
+  description: Тяжёлый корпус без обозначений производителя. Слушает только один голос.
+  components:
+  - type: BorgSwitchableType
+    selectedBorgType: aicombat
+  - type: AiBorg
+    # Пусто: id выдаёт аллокатор в AiBorgSystem.TryClaim. Боевых роботов двое, и прописать им
+    # один id значило бы дать им общий каталог памяти и общий файл диалога.
+    agentId: ""
+    agentIdPrefix: combat
+    agentName: Клин
+    soulFile: SOUL_ROGUE_BORG_COMBAT.md
+    autoClaim: true
+    # ЛОКАЛЬНАЯ МОДЕЛЬ на этот прогон (19.08.2026, вечер). Разбор — у того же поля в
+    # rogue_ai.yml: слотов у llama-server стало три, и довод «четыре мозга не влезают»
+    # отпал. Вернуть облако — `grok46,grok,local`; цепочкой, а не одним профилем, чтобы
+    # робот доигрывал смену на локальной модели, если мост упадёт посреди вечера.
+    llmChain: deepseek
+    channels:
+    - Binary
+    - Common
+  # Свободная рука есть и у боевого: без неё он не поднимет даже то, что сам уронил.
+  - type: ContainerFill
+    containers:
+      borg_module:
+      - AiBorgModuleGripper
+  - type: ItemSlots
+    slots:
+      cell_slot:
+        name: power-cell-slot-component-slot-name-default
+        startingItem: PowerCellHyper
+  # Лоусет режима вместо Crewsimov, и subverted — чтобы интерфейс законов не утверждал, будто
+  # робот подчиняется экипажу, ровно когда он уже не подчиняется.
+  - type: SiliconLawProvider
+    laws: RogueAiBorg
+    subverted: true
+
+- type: entity
+  id: AiBorgRogueEngineer
+  parent: AiBorgChassis
+  name: инженерный киборг
+  description: Рабочий корпус без обозначений производителя. Слушает только один голос.
+  components:
+  - type: AiBorg
+    agentId: ""
+    agentIdPrefix: engineer
+    agentName: Стык
+    soulFile: SOUL_ROGUE_BORG_ENGINEER.md
+    autoClaim: true
+    # ЛОКАЛЬНАЯ МОДЕЛЬ на этот прогон (19.08.2026, вечер). Разбор — у того же поля в
+    # rogue_ai.yml: слотов у llama-server стало три, и довод «четыре мозга не влезают»
+    # отпал. Вернуть облако — `grok46,grok,local`; цепочкой, а не одним профилем, чтобы
+    # робот доигрывал смену на локальной модели, если мост упадёт посреди вечера.
+    llmChain: deepseek
+    channels:
+    - Binary
+    - Common
+    - Engineering
+  - type: SiliconLawProvider
+    laws: RogueAiBorg
+    subverted: true

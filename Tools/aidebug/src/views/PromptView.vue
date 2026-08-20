@@ -17,14 +17,14 @@ const tab = ref<'zone0' | 'tools' | 'full'>('zone0')
  * пересчитывать всё с её позиции.
  */
 const assembled = computed(() => {
-  const parts: string[] = [`=== СИСТЕМНОЕ СООБЩЕНИЕ (зона 0) ===\n${agent.state.systemPrompt}`]
+  const parts: string[] = [`=== СИСТЕМНОЕ СООБЩЕНИЕ (зона 0) ===\n${agent.current.systemPrompt}`]
 
-  for (const m of agent.state.messages) {
+  for (const m of agent.current.messages) {
     const calls = (m.tool_calls ?? []).map((c) => `${c.name}(${c.arguments})`).join(' ')
     parts.push(`--- ${m.role}${m.tool_call_id ? ` [${m.tool_call_id}]` : ''} ---\n${m.content ?? ''}${calls ? '\n' + calls : ''}`)
   }
 
-  const tail = agent.state.stats?.volatile_tail
+  const tail = agent.current.stats?.volatile_tail
   if (tail)
     parts.push(`=== ХВОСТ (зона 2) ===\n${tail}`)
 
@@ -35,7 +35,7 @@ const chars = computed(() => assembled.value.length)
 </script>
 
 <template>
-  <NoSession v-if="!agent.state.sessionId" />
+  <NoSession v-if="!agent.current.id" />
 
   <div v-else class="prompt">
     <div class="bar">
@@ -44,18 +44,18 @@ const chars = computed(() => assembled.value.length)
       <button :class="{ active: tab === 'full' }" @click="tab = 'full'">Полный промпт</button>
 
       <span class="hash mono">
-        префикс {{ agent.state.prefixHash }}
-        · {{ agent.state.stats?.last_prompt_tokens ?? 0 }}т
+        префикс {{ agent.current.prefixHash }}
+        · {{ agent.current.stats?.last_prompt_tokens ?? 0 }}т
       </span>
     </div>
 
-    <div v-if="agent.state.stats?.volatile_tail" class="tail">
+    <div v-if="agent.current.stats?.volatile_tail" class="tail">
       <div class="label">зона 2 — временный хвост, уезжает вместе с ходом, который его отправил</div>
-      <div class="text">{{ agent.state.stats.volatile_tail }}</div>
+      <div class="text">{{ agent.current.stats.volatile_tail }}</div>
     </div>
 
-    <pre v-if="tab === 'zone0'" class="text mono">{{ agent.state.systemPrompt }}</pre>
-    <JsonBlock v-else-if="tab === 'tools'" :raw="agent.state.toolsJson" />
+    <pre v-if="tab === 'zone0'" class="text mono">{{ agent.current.systemPrompt }}</pre>
+    <JsonBlock v-else-if="tab === 'tools'" :raw="agent.current.toolsJson" />
     <template v-else>
       <p class="note">
         Собран так же, как это делает <code>ConversationState.Build()</code>: зона 0, тело,

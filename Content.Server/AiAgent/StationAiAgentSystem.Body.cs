@@ -42,6 +42,7 @@ public sealed partial class StationAiAgentSystem
             Id = CoreAgentId,
             Name = AgentName,
             SoulFile = StationSoulFile(),
+            LlmChain = StationLlmChain(),
             Eye = () => _stationAi.TryGetCore(brain, out var core) ? core.Comp?.RemoteEntity : null,
             Alive = () => IsPlayable(brain),
             ScriptMode = scripted,

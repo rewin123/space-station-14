@@ -501,10 +501,25 @@ public sealed class WitnessTests
         {
             ct.ThrowIfCancellationRequested();
 
-            var last = messages[^1];
+            // Ищем результат инструмента ПЕРЕБОРОМ С КОНЦА, а не берём последнее сообщение.
+            //
+            // Раньше здесь стояло messages[^1], и это работало ровно потому, что результат
+            // инструмента был последним сообщением перед следующим обращением к модели. С
+            // появлением блока NEW_EVENTS (steering) после результатов батча вставляется ещё и
+            // сообщение пользователя, так что «последнее» — уже не «tool». Заглушка обязана знать
+            // про порядок сообщений не больше, чем настоящая модель, а настоящая модель ищет
+            // результат по tool_call_id, а не по позиции.
+            if (ToolResult == null)
+            {
+                for (var i = messages.Count - 1; i >= 0; i--)
+                {
+                    if (messages[i].Role != "tool")
+                        continue;
 
-            if (last.Role == "tool" && ToolResult == null)
-                ToolResult = last.Content;
+                    ToolResult = messages[i].Content;
+                    break;
+                }
+            }
 
             if (CalledHandle == null)
             {
@@ -548,14 +563,14 @@ public sealed class WitnessTests
     }
 
     [Test]
-    public async Task UnreadWindow_KeepsSpeechAheadOfWhatWasSeen()
+    public async Task NewEvents_KeepSpeechAheadOfWhatWasSeen()
     {
-        // Окно «непрочитанного» приклеивается к КАЖДОМУ ответу инструмента: пока модель ведёт
-        // многошаговый ход, она иначе глуха, и бот, отвечающий на вопрос, которого не слышал,
-        // читается как сломанный. Окно маленькое — шесть строк, — и до наблюдений хвост очереди был
-        // репликами просто потому, что ничего другого в ней не лежало. Теперь в ней поток, и без
-        // предпочтения слов окно превратилось бы в шесть чужих движений, вытеснив ровно ту реплику,
-        // ради которой заведено.
+        // Блок NEW_EVENTS подмешивается в разговор посреди хода: пока модель ведёт многошаговый
+        // ход, она иначе глуха, и бот, отвечающий на вопрос, которого не слышал, читается как
+        // сломанный. Событий в очереди бывает много — любая возня в кадре даёт десятки строк
+        // OBSERVED, — и реплика, ради которой блок и заведён, обязана лежать ВЫШЕ них, а не
+        // теряться в конце. Порядок задаёт ObservationFormatter.OrderedKinds, и проверяется тут
+        // именно он, а не сам факт наличия строки.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -584,11 +599,23 @@ public sealed class WitnessTests
 
         await w.Pair.Server.WaitRunTicks(3);
 
-        var unread = await w.Read(() =>
-            string.Join('\n', w.System.GetSession(w.Brain)!.Queue.PeekUnread(6)));
+        var events = await w.NewEvents();
 
-        Assert.That(unread, Does.Contain("ответь мне"),
-            "шестьдесят наблюдений вытеснили реплику из окна непрочитанного: " + unread);
+        Assert.That(events, Is.Not.Null, "блок NEW_EVENTS не собрался вовсе");
+        Assert.That(events, Does.Contain("ответь мне"),
+            "шестьдесят наблюдений вытеснили реплику из блока событий: " + events);
+
+        var speechAt = events!.IndexOf("ответь мне", StringComparison.Ordinal);
+        var seenAt = events.IndexOf("OBSERVED", StringComparison.Ordinal);
+
+        Assert.That(seenAt, Is.GreaterThan(-1), "в потоке нет ни одной строки OBSERVED — тест ничего не проверил");
+        Assert.That(speechAt, Is.LessThan(seenAt),
+            "реплика оказалась ниже строк OBSERVED: модель прочитает её последней");
+
+        // Доставлено — значит удалено. Это и есть вся дедупликация: второй раз те же строки
+        // прийти не могут, потому что их больше нет в очереди.
+        var again = await w.NewEvents();
+        Assert.That(again, Is.Null, "события остались в очереди и приедут второй раз следующим ходом");
     }
 
     // ------------------------------------------------------------------ подсобное

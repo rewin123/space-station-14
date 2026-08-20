@@ -79,9 +79,6 @@ public sealed class ToolResult
     /// </summary>
     public IReadOnlyDictionary<string, object?>? Effect { get; private init; }
 
-    /// <summary>Lines that arrived while the model was mid-turn and therefore deaf.</summary>
-    public IReadOnlyList<string>? Unread { get; set; }
-
     public static ToolResult Success(IReadOnlyDictionary<string, object?>? effect = null) =>
         new() { Ok = true, Effect = effect };
 
@@ -155,14 +152,6 @@ public sealed class ToolResult
             {
                 w.WritePropertyName("effect");
                 JsonSerializer.Serialize(w, Effect, Llm.LlmJson.Options);
-            }
-
-            if (Unread is { Count: > 0 })
-            {
-                w.WriteStartArray("unread");
-                foreach (var u in Unread)
-                    w.WriteStringValue(u);
-                w.WriteEndArray();
             }
 
             w.WriteEndObject();

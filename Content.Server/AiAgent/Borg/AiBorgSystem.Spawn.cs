@@ -6,6 +6,7 @@ using Content.Shared.Physics;
 using Content.Shared.Pinpointer;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
+using Robust.Shared.Prototypes;
 
 namespace Content.Server.AiAgent.Borg;
 
@@ -21,6 +22,12 @@ namespace Content.Server.AiAgent.Borg;
 /// </summary>
 public sealed partial class AiBorgSystem
 {
+    /// <summary>
+    /// Кого ставит <c>aiborg spawn</c> без уточнения. Режим злого ИИ передаёт свои прототипы
+    /// явно: у боевого робота и тип другой, и личность другая.
+    /// </summary>
+    public const string DefaultChassis = "AiBorgChassis";
+
     [Dependency] private SharedMapSystem _maps = default!;
     [Dependency] private TurfSystem _turf = default!;
 
@@ -28,7 +35,7 @@ public sealed partial class AiBorgSystem
     /// Найти станции пригодное место и поставить туда робота.
     /// </summary>
     /// <param name="beaconName">Часть названия маяка, или <c>null</c> — любой подходящий.</param>
-    public bool TrySpawnBorg(string? beaconName, out EntityUid borg, out string reason)
+    public bool TrySpawnBorg(string? beaconName, out EntityUid borg, out string reason, EntProtoId? proto = null)
     {
         borg = default;
 
@@ -61,7 +68,7 @@ public sealed partial class AiBorgSystem
             if (!TryFreeTileNear(grid, beacon.Position, out var where))
                 continue;
 
-            borg = Spawn("AiBorgChassis", where);
+            borg = Spawn(proto ?? DefaultChassis, where);
             reason = $"поставлен у «{beacon.Text}»";
             return true;
         }

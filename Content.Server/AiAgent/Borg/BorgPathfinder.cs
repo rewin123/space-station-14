@@ -84,8 +84,18 @@ public static class BorgPathfinder
     /// Ближайший проходимый тайл к точке, или <c>null</c>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Нужен, потому что цель почти никогда не задаётся проходимым тайлом: навигационный маяк —
     /// это вывеска на стене, а хендл двери — сама дверь. Идти надо «к», а не «в».
+    /// </para>
+    /// <para>
+    /// Внутри кольца тайлы перебираются ПО РАССТОЯНИЮ, а не по порядку индексов. Раньше цикл шёл
+    /// <c>dx</c> от <c>-r</c>, <c>dy</c> от <c>-r</c>, и первым кандидатом кольца r=1 оказывался
+    /// угол (−1,−1): робота ставило на диагональ от цели, хотя сторона рядом была свободна. Само
+    /// расстояние при этом укладывается в 1.5 и проверку дальности проходит, а вот
+    /// <c>InRangeUnobstructed</c> с диагонали цепляет угол и отказывает — «дошёл, но работать не
+    /// могу», без единой строки о причине.
+    /// </para>
     /// </remarks>
     public static Vector2i? NearestPassable(NavMapComponent navMap, Vector2i around, int radius = 12,
         Func<Vector2i, bool>? walkable = null)
@@ -95,8 +105,12 @@ public static class BorgPathfinder
         if (Open(around))
             return around;
 
+        var ring = new List<Vector2i>();
+
         for (var r = 1; r <= radius; r++)
         {
+            ring.Clear();
+
             for (var dx = -r; dx <= r; dx++)
             {
                 for (var dy = -r; dy <= r; dy++)
@@ -104,16 +118,24 @@ public static class BorgPathfinder
                     if (Math.Abs(dx) != r && Math.Abs(dy) != r)
                         continue;
 
-                    var candidate = around + new Vector2i(dx, dy);
-
-                    if (Open(candidate))
-                        return candidate;
+                    ring.Add(around + new Vector2i(dx, dy));
                 }
+            }
+
+            // Квадрат расстояния — целое, сравнение точное. Сторона (1) идёт раньше угла (2).
+            ring.Sort((a, b) => Sq(a - around).CompareTo(Sq(b - around)));
+
+            foreach (var candidate in ring)
+            {
+                if (Open(candidate))
+                    return candidate;
             }
         }
 
         return null;
     }
+
+    private static int Sq(Vector2i v) => v.X * v.X + v.Y * v.Y;
 
     /// <summary>
     /// Путь по тайлам от старта до цели, или <c>null</c>, если его нет.

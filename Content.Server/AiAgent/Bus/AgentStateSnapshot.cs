@@ -21,7 +21,20 @@ namespace Content.Server.AiAgent.Bus;
 public sealed record AgentStateSnapshot(
     [property: JsonPropertyName("instance")] string Instance,
     [property: JsonPropertyName("seq")] long Seq,
-    [property: JsonPropertyName("session")] AgentSessionDto? Session,
+
+    /// <summary>Раунд: раньше его можно было узнать только из сессии, которой может не быть.</summary>
+    [property: JsonPropertyName("round")] int Round,
+
+    /// <summary>
+    /// Кто сейчас жив. Дешёвые строки: ни системного промпта, ни истории.
+    ///
+    /// Ростер едет вместе с процессным снимком, чтобы первый запрос клиента был ОДИН. Тяжёлое —
+    /// промпт и вся переписка — качается отдельно и поштучно, см. <see cref="AgentSessionSnapshot"/>:
+    /// четыре агента с историей под сотню тысяч токенов в одном ответе весили бы мегабайты, из
+    /// которых смотрят на один.
+    /// </summary>
+    [property: JsonPropertyName("agents")] IReadOnlyList<AgentRosterEntryDto> Agents,
+
     [property: JsonPropertyName("memory")] AgentMemoryDto Memory,
     [property: JsonPropertyName("skills")] IReadOnlyList<AgentSkillDto> Skills,
     [property: JsonPropertyName("notes")] IReadOnlyList<AgentPlayerNoteDto> Notes,
@@ -49,6 +62,49 @@ public sealed record AgentMemoryDto(
     [property: JsonPropertyName("memory_live")] IReadOnlyList<string> MemoryLive,
     [property: JsonPropertyName("memory_frozen")] string MemoryFrozen,
     [property: JsonPropertyName("memory_limit")] int MemoryLimit);
+
+/// <summary>
+/// Снимок ОДНОГО агента.
+/// </summary>
+/// <remarks>
+/// <paramref name="Agent"/> равен null со статусом <b>200</b>, а не 404, и это не небрежность:
+/// агент мог уйти между кадром <c>session.started</c> и этим запросом — штатная гонка, а не
+/// ошибка. Клиент считает 404 терминальным и после него навсегда останавливает опрос, то есть
+/// «правильный» код здесь погасил бы весь отладчик из-за нормального события.
+/// </remarks>
+public sealed record AgentSessionSnapshot(
+    [property: JsonPropertyName("instance")] string Instance,
+    [property: JsonPropertyName("seq")] long Seq,
+    [property: JsonPropertyName("agent")] AgentSessionDto? Agent);
+
+/// <summary>
+/// Строка ростера: столько, сколько нужно, чтобы нарисовать вкладку с индикатором здоровья.
+/// </summary>
+/// <remarks>
+/// Чего здесь намеренно НЕТ: системного промпта, описания инструментов, сообщений и памяти — то
+/// есть всего, из-за чего снимок весит мегабайты. Ростер запрашивается на каждом длинном опросе,
+/// и любое тяжёлое поле здесь стоило бы этого веса ежеминутно.
+///
+/// <paramref name="StartedSeq"/> отличает «тот же агент» от «тот же идентификатор, новая сессия
+/// после переклейма». Без него клиент угадывал бы это по номеру раунда, который посреди раунда
+/// не меняется.
+/// </remarks>
+public sealed record AgentRosterEntryDto(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("brain")] int Brain,
+    [property: JsonPropertyName("round")] int Round,
+    [property: JsonPropertyName("started_seq")] long StartedSeq,
+    [property: JsonPropertyName("alive")] bool Alive,
+    [property: JsonPropertyName("mode")] string Mode,
+    [property: JsonPropertyName("turns")] int Turns,
+    [property: JsonPropertyName("messages")] int Messages,
+    [property: JsonPropertyName("body_epoch")] int BodyEpoch,
+    [property: JsonPropertyName("last_prompt_tokens")] int LastPromptTokens,
+    [property: JsonPropertyName("context_limit")] int ContextLimit,
+    [property: JsonPropertyName("queue_depth")] int QueueDepth,
+    [property: JsonPropertyName("pending_input")] bool PendingInput,
+    [property: JsonPropertyName("last_error")] string? LastError);
 
 public sealed record AgentSkillDto(
     [property: JsonPropertyName("name")] string Name,

@@ -10,7 +10,7 @@ namespace Content.Server.AiAgent.Bus;
 /// <para>
 /// <b>It holds no two locks at once.</b> Each owner is asked in turn — conversation, memory,
 /// skills — and each takes and releases its own lock, so the picture is assembled from adjacent
-/// instants rather than one. That is a deliberate trade, and <see cref="Capture"/> spells out why
+/// instants rather than one. That is a deliberate trade, and <see cref="CaptureGlobal"/> spells out why
 /// the sequence number is read first to make the resulting skew safe. It also means the documented
 /// <c>Conv → Memory → Skills → Bus</c> order costs nothing here: with one lock held at a time there
 /// is no cycle to build.
@@ -24,13 +24,21 @@ namespace Content.Server.AiAgent.Bus;
 /// </summary>
 public static class AgentDebugState
 {
-    public static AgentStateSnapshot Capture(
+    /// <summary>
+    /// Процессный снимок: память, навыки, заметки и ростер. Одного агента здесь нет.
+    /// </summary>
+    /// <remarks>
+    /// Разделение снимка на процессный и агентный — не косметика. Память, навыки и заметки общие
+    /// на всех агентов и весят десятки килобайт; системный промпт и переписка принадлежат одному
+    /// и весят мегабайты. Слитый воедино ответ заставлял бы качать четыре истории, чтобы
+    /// посмотреть на одну.
+    /// </remarks>
+    public static AgentStateSnapshot CaptureGlobal(
         AgentEventBus bus,
-        AgentSession? session,
+        AgentDirectory directory,
         MemoryStore memory,
         SkillStore skills,
         PlayerNoteStore notes,
-        string sessionId,
         int roundId)
     {
         // The sequence number is read FIRST, and that single line is what makes this safe.
@@ -56,8 +64,6 @@ public static class AgentDebugState
         var instance = bus.Instance;
         var seq = bus.Seq;
 
-        var sessionDto = session == null ? null : CaptureSession(session, sessionId, roundId);
-
         var memoryDto = new AgentMemoryDto(
             memory.Entries(),
             memory.Snapshot(),
@@ -75,10 +81,22 @@ public static class AgentDebugState
             .Select(n => new AgentPlayerNoteDto(n.Slug, n.Name, n.Entries))
             .ToList();
 
-        return new AgentStateSnapshot(instance, seq, sessionDto, memoryDto, skillDtos, noteDtos, notes.NoteLimit);
+        return new AgentStateSnapshot(
+            instance, seq, roundId, directory.Roster(), memoryDto, skillDtos, noteDtos, notes.NoteLimit);
     }
 
-    private static AgentSessionDto CaptureSession(AgentSession session, string sessionId, int roundId)
+    /// <summary>
+    /// Снимок одного агента. Тот же порядок «сначала seq», по той же причине.
+    /// </summary>
+    public static AgentSessionSnapshot CaptureAgent(AgentEventBus bus, AgentHandle? handle)
+    {
+        var instance = bus.Instance;
+        var seq = bus.Seq;
+
+        return new AgentSessionSnapshot(instance, seq, handle?.Capture());
+    }
+
+    public static AgentSessionDto CaptureSession(AgentSession session, string sessionId, int roundId)
     {
         var conv = session.Conv;
         var body = conv.Snapshot();
@@ -98,6 +116,34 @@ public static class AgentDebugState
             messages,
             Stats(session),
             LastTurn(session));
+    }
+
+    /// <summary>
+    /// Строка ростера. Дороже всего здесь <c>BodyCount</c>, и он берёт замок, но не копирует тело.
+    /// </summary>
+    public static AgentRosterEntryDto Roster(AgentSession session, string id, string name, int roundId, long startedSeq)
+    {
+        var conv = session.Conv;
+        var stats = Stats(session);
+
+        return new AgentRosterEntryDto(
+            id,
+            name,
+            (int)session.Brain,
+            roundId,
+            startedSeq,
+            // Живость проставляет владелец хендла: считать её здесь значило бы трогать мир с
+            // чужого потока. См. AgentHandle.Alive.
+            true,
+            stats.Mode,
+            stats.Turns,
+            conv.BodyCount,
+            conv.BodyEpoch,
+            stats.LastPromptTokens,
+            stats.ContextLimit,
+            stats.QueueDepth,
+            session.Inbox.HasPending,
+            stats.LastError);
     }
 
     /// <summary>

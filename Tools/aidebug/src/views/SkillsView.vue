@@ -18,7 +18,7 @@ const busy = ref(false)
 const result = ref<AgentCommandResult | null>(null)
 const error = ref('')
 
-const current = computed(() => agent.state.skills.find((s) => s.name === selected.value) ?? null)
+const current = computed(() => agent.globals.skills.find((s) => s.name === selected.value) ?? null)
 
 watch(current, (skill) => {
   when.value = skill?.when ?? ''
@@ -53,9 +53,9 @@ async function save(): Promise<void> {
 <template>
   <div class="skills">
     <aside>
-      <p v-if="!agent.state.skills.length" class="dim">Библиотека пуста.</p>
+      <p v-if="!agent.globals.skills.length" class="dim">Библиотека пуста.</p>
       <button
-        v-for="skill in agent.state.skills"
+        v-for="skill in agent.globals.skills"
         :key="skill.name"
         class="item"
         :class="{ active: skill.name === selected }"

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { apply, emptyState, seed } from '../src/stream/apply'
-import type { AgentEventFrame, AgentStateSnapshot, AgentStats } from '../src/api/types'
+import {
+  applyAgent,
+  applyGlobal,
+  emptyAgent,
+  emptyGlobals,
+  seedAgent,
+  seedGlobals,
+} from '../src/stream/apply'
+import type { AgentEventFrame } from '../src/api/types'
+import { frame, session, snapshot, stats } from './fixtures'
 
 /**
  * Машина состояний клиента.
@@ -8,72 +16,30 @@ import type { AgentEventFrame, AgentStateSnapshot, AgentStats } from '../src/api
  * Тот же приём, которым сервер доказывает свою шину в `BusReplayTests`: прогнать поток кадров и
  * сверить итог. Здесь важнее не счастливый путь, а моменты, когда применить кадр честно нельзя —
  * потому что молча разъехавшаяся лента выглядит совершенно правдоподобно.
+ *
+ * С разделением на агента и процессные хранилища тестов стало два набора, и это не формальность:
+ * кадры памяти обязаны применяться независимо от того, кто выбран, а пересев одного агента —
+ * не задевать соседей.
  */
 
-function stats(turn: number, extra: Partial<AgentStats> = {}): AgentStats {
-  return {
-    turns: turn,
-    conv_turns: turn,
-    untooled_replies: 0,
-    idle_turns: 0,
-    consecutive_failures: 0,
-    broken_promises: 0,
-    compactions: 0,
-    compaction_armed: true,
-    last_prompt_tokens: 9000,
-    chars_per_token: 3,
-    body_chars: 400,
-    context_limit: 0,
-    cache_last_ratio: 0.98,
-    cache_mean_ratio: 0.98,
-    cache_alarms: 0,
-    queue_depth: 0,
-    mode: 'Core',
-    last_error: null,
-    volatile_tail: null,
-    ...extra,
-  }
+function seeded(id = 'core') {
+  const view = emptyAgent(id)
+  seedAgent(view, session(id))
+  return view
 }
 
-function snapshot(overrides: Partial<AgentStateSnapshot> = {}): AgentStateSnapshot {
-  return {
-    instance: 'proc-1',
-    seq: 10,
-    session: {
-      id: 'current',
-      brain: 50611,
-      round: 22,
-      prefix_hash: 'HASH1',
-      system_prompt: 'ПРОМПТ',
-      tools_json: '[]',
-      body_epoch: 0,
-      messages: [{ index: 0, role: 'user', content: 'наблюдение', tool_calls: null, tool_call_id: null }],
-      stats: stats(1),
-      last_turn: null,
-    },
-    memory: {
-      memory_live: ['запись'],
-      memory_frozen: 'заморожено',
-      memory_limit: 4000,
-    },
-    skills: [{ name: 'alpha', when: 'когда', body: 'тело' }],
-    notes: [{ slug: 'autumn-treeby', name: 'Autumn Treeby', entries: ['[раунд 7] ей нельзя кофе'] }],
-    note_limit: 2000,
-    ...overrides,
-  }
+function globals() {
+  const g = emptyGlobals()
+  seedGlobals(g, snapshot())
+  return g
 }
 
-function frame(seq: number, type: AgentEventFrame['type'], payload: unknown, session = 'current'): AgentEventFrame {
-  return { seq, type, session, payload }
-}
-
-describe('apply', () => {
+describe('applyAgent', () => {
   it('дописывает сообщение, когда индекс и эпоха сходятся', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const view = seeded()
 
-    const outcome = apply(
-      state,
+    const outcome = applyAgent(
+      view,
       frame(11, 'message.appended', {
         body_epoch: 0,
         index: 1,
@@ -82,18 +48,17 @@ describe('apply', () => {
     )
 
     expect(outcome).toBe('ok')
-    expect(state.messages).toHaveLength(2)
-    expect(state.messages[1].content).toBe('ответ')
+    expect(view.messages).toHaveLength(2)
+    expect(view.messages[1].content).toBe('ответ')
   })
 
   it('требует снимка, когда индекс разъехался', () => {
     // Это ловит и потерянное сообщение, и задвоенное, и вторую петлю опроса. Единственное
     // неидемпотентное событие — и единственное, у которого есть эта проверка.
-    const state = emptyState()
-    seed(state, snapshot())
+    const view = seeded()
 
-    const outcome = apply(
-      state,
+    const outcome = applyAgent(
+      view,
       frame(11, 'message.appended', {
         body_epoch: 0,
         index: 5,
@@ -102,15 +67,14 @@ describe('apply', () => {
     )
 
     expect(outcome).toBe('resync')
-    expect(state.messages).toHaveLength(1)
+    expect(view.messages).toHaveLength(1)
   })
 
   it('требует снимка, когда сменилась эпоха тела', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const view = seeded()
 
-    const outcome = apply(
-      state,
+    const outcome = applyAgent(
+      view,
       frame(11, 'message.appended', {
         body_epoch: 3,
         index: 1,
@@ -122,199 +86,191 @@ describe('apply', () => {
   })
 
   it('заменяет историю целиком и запоминает новую эпоху', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const view = seeded()
 
-    apply(
-      state,
+    applyAgent(
+      view,
       frame(11, 'history.replaced', {
         body_epoch: 1,
-        messages: [
-          { index: 0, role: 'user', content: 'СВОДКА', tool_calls: null, tool_call_id: null },
-          { index: 1, role: 'user', content: 'хвост', tool_calls: null, tool_call_id: null },
-        ],
+        messages: [{ index: 0, role: 'system', content: 'сжато', tool_calls: null, tool_call_id: null }],
       }),
     )
 
-    expect(state.bodyEpoch).toBe(1)
-    expect(state.messages).toHaveLength(2)
-
-    // И следующий append обязан считаться уже от новой эпохи.
-    const outcome = apply(
-      state,
-      frame(12, 'message.appended', {
-        body_epoch: 1,
-        index: 2,
-        message: { index: 2, role: 'assistant', content: 'дальше', tool_calls: null, tool_call_id: null },
-      }),
-    )
-
-    expect(outcome).toBe('ok')
-    expect(state.messages).toHaveLength(3)
+    expect(view.bodyEpoch).toBe(1)
+    expect(view.messages).toHaveLength(1)
+    expect(view.messages[0].content).toBe('сжато')
   })
 
   it('после конца сессии не применяет её кадры', () => {
-    // Окно зомби: Release публикует session.ended, потом отменяет токен и уходит, а `finally`
-    // петли ещё допишет синтетические результаты и последний stats. Session id — константа
-    // "current", так что отличить их можно только по тому, что конец мы уже видели.
-    const state = emptyState()
-    seed(state, snapshot())
+    // Окно зомби: Release публикует session.ended, затем отменяет токен и уходит, а `finally`
+    // петли ещё допишет синтетические результаты и последний stats. Отличить их можно только по
+    // тому, что конец уже видели.
+    const view = seeded()
 
-    apply(state, frame(11, 'session.ended', { brain: 50611, reason: 'убит' }))
-
-    const outcome = apply(
-      state,
+    applyAgent(view, frame(11, 'session.ended', { brain: 50611, reason: 'раунд кончился' }))
+    applyAgent(
+      view,
       frame(12, 'message.appended', {
         body_epoch: 0,
         index: 1,
-        message: { index: 1, role: 'tool', content: '{"ok":false}', tool_calls: null, tool_call_id: 'x' },
+        message: { index: 1, role: 'tool', content: 'хвост', tool_calls: null, tool_call_id: 'x' },
       }),
     )
 
-    expect(outcome).toBe('ok')
-    expect(state.messages).toHaveLength(1)
-    expect(state.sessionGone).toBe(true)
+    expect(view.ended).toBe(true)
+    expect(view.messages).toHaveLength(1)
   })
 
   it('начало сессии требует снимка, потому что в кадре нет состояния', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const view = seeded()
 
-    const outcome = apply(state, frame(11, 'session.started', { brain: 777, round: 23, prefix_hash: 'HASH2' }))
+    const outcome = applyAgent(view, frame(11, 'session.started', {
+      brain: 777,
+      round: 23,
+      prefix_hash: 'HASH2',
+    }))
 
     expect(outcome).toBe('resync')
-    expect(state.sessionGone).toBe(false)
-    expect(state.round).toBe(23)
+    expect(view.brain).toBe(777)
+    expect(view.startedSeq).toBe(11)
   })
 
-  it('смена префикса требует снимка: за ней догоняют память и скиллы', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+  it('смена префикса применяется НА МЕСТЕ и снимка не требует', () => {
+    // Изменение против прежнего поведения, и оно про масштаб. На одном агенте пересев по каждой
+    // компакции был терпим; на четырёх компакции случаются вчетверо чаще, и прежнее правило дало
+    // бы отладчик, который непрерывно моргает. Payload несёт всё, что нужно.
+    const view = seeded()
 
-    const outcome = apply(
-      state,
-      frame(11, 'prefix.replaced', { prefix_hash: 'HASH2', system_prompt: 'НОВЫЙ', tools_json: '[]' }),
+    const outcome = applyAgent(view, frame(11, 'prefix.replaced', {
+      prefix_hash: 'HASH2',
+      system_prompt: 'НОВЫЙ ПРОМПТ',
+      tools_json: '[{}]',
+    }))
+
+    expect(outcome).toBe('ok')
+    expect(view.prefixHash).toBe('HASH2')
+    expect(view.systemPrompt).toBe('НОВЫЙ ПРОМПТ')
+    expect(view.toolsJson).toBe('[{}]')
+  })
+
+  it('конец сессии одного агента не глушит другого', () => {
+    const core = seeded('core')
+    const borg = seeded('combat-1')
+
+    applyAgent(core, frame(11, 'session.ended', { brain: 1, reason: 'освобождён' }))
+    applyAgent(
+      borg,
+      frame(12, 'message.appended', {
+        body_epoch: 0,
+        index: 1,
+        message: { index: 1, role: 'assistant', content: 'иду', tool_calls: null, tool_call_id: null },
+      }),
     )
 
-    expect(outcome).toBe('resync')
-    expect(state.prefixHash).toBe('HASH2')
-    expect(state.systemPrompt).toBe('НОВЫЙ')
+    expect(core.ended).toBe(true)
+    expect(borg.ended).toBe(false)
+    expect(borg.messages).toHaveLength(2)
   })
+})
 
-  it('кадры памяти и скиллов применяются и без живой сессии', () => {
-    // Сторы процессные: они переживают раунд, и между раундами это единственное, что показывать.
-    const state = emptyState()
-    seed(state, snapshot({ session: null }))
+describe('applyGlobal', () => {
+  it('кадры памяти и скиллов применяются, кто бы ни был выбран', () => {
+    const g = globals()
 
-    apply(state, frame(11, 'memory.updated', { entries: ['SMES разряжается быстрее'] }, ''))
-    apply(state, frame(12, 'skills.reloaded', { skills: [{ name: 'beta', when: 'к', body: 'т' }] }, ''))
+    applyGlobal(g, frame(11, 'memory.updated', { entries: ['новая'] }, ''))
+    applyGlobal(g, frame(12, 'skill.updated', { name: 'beta', when: 'к', body: 'т' }, ''))
 
-    expect(state.memory?.memory_live).toEqual(['SMES разряжается быстрее'])
-    expect(state.skills.map((s) => s.name)).toEqual(['beta'])
+    expect(g.memory?.memory_live).toEqual(['новая'])
+    expect(g.skills.map((s) => s.name)).toEqual(['alpha', 'beta'])
   })
 
   it('перечитывание библиотеки убирает пропавшие скиллы', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const g = globals()
 
-    apply(state, frame(11, 'skill.updated', { name: 'beta', when: 'к', body: 'т' }, ''))
-    expect(state.skills.map((s) => s.name)).toEqual(['alpha', 'beta'])
+    applyGlobal(g, frame(11, 'skills.reloaded', { skills: [{ name: 'gamma', when: 'к', body: 'т' }] }, ''))
 
-    apply(state, frame(12, 'skills.reloaded', { skills: [{ name: 'alpha', when: 'когда', body: 'тело' }] }, ''))
-    expect(state.skills.map((s) => s.name)).toEqual(['alpha'])
+    expect(g.skills.map((s) => s.name)).toEqual(['gamma'])
   })
 
   it('снимок со старого сервера, ещё не знающего о заметках, не роняет клиент', () => {
-    // Страница и сервер выкатываются разными шагами: окно, где свежий клиент говорит со старым
-    // сервером, существует всегда. Падение именно здесь отнимает инструмент, которым и разбираются.
-    const state = emptyState()
-    const old = snapshot() as Partial<AgentStateSnapshot>
-    delete old.notes
-    delete old.note_limit
+    // Страница и сервер выкатываются РАЗНЫМИ шагами, и между ними всегда есть окно, когда свежий
+    // клиент говорит со старым сервером. Отладчик, падающий в этом окне, отнимает ровно тот
+    // инструмент, которым разбираются, что случилось.
+    const g = emptyGlobals()
+    const old = snapshot()
+    delete (old as { notes?: unknown }).notes
+    delete (old as { note_limit?: unknown }).note_limit
 
-    seed(state, old as AgentStateSnapshot)
+    seedGlobals(g, old)
 
-    expect(state.notes).toEqual([])
-    expect(state.noteLimit).toBe(0)
-    expect(state.skills).toHaveLength(1)
+    expect(g.notes).toEqual([])
+    expect(g.noteLimit).toBe(0)
   })
 
   it('заметка о человеке обновляется и добавляется в порядке слага', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const g = globals()
 
-    apply(state, frame(11, 'note.updated', { slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер'] }, ''))
-    expect(state.notes.map((n) => n.slug)).toEqual(['autumn-treeby', 'ezbozo'])
+    applyGlobal(g, frame(11, 'note.updated', {
+      slug: 'aaron-ward',
+      name: 'Aaron Ward',
+      entries: ['[раунд 8] просил доступ'],
+    }, ''))
 
-    apply(state, frame(12, 'note.updated',
-      { slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер', 'чинил СМЕС'] }, ''))
-    expect(state.notes.find((n) => n.slug === 'ezbozo')?.entries).toEqual(['инженер', 'чинил СМЕС'])
+    expect(g.notes.map((n) => n.slug)).toEqual(['aaron-ward', 'autumn-treeby'])
   })
 
   it('пустой список записей закрывает заметку, а не рисует пустого человека', () => {
-    // Удаление последней записи сносит файл. Клиент, оставивший ключ, показывал бы человека,
-    // о котором уже ничего не известно, до самой перезагрузки хранилища.
-    const state = emptyState()
-    seed(state, snapshot())
+    const g = globals()
 
-    apply(state, frame(11, 'note.updated', { slug: 'autumn-treeby', name: 'Autumn Treeby', entries: [] }, ''))
+    applyGlobal(g, frame(11, 'note.updated', {
+      slug: 'autumn-treeby',
+      name: 'Autumn Treeby',
+      entries: [],
+    }, ''))
 
-    expect(state.notes).toEqual([])
+    expect(g.notes).toEqual([])
   })
 
   it('перечитывание заметок убирает пропавшие', () => {
-    const state = emptyState()
-    seed(state, snapshot())
+    const g = globals()
 
-    apply(state, frame(11, 'note.updated', { slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер'] }, ''))
-    expect(state.notes).toHaveLength(2)
+    applyGlobal(g, frame(11, 'notes.reloaded', { notes: [] }, ''))
 
-    apply(state, frame(12, 'notes.reloaded',
-      { notes: [{ slug: 'ezbozo', name: 'Ezbozo', entries: ['инженер'] }] }, ''))
-
-    expect(state.notes.map((n) => n.slug)).toEqual(['ezbozo'])
+    expect(g.notes).toEqual([])
   })
 
-  it('повторное применение всего, кроме append, ничего не портит', () => {
+  it('повторное применение ничего не портит', () => {
     // Снимок на сервере не атомарен: seq читается первым, поэтому изменение, проехавшее посреди
     // снятия, приедет и в данных, и в потоке. Безопасно это ровно потому, что каждое событие
     // несёт новое значение целиком.
-    const state = emptyState()
-    seed(state, snapshot())
+    const g = globals()
+    const view = seeded()
 
-    const frames: AgentEventFrame[] = [
-      frame(11, 'memory.updated', { target: 'memory', entries: ['одна'] }, ''),
+    const globalFrames: AgentEventFrame[] = [
+      frame(11, 'memory.updated', { entries: ['одна'] }, ''),
       frame(12, 'skill.updated', { name: 'alpha', when: 'к2', body: 'т2' }, ''),
-      frame(13, 'stats', stats(2)),
     ]
 
-    for (const f of frames) apply(state, f)
-    const once = JSON.stringify({ m: state.memory, s: state.skills, st: state.stats })
+    for (const f of globalFrames) applyGlobal(g, f)
+    applyAgent(view, frame(13, 'stats', stats(2)))
+    const once = JSON.stringify({ m: g.memory, s: g.skills, st: view.stats })
 
-    for (const f of frames) apply(state, f)
-    const twice = JSON.stringify({ m: state.memory, s: state.skills, st: state.stats })
+    for (const f of globalFrames) applyGlobal(g, f)
+    applyAgent(view, frame(13, 'stats', stats(2)))
+    const twice = JSON.stringify({ m: g.memory, s: g.skills, st: view.stats })
 
     expect(twice).toBe(once)
   })
 })
 
-describe('seed', () => {
-  it('пустая сессия — не ошибка', () => {
-    const state = emptyState()
-    seed(state, snapshot({ session: null }))
+describe('seedAgent', () => {
+  it('смена мозга сбрасывает ряд графиков', () => {
+    const view = emptyAgent('core')
+    seedAgent(view, session())
+    applyAgent(view, frame(11, 'stats', stats(2)))
+    expect(view.series.samples.size).toBe(2)
 
-    expect(state.sessionId).toBeNull()
-    expect(state.messages).toEqual([])
-    expect(state.memory).not.toBeNull()
-  })
-
-  it('смена процесса сбрасывает ряд графиков', () => {
-    const state = emptyState()
-    seed(state, snapshot())
-    apply(state, frame(11, 'stats', stats(2)))
-    expect(state.series.samples.size).toBe(2)
-
-    seed(state, snapshot({ instance: 'proc-2' }))
-    expect(state.series.samples.size).toBe(1)
+    seedAgent(view, session('core', { brain: 999 }))
+    expect(view.series.samples.size).toBe(1)
   })
 })

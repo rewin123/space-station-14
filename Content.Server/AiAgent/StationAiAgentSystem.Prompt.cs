@@ -247,8 +247,10 @@ public sealed partial class StationAiAgentSystem
             Опирайся на него, а не на предположение, что действие сработало. Исключение — say,
             radio и announce: они возвращают то, что ты сказал; что это реально услышали, сервер
             подтвердить не может.
-            Поле "unread" — строки, пришедшие пока ты работал. Их стоит прочитать: экипаж мог
-            передумать посреди твоего действия.
+            События, пришедшие пока ты работал, НЕ лежат внутри ответов инструментов. Они приходят
+            отдельным сообщением, которое начинается со слова NEW_EVENTS, сразу за результатами
+            вызовов. Читай их: экипаж мог передумать посреди твоего действия. Каждое событие
+            показывается ровно один раз — в NEW_EVENTS или в наблюдении начала хода, но не в обоих.
 
             ХЕНДЛЫ
             Чтобы что-то сделать с объектом, нужен его хендл — «door-3», «crew-2», «apc-1». Хендлы
@@ -371,6 +373,16 @@ public sealed partial class StationAiAgentSystem
     public string StationSoulFile() => _rogue.TryGetActive(out var rule) ? rule.SoulFile : "SOUL.md";
 
     /// <summary>
+    /// Цепочка профилей модели для мозга в ядре: своя у режима, иначе общая <c>ai.llm_chain</c>.
+    /// </summary>
+    /// <remarks>
+    /// Пустая строка означает «общая», а не «никакой» — так же, как у борга: <c>EnsureClientFor</c>
+    /// отличает пустую строку от заданной и падает на cvar. Возвращать здесь null было бы тем же
+    /// самым, но заставило бы каждого читателя проверить, чем именно.
+    /// </remarks>
+    public string StationLlmChain() => _rogue.TryGetActive(out var rule) ? rule.LlmChain : string.Empty;
+
+    /// <summary>
     /// Прочитать личность из каталога агента.
     ///
     /// Параметризован телом, а не прибит к <c>ai_data/SOUL.md</c>: у второго агента и файл другой,
@@ -379,7 +391,12 @@ public sealed partial class StationAiAgentSystem
     /// </summary>
     public string ReadSoul(string file, string dir)
     {
-        var rogueActive = _rogue.TryGetActive(out var rule) && rule.SoulFile == file;
+        // Режимной считается не только личность ядра, но и любая личность режима: у киборгов
+        // поддержки свои файлы, и пропажа любого из них — та же самая поломка «робот заявлен
+        // подчинённым злого ИИ, а ведёт себя как обычный».
+        var rogueActive = _rogue.TryGetActive(out var rule)
+                          && (rule.SoulFile == file
+                              || file.StartsWith("SOUL_ROGUE", System.StringComparison.Ordinal));
 
         try
         {
@@ -388,11 +405,26 @@ public sealed partial class StationAiAgentSystem
             if (System.IO.File.Exists(path))
                 return System.IO.File.ReadAllText(path).Trim();
 
+            // Откат в корень ai_data/, и он не про удобство.
+            //
+            // Каталог агента выбирается его идентификатором, а идентификаторы у боргов с 19.08
+            // выдаются аллокатором — combat-1, combat-2, … То есть каталог заранее неизвестен, и
+            // держать личность внутри него значило бы копировать один и тот же файл под каждый
+            // возможный номер. Личность привязана к РОЛИ, а не к экземпляру: боевой робот и
+            // второй боевой робот читают одно и то же.
+            //
+            // Порядок именно такой: свой каталог перебивает общий. Личность, положенная в
+            // ai_data/agents/<id>/, остаётся способом отличить конкретного робота от собратьев.
+            var shared = System.IO.Path.Combine(DataDir(), file);
+
+            if (!string.Equals(shared, path, System.StringComparison.Ordinal) && System.IO.File.Exists(shared))
+                return System.IO.File.ReadAllText(shared).Trim();
+
             // Отсутствие обычного SOUL.md — штатный путь: агент работает на базовом промпте.
             // Отсутствие файла РЕЖИМА — поломка: раунд заявлен как режим со злым ИИ, а личность у
             // агента осталась прежняя, и в игре это выглядит как «ИИ почему-то не злой».
             if (rogueActive)
-                _sawmill.Error($"режим злого ИИ: файл личности {file} не найден в {dir}");
+                _sawmill.Error($"режим злого ИИ: файл личности {file} не найден ни в {dir}, ни в {DataDir()}");
 
             return string.Empty;
         }

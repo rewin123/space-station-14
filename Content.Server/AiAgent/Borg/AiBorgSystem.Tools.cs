@@ -54,6 +54,33 @@ public sealed partial class AiBorgSystem
 
         r.Register(new AiTool
         {
+            Name = "find_charger",
+            Description = "Где зарядиться: ищет по ВСЕЙ станции станции для киборгов, в которые " +
+                          "влезаешь именно ты, и отдаёт их координатами от ближней к дальней, " +
+                          "с пометкой, запитана или обесточена. Глазами их не найти — стоят они " +
+                          "в робототехнике, а садишься ты там, где работал.",
+            SchemaJson = """
+                {"type":"object","additionalProperties":false,"properties":{}}
+                """,
+            Handler = (a, ct) => FindChargerAsync(s, a, ct),
+        });
+
+        r.Register(new AiTool
+        {
+            Name = "ame_plan",
+            Description = "Раскладка экранирования АМЭ: находит пульт и отдаёт девять клеток " +
+                          "квадрата в том порядке, в каком их занимать, плюс клетку выхода и " +
+                          "клетку подхода к пульту. Проверено заранее: пульт остаётся снаружи, " +
+                          "к нему есть подход, а укладка отступает наружу и не запирает тебя " +
+                          "внутри. Считай геометрию этим инструментом, а не в уме.",
+            SchemaJson = """
+                {"type":"object","additionalProperties":false,"properties":{}}
+                """,
+            Handler = (a, ct) => AmePlanAsync(s, a, ct),
+        });
+
+        r.Register(new AiTool
+        {
             Name = "step",
             Description = "Сделать несколько шагов в одну сторону. Для точной доводки в комнате, " +
                           "когда идти через полстанции не нужно. На дальние расстояния — goto.",
@@ -73,7 +100,10 @@ public sealed partial class AiBorgSystem
             Name = "look",
             Description = "Осмотреться вокруг СЕБЯ. Видишь то, что видел бы человек на твоём " +
                           "месте: рядом и не за стеной. Возвращает список с хендлами — ими потом " +
-                          "адресуются остальные инструменты.",
+                          "адресуются остальные инструменты. У каждой строки две пары чисел: " +
+                          "Δ(dx,dy) — смещение от тебя на момент вызова, и следом абсолютные " +
+                          "координаты сетки. В goto подставляй ВТОРУЮ пару как есть, складывать " +
+                          "ничего не надо.",
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "kind":{"type":"string","enum":["door","crew","apc","camera","airalarm","power","canister","computer","locker","device","obj"],"description":"Показать только объекты этого вида."}}}
@@ -141,14 +171,29 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "hit",
-            Description = "Ударить цель тем, что в активной руке. Это применение силы: у него " +
-                          "бывают последствия, и законы силикона на тебя распространяются.",
+            Description = "Ударить цель тем, что в активной руке, а если оружия нет — корпусом. " +
+                          "Это применение силы: у него бывают последствия, и законы силикона на " +
+                          "тебя распространяются.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
                 "target":{"type":"string","description":"Хендл цели из look."}}}
                 """,
             Handler = (a, ct) => HitAsync(s, a, ct),
+        });
+
+        r.Register(new AiTool
+        {
+            Name = "shoot",
+            Description = "Выстрелить в цель из оружия в активной руке. Нужна прямая видимость: " +
+                          "сквозь стену не попасть. Это применение силы, и законы силикона на " +
+                          "тебя распространяются.",
+            GameAction = true,
+            SchemaJson = """
+                {"type":"object","required":["target"],"additionalProperties":false,"properties":{
+                "target":{"type":"string","description":"Хендл цели из look."}}}
+                """,
+            Handler = (a, ct) => ShootAsync(s, a, ct),
         });
 
         r.Register(new AiTool
@@ -169,7 +214,8 @@ public sealed partial class AiBorgSystem
             Name = "console",
             Description = "Пульт машины: без 'action' показывает показания и список кнопок, с " +
                           "'action' — нажимает кнопку. Так управляют реактором, шлюзовыми " +
-                          "контроллерами, консолями. Надо стоять рядом.",
+                          "контроллерами, консолями. Надо стоять рядом — до двух тайлов, считая " +
+                          "по диагонали, и без стены между вами.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -181,9 +227,9 @@ public sealed partial class AiBorgSystem
             // знает ничего. Различаются только ворота — у ядра вайтлист и камеры, у борга
             // «дотянулся рукой».
             Handler = (a, ct) => _host.DeviceUiAsync(s, a, ct, param: "target", gate: (sess, uid) =>
-                _interaction.InRangeUnobstructed(sess.Brain, uid, 1.5f)
+                _interaction.InRangeUnobstructed(sess.Brain, uid, ConsoleReachTiles)
                     ? null
-                    : ToolResult.Fail(ToolError.NotVisible, Unreachable(sess.Brain, uid),
+                    : ToolResult.Fail(ToolError.NotVisible, Unreachable(sess.Brain, uid, ConsoleReachTiles),
                         retry: "move_first")),
         });
 
@@ -378,8 +424,16 @@ public sealed partial class AiBorgSystem
                 var there = Vector2.Transform(_xform.GetMapCoordinates(uid).Position, toGrid);
                 var d = there - origin;
 
+                // Две пары чисел, как в look у ядра: смещение и абсолютная точка.
+                //
+                // Одной Δ мало, и это стоило раунда 133. Δ отсчитана от места, где робот стоял в
+                // МОМЕНТ вызова look, а он к следующему скрипту уже сдвинулся — и складывал
+                // старую Δ с новой позицией. Контроллер АМЭ у него по очереди оказывался в
+                // (29,-40), (28,-40) и (28,-39), квадрат экранирования вставал не туда, а сам он
+                // ходил вокруг и пробовал console с каждой стороны. Абсолютная пара сложения не
+                // требует: её подставляют в goto как есть.
                 rows.Add($"{handle} | {Identity.Name(uid, EntityManager)} | {_host.ShortState(uid)} " +
-                         $"| Δ({d.X:F0},{d.Y:F0})");
+                         $"| Δ({d.X:F0},{d.Y:F0}) ({there.X:F0},{there.Y:F0})");
             }
 
             return ToolResult.Success(new Dictionary<string, object?>
@@ -422,11 +476,11 @@ public sealed partial class AiBorgSystem
     /// что уже сделано, отправил его на второй круг. Расстояние отличает «ты далеко» от «ты рядом,
     /// но между вами что-то стоит», а это два разных следующих шага.
     /// </summary>
-    private string Unreachable(EntityUid borg, EntityUid target)
+    private string Unreachable(EntityUid borg, EntityUid target, float reach = ReachTiles)
     {
         var gap = (_xform.GetMapCoordinates(target).Position - _xform.GetMapCoordinates(borg).Position).Length();
 
-        return gap > 1.5f
+        return gap > reach
             ? $"не дотянуться: до цели {gap:F1} тайла, надо ближе"
             : $"не дотянуться, хотя до цели всего {gap:F1} тайла — между вами что-то стоит. " +
               "Обойди с другой стороны или убери помеху";
@@ -596,25 +650,6 @@ public sealed partial class AiBorgSystem
         }, ct);
     }
 
-    private Task<ToolResult> HitAsync(AgentSession s, JsonElement args, CancellationToken ct)
-    {
-        var borg = s.Brain;
-
-        return _host.OnMainAsync(s, "hit", () =>
-        {
-            if (!TryTarget(s, args, out var target, out var failure))
-                return failure!;
-
-            // Боевое действие идёт тем же путём клика, но с боевым режимом: отдельного «удара»
-            // мимо InteractionSystem у игрока тоже нет.
-            _interaction.UserInteraction(borg, Transform(target).Coordinates, target);
-
-            return ToolResult.Effected(Identity.Name(target, EntityManager), new Dictionary<string, object?>
-            {
-                ["ударил"] = Identity.Name(target, EntityManager),
-            });
-        }, ct);
-    }
 
     private Task<ToolResult> ModuleAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {

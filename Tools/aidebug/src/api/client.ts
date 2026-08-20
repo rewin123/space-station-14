@@ -3,6 +3,7 @@ import type {
   AgentCommandResult,
   AgentEventsResponse,
   AgentHealth,
+  AgentSessionSnapshot,
   AgentStateSnapshot,
 } from './types'
 
@@ -82,6 +83,11 @@ async function request<T>(
       //
       // 'same-origin' даёт оба поведения разом: свой origin получает креды, чужой — нет.
       credentials: 'same-origin',
+
+      // Пояс поверх подтяжек: сервер шлёт no-store, но /events — это повторяющийся GET с
+      // одинаковым URL, пока курсор не сдвинулся, и цена ошибки здесь — намертво замерший
+      // интерфейс. Пусть браузер не имеет и теоретической возможности ответить из кэша.
+      cache: 'no-store',
     })
 
     const text = await response.text()
@@ -111,6 +117,21 @@ export function getHealth(endpoint: Endpoint, signal?: AbortSignal): Promise<Age
 
 export function getState(endpoint: Endpoint, signal?: AbortSignal): Promise<AgentStateSnapshot> {
   return request<AgentStateSnapshot>(endpoint, '/state', { method: 'GET' }, signal)
+}
+
+/**
+ * Снимок одного агента.
+ *
+ * Неизвестный агент приходит как `{agent: null}` со статусом 200 — обрабатывать это надо как
+ * «слайс опустел», а не как ошибку: 404 здесь терминален и остановил бы петлю навсегда.
+ */
+export function getSession(
+  endpoint: Endpoint,
+  agent: string,
+  signal?: AbortSignal,
+): Promise<AgentSessionSnapshot> {
+  const query = new URLSearchParams({ agent })
+  return request<AgentSessionSnapshot>(endpoint, `/session?${query}`, { method: 'GET' }, signal)
 }
 
 /**

@@ -5,6 +5,7 @@ using Content.Server.AiAgent.Perception;
 using Content.Server.NPC.Pathfinding;
 using Content.Shared.Doors;
 using Content.Shared.Doors.Components;
+using Content.Shared.Doors.Systems;
 using Robust.Shared.Map;
 using Robust.Shared.Physics.Systems;
 
@@ -24,6 +25,35 @@ public sealed partial class AiBorgSystem
     [Dependency] private PathfindingSystem _pathfinding = default!;
     [Dependency] private SharedPhysicsSystem _physics = default!;
     [Dependency] private SharedTransformSystem _xform = default!;
+    [Dependency] private SharedDoorSystem _door = default!;
+
+    /// <summary>
+    /// Дальность руки, тайлы. То же число, что и в <c>InRangeUnobstructed</c> у инструментов:
+    /// «дошёл» и «дотянулся» обязаны мерить одним, иначе робот получает два разных ответа об
+    /// одном и том же месте.
+    /// </summary>
+    private const float ReachTiles = 1.5f;
+
+    /// <summary>
+    /// Дальность до ПУЛЬТА, тайлы. Больше, чем у руки, и это СОЗНАТЕЛЬНОЕ послабление, а не
+    /// починка.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Повод — контроллер АМЭ на карте ротации. Он стоит так, что все четыре клетки по сторонам
+    /// заняты кабелями и стеной, и подойти к нему можно только по диагонали. С диагонали
+    /// апстримовый <c>use</c> проходит, а <c>InRangeUnobstructed</c> на 1.5 тайла — нет: луч из
+    /// центра в центр цепляет угол. Робот собирал реактор целиком и не мог открыть его пульт,
+    /// сообщая <c>not_visible</c>, стоя вплотную.
+    /// </para>
+    /// <para>
+    /// Двойка накрывает диагональ (1.41) с запасом на смещение внутри тайла, но остаётся
+    /// «протянутой рукой», а не дистанционным управлением: через стену луч всё равно не пройдёт,
+    /// проверка препятствий остаётся на месте. Отступление от паритета с живым игроком — он
+    /// работает с 1.5, — и оно здесь названо вслух, как и свободная рука у манипулятора.
+    /// </para>
+    /// </remarks>
+    private const float ConsoleReachTiles = 2f;
 
     /// <summary>
     /// Куда робот идёт, чтобы отчитаться о прибытии.
@@ -108,19 +138,57 @@ public sealed partial class AiBorgSystem
                 continue;
             }
 
-            // Тайлы кончились — дошли.
+            // Тайлы кончились — дошли. Насколько дошли, спрашиваем ДО очистки маршрута:
+            // заказанная цель живёт в _goals, а ClearRoute её забывает.
+            var missed = MissedBy(borg);
+
             _walking.Remove(borg);
             _progress.Remove(borg);
             ClearRoute(borg);
 
             _lastWalk[borg] = "пришёл";
 
-            PushToBorg(borg, Observation.Event($"ARRIVED дошёл: {what}", _host.RoundTime()));
+            var arrived = missed is { } gap
+                ? $"ARRIVED дошёл до «{what}», насколько смог: до цели {gap:F1} тайла, " +
+                  "ближе не подойти — клетки вокруг неё заняты. Руками отсюда не достать"
+                : $"ARRIVED дошёл: {what}";
+
+            PushToBorg(borg, Observation.Event(arrived, _host.RoundTime()));
 
             // В лог тоже: «робот не идёт» и «робот идёт медленно» в игре выглядят одинаково, а
             // различаются только этой строкой.
-            _sawmill.Info($"{ToPrettyString(borg)} дошёл: {what}");
+            _sawmill.Info($"{ToPrettyString(borg)} дошёл: {what}"
+                          + (missed is { } far ? $" (не дошёл {far:F1} тайла: подходы заняты)" : ""));
         }
+    }
+
+    /// <summary>
+    /// На сколько тайлов робот НЕ дошёл до заказанной цели, или <c>null</c>, если стоит вплотную.
+    /// </summary>
+    /// <remarks>
+    /// Маршрут ведёт к ближайшему проходимому тайлу, и для двери, ящика или консоли это верно:
+    /// идти надо «к», а не «в». Но когда заняты ВСЕ клетки вокруг цели — например, робот сам
+    /// обложил пульт АМЭ экранированием, — ближайший проходимый оказывается в двух тайлах, а
+    /// строка ARRIVED сообщала простое «дошёл». Дальше модель честно берётся за работу руками и
+    /// получает отказ по дальности: инструмент сказал «дошёл», рука говорит «далеко», и причины
+    /// не видно ни в одной строке. Замерено на раунде 131: маршрут к контроллеру в (28,-40) вёл
+    /// в (26,-40), и робот двадцать минут ходил вокруг, пробуя console с каждой стороны.
+    /// </remarks>
+    private float? MissedBy(EntityUid borg)
+    {
+        if (!_goals.TryGetValue(borg, out var goal))
+            return null;
+
+        var target = _xform.ToMapCoordinates(goal.Dest);
+        var here = _xform.GetMapCoordinates(borg);
+
+        // Разные сетки — расстояние между ними ничего не значит; молчим, а не врём числом.
+        if (target.MapId != here.MapId)
+            return null;
+
+        var gap = (target.Position - here.Position).Length();
+
+        return gap > ReachTiles ? gap : null;
     }
 
     /// <summary>
@@ -250,9 +318,43 @@ public sealed partial class AiBorgSystem
         if (!best.IsValid())
             return false;
 
-        _interaction.InteractionActivate(borg, best);
+        if (!TryComp<DoorComponent>(best, out var comp))
+            return false;
+
+        // Сначала штатно, от лица робота: с доступом по ID створка открывается его правами.
+        if (_door.TryOpen(best, comp, user: borg))
+            return true;
+
+        // Доступа может не быть — и тогда штатное нажатие ничего не делает. По решению владельца
+        // форка робот считает проходимым ЛЮБОЙ незаболченный шлюз, поэтому закрытую дверь он
+        // дожимает без пользователя: `HasAccess` с `user: null` пропускает проверку прав, а вот
+        // болты, сварка и обесточка остаются на месте — их отменяет `BeforeDoorOpenedEvent`, и
+        // заболченная дверь честно не откроется. Такая створка после нескольких попыток уедет в
+        // _blocked, и маршрут пойдёт в обход.
+        //
+        // Это СОЗНАТЕЛЬНОЕ послабление паритета, как манипулятор и гиперъячейка. Повод измеренный:
+        // дорога от инженерного крыла к АМЭ на карте ротации идёт через
+        // AirlockAtmosphericsGlassLocked, доступа к которому у шасси нет. Робот втыкался в эту
+        // створку, перекладывал маршрут, снова упирался — и за полчаса раунда 135 так и не
+        // вернулся к собранному им же реактору, намотав круг через Arrivals.
+        //
+        // Проверять тут состояние двери нельзя, и это стоило прогона: отказ по правам переводит
+        // створку в Denying на несколько тиков, а условие «дверь всё ещё Closed» на Denying не
+        // срабатывает — дожим молча не выполнялся, хотя ветка выглядела рабочей.
+        _door.TryOpen(best, comp, user: null);
+
         return true;
     }
+
+    /// <summary>
+    /// Нажать на ближайшую закрытую дверь — вход для стенда.
+    /// </summary>
+    /// <remarks>
+    /// На живом сервере это делает <see cref="WatchForStall"/>, когда робот перестал двигаться.
+    /// Воспроизводить затор в тесте пришлось бы через настоящую ходьбу и таймеры, а проверить надо
+    /// не затор, а решение о двери.
+    /// </remarks>
+    public bool PressDoorForTest(EntityUid borg) => TryPressClosedDoor(borg, 1.6f);
 
     /// <summary>Положить наблюдение в очередь агента, который сидит в этом теле.</summary>
     private void PushToBorg(EntityUid borg, Observation obs)

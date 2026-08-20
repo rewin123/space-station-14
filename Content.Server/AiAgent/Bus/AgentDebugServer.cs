@@ -186,6 +186,22 @@ public sealed class AgentDebugServer : IDisposable
         // The debugger is served from somewhere else entirely — a static page, a dev server, a
         // file:// URL. Without this every fetch fails in the browser for a reason that never
         // appears in the server log.
+        // Кэшировать здесь нельзя НИЧЕГО, и это не перестраховка.
+        //
+        // /events — длинный опрос: один и тот же URL (instance+since) запрашивается повторно, пока
+        // курсор не сдвинулся. Ответ без единой директивы кэширования браузер и промежуточные
+        // прокси вправе переиспользовать по эвристике — и тогда петля получает старый ответ, курсор
+        // не двигается, URL не меняется, и страница живёт вечно на первом ответе. Снаружи это
+        // выглядит ровно как «события не обновляются, пока не нажмёшь F5»: перезагрузка берёт новый
+        // снимок с новым seq, то есть новый URL, и на одну итерацию всё оживает.
+        //
+        // Поймать это пробами через Node невозможно: у его fetch нет HTTP-кэша вовсе, и та же самая
+        // петля против того же сервера отрабатывает безупречно. Отсюда правило: заголовок ставится
+        // независимо от того, воспроизвелось ли — цена одна строка, а отсутствие директивы у
+        // повторяющегося GET это просто ошибка.
+        context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+        context.Response.Headers["Pragma"] = "no-cache";
+
         context.Response.Headers["Access-Control-Allow-Origin"] = "*";
         context.Response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
         context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";

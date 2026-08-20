@@ -343,6 +343,239 @@ public sealed class RogueAiTests
         });
     }
 
+    /// <summary>
+    /// Открытый режим поднимает трёх киборгов, и у каждого свой идентификатор.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Проверяется не «спавн не упал», а состав и разделение. Состав — потому что набор задан
+    /// списком в YAML и опечатка в имени прототипа не роняет раунд, а молча даёт двух роботов
+    /// вместо трёх. Разделение — потому что общий идентификатор означает общий каталог памяти и
+    /// общий файл диалога, и проявляется это через раунд, когда связать причину со следствием
+    /// уже нечем.
+    /// </para>
+    /// <para>
+    /// Спавн живёт на раздаче должностей, поэтому здесь поднимается настоящее событие тикера,
+    /// а не вызывается метод: порядок относительно готовности навигационной карты — часть того,
+    /// что проверяется.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task OpenMode_RaisesThreeSupportBorgs()
+    {
+        await using var w = await AiStation.Create();
+        var server = w.Pair.Server;
+
+        var result = await w.Read(() =>
+        {
+            var (rogue, rule) = StartRule(server, OpenRule);
+
+            // Метод зовётся напрямую, а не событием: на RulePlayerJobsAssignedEvent подписан
+            // AntagSelectionSystem, и вне последовательности старта раунда он падает сам. Тем же
+            // приёмом проверяется раздача доступа выше.
+            rogue.SpawnSupportBorgs(rule);
+
+            // Захват отдельным шагом, потому что идентификатор выдаётся именно на нём, а не на
+            // спавне. В раунде это делает автозахват на переходе в InRound; здесь — руками, чтобы
+            // тест не зависел от того, чем ещё занят тикер.
+            var borgs = server.System<Content.Server.AiAgent.Borg.AiBorgSystem>();
+            var found = new List<string>();
+
+            var query = server.EntMan.EntityQueryEnumerator<Content.Server.AiAgent.Borg.AiBorgComponent>();
+            while (query.MoveNext(out var uid, out var comp))
+            {
+                Assert.That(borgs.TryClaim(uid, out var why), Is.True, $"захват не удался: {why}");
+                found.Add(comp.AgentId);
+            }
+
+            return (Ids: found, Wanted: rule.SupportBorgs.Count);
+        });
+
+        var ids = result.Ids;
+        var wanted = result.Wanted;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wanted, Is.EqualTo(3), "в прототипе открытого режима не три киборга");
+            Assert.That(ids, Has.Count.EqualTo(3), $"поднято не три робота: {string.Join(", ", ids)}");
+            Assert.That(ids.Distinct(global::System.StringComparer.OrdinalIgnoreCase).Count(), Is.EqualTo(3),
+                $"идентификаторы совпали: {string.Join(", ", ids)} — каталоги памяти теперь общие");
+        });
+    }
+
+    /// <summary>
+    /// Скрытый режим не поднимает ни одного киборга.
+    /// </summary>
+    /// <remarks>
+    /// Три робота под командой ИИ — заявление громче любого поступка, и в скрытом режиме это
+    /// сорвало бы весь замысел на первой минуте. Проверяется отдельно, потому что список пуст
+    /// в YAML, а пустой список легко «починить» копипастой из соседнего правила.
+    /// </remarks>
+    [Test]
+    public async Task HiddenMode_RaisesNoBorgs()
+    {
+        await using var w = await AiStation.Create();
+        var server = w.Pair.Server;
+
+        var count = await w.Read(() =>
+        {
+            var (rogue, rule) = StartRule(server, HiddenRule);
+            Assert.That(rule.SupportBorgs, Is.Empty, "скрытому режиму прописали киборгов поддержки");
+
+            rogue.SpawnSupportBorgs(rule);
+
+            var n = 0;
+            var query = server.EntMan.EntityQueryEnumerator<Content.Server.AiAgent.Borg.AiBorgComponent>();
+            while (query.MoveNext(out _, out _))
+                n++;
+
+            return n;
+        });
+
+        Assert.That(count, Is.Zero, "скрытый режим поставил роботов");
+    }
+
+    /// <summary>
+    /// Прототипы киборгов поддержки существуют и собраны так, как ожидает код.
+    /// </summary>
+    /// <remarks>
+    /// Самый тихий вид поломки этого набора — опечатка в YAML: файл целиком не загружается, а
+    /// раунд стартует как ни в чём не бывало, просто без роботов. Ловилось это ровно один раз и
+    /// стоило прогона тестов; отсюда проверка прототипов отдельно от проверки поведения.
+    /// </remarks>
+    [Test]
+    public async Task SupportBorgPrototypes_AreWiredUp()
+    {
+        await using var w = await AiStation.Create();
+        var protoMan = w.Pair.Server.ResolveDependency<IPrototypeManager>();
+
+        await w.Read(() =>
+        {
+            protoMan.TryIndex(OpenRule, out var ruleProto);
+            var rule = (RogueAiRuleComponent) ruleProto!.Components["RogueAiRule"].Component;
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(rule.LlmChain, Is.Not.Empty, "у режима нет своей цепочки моделей");
+
+                foreach (var proto in rule.SupportBorgs)
+                {
+                    Assert.That(protoMan.TryIndex<Robust.Shared.Prototypes.EntityPrototype>(proto.Id, out var entity),
+                        Is.True, $"прототипа {proto} нет — файл мог не загрузиться целиком");
+
+                    Assert.That(entity!.Components.ContainsKey("AiBorg"), Is.True,
+                        $"{proto}: это не ИИ-борг, агент в него не сядет");
+
+                    Assert.That(entity.Components.ContainsKey("SiliconLawProvider"), Is.True,
+                        $"{proto}: без своего лоусета робот остаётся с Crewsimov и ИИ не подчиняется");
+
+                    var borg = (Content.Server.AiAgent.Borg.AiBorgComponent)
+                        entity.Components["AiBorg"].Component;
+
+                    Assert.That(borg.AgentId, Is.Empty,
+                        $"{proto}: id прописан руками — два одинаковых робота получат общий каталог");
+                    Assert.That(borg.SoulFile, Does.StartWith("SOUL_ROGUE"),
+                        $"{proto}: личность не режимная — робот будет вести себя как обычный");
+                }
+            });
+
+            return 0;
+        });
+    }
+
+    /// <summary>
+    /// Ядро занимается, когда на станции уже работают три робота.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Прямая регрессия на найденную поломку. Потолок <c>ai.max_agents</c> стоял на захвате ядра
+    /// и считал ВСЕ сессии, включая борговские, а роботов режим ставит на раздаче должностей —
+    /// то есть раньше, чем мозг садится в ядро на <c>InRound</c>. При умолчании в единицу это
+    /// давало режим злого ИИ без ИИ: в логе честная строка про лимит, в игре — тишина.
+    /// </para>
+    /// <para>
+    /// Порядок в тесте тот же, что в раунде: сначала роботы, потом ядро. Обратный порядок
+    /// проходил бы и на сломанной версии.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task CoreIsClaimed_EvenWithThreeBorgsAlreadyRunning()
+    {
+        await using var w = await AiStation.Create();
+        var server = w.Pair.Server;
+
+        var claimed = await w.Read(() =>
+        {
+            var host = server.System<StationAiAgentSystem>();
+
+            // Стенд занимает ядро на старте, а в раунде оно занимается ПОСЛЕДНИМ. Освобождаем,
+            // чтобы порядок совпал с боевым: иначе тест проходил бы и на сломанной версии.
+            host.ReleaseAll("порядок раунда: сначала роботы");
+
+            var (rogue, rule) = StartRule(server, OpenRule);
+            rogue.SpawnSupportBorgs(rule);
+
+            var borgs = server.System<Content.Server.AiAgent.Borg.AiBorgSystem>();
+            var query = server.EntMan.EntityQueryEnumerator<Content.Server.AiAgent.Borg.AiBorgComponent>();
+            var live = 0;
+
+            while (query.MoveNext(out var uid, out _))
+            {
+                if (borgs.TryClaim(uid, out _))
+                    live++;
+            }
+
+            Assert.That(live, Is.EqualTo(3), "роботы не поднялись — проверять нечего");
+
+            return host.TryClaimAnyCore(out var why) ? "" : why;
+        });
+
+        Assert.That(claimed, Is.Empty, $"мозг не сел в ядро при живых роботах: {claimed}");
+    }
+
+    /// <summary>
+    /// Личность робота ищется в общем каталоге, если в его собственном её нет.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Каталог агента выбирается его идентификатором, а идентификаторы киборгов поддержки
+    /// выдаёт аллокатор — <c>combat-1</c>, <c>combat-2</c>, … Каталог, стало быть, заранее
+    /// неизвестен, и держать личность внутри него значило бы копировать один и тот же файл под
+    /// каждый возможный номер. Личность привязана к РОЛИ: два боевых робота читают одно и то же.
+    /// </para>
+    /// <para>
+    /// Порядок проверяется тоже: свой каталог обязан перебивать общий, иначе исчезает
+    /// единственный способ отличить конкретного робота от собратьев.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task BorgSoul_FallsBackToTheSharedFolder_ButOwnFolderWins()
+    {
+        await using var w = await AiStation.Create();
+
+        const string file = "SOUL_ROGUE_BORG_COMBAT.md";
+        const string shared = "ЛИЧНОСТЬ-ИЗ-ОБЩЕГО";
+        const string own = "ЛИЧНОСТЬ-ИЗ-СВОЕГО";
+
+        var agentDir = await w.Read(() => w.System.AgentDir("combat-1"));
+
+        global::System.IO.Directory.CreateDirectory(w.DataDir);
+        await global::System.IO.File.WriteAllTextAsync(
+            global::System.IO.Path.Combine(w.DataDir, file), shared);
+
+        var fromShared = await w.Read(() => w.System.ReadSoul(file, agentDir));
+        Assert.That(fromShared, Is.EqualTo(shared),
+            "личность не нашлась в общем каталоге — каждому роботу понадобится своя копия");
+
+        global::System.IO.Directory.CreateDirectory(agentDir);
+        await global::System.IO.File.WriteAllTextAsync(
+            global::System.IO.Path.Combine(agentDir, file), own);
+
+        var fromOwn = await w.Read(() => w.System.ReadSoul(file, agentDir));
+        Assert.That(fromOwn, Is.EqualTo(own),
+            "общий каталог перебил свой — отличить конкретного робота от собратьев стало нечем");
+    }
+
     // ------------------------------------------------------------------ помощники
 
     /// <summary>Поднять правило режима настоящим тикером и вернуть его вместе с системой.</summary>

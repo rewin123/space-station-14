@@ -33,13 +33,20 @@ async function send(): Promise<void> {
   const endpoint = { baseUrl: settings.baseUrl, token: settings.token }
 
   try {
-    const result = await postCommand(endpoint, { type: 'message.send', text: text.value })
+    // Адресат обязателен: сообщение уходит в ящик конкретного мозга. Без него сервер отвечает
+    // 400 — и это правильно, «кому-нибудь» тут быть не должно.
+    const result = await postCommand(endpoint, {
+      type: 'message.send',
+      agent: agent.selected ?? '',
+      text: text.value,
+    })
     note.value = `${result.message} (${result.applied})`
     text.value = ''
 
     // Сразу спрашиваем, встало ли оно в очередь: это единственный способ показать, что уехало.
     try {
-      pending.value = (await getHealth(endpoint)).pending_input
+      const health = await getHealth(endpoint)
+      pending.value = health.agents.some((a) => a.id === agent.selected && a.pending_input)
     } catch {
       // Здоровье не критично: сообщение уже принято.
     }

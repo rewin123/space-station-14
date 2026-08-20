@@ -87,7 +87,9 @@ function gapBefore(index: number): number {
       <div class="head mono" @click="toggleFrame(frame.seq)">
         <span class="seq">{{ frame.seq }}</span>
         <span class="type" :class="frame.type.split('.')[0]">{{ frame.type }}</span>
-        <span class="session">{{ frame.session || '—' }}</span>
+        <span class="session" :class="{ mine: frame.session === agent.selected }">{{
+          frame.session || 'процесс'
+        }}</span>
         <span class="chev">{{ expanded.has(frame.seq) ? '▾' : '▸' }}</span>
       </div>
 
@@ -174,7 +176,11 @@ function gapBefore(index: number): number {
   color: var(--assistant);
 }
 
-.type.session {
+.type.session.mine {
+  color: var(--accent, #6ab);
+}
+
+.session {
   color: var(--user);
 }
 

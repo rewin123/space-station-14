@@ -1,3 +1,4 @@
+using System.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -33,7 +34,10 @@ public sealed class BusRouterTests
     private SkillStore _skills = null!;
     private PlayerNoteStore _notes = null!;
     private ConversationState _conv = null!;
-    private bool _hasSession;
+    /// <summary>
+    /// Витрина агентов. Пустая означает «тело никто не занял», непустая — сколько угодно агентов.
+    /// </summary>
+    private AgentDirectory _agents = new();
 
     [SetUp]
     public void SetUp()
@@ -55,7 +59,7 @@ public sealed class BusRouterTests
         _conv.AttachSink(_bus.ForSession("current"));
         _conv.SetPrefix("ПРОМПТ", "[]");
 
-        _hasSession = false;
+        _agents = new AgentDirectory();
         _sent.Clear();
     }
 
@@ -74,21 +78,13 @@ public sealed class BusRouterTests
         return new AgentDebugRouter(
             _bus,
             Token,
-            "current",
-            // The router never looks a session up; it is handed one. Null models "nobody has a core".
-            () => null,
+            // Маршрутизатор никогда не ищет сессию сам — ему дают витрину. Пустая моделирует
+            // «тело никто не занял».
+            _agents,
             () => _memory,
             () => _skills,
             () => _notes,
             () => 42,
-            text =>
-            {
-                if (!_hasSession)
-                    return (false, "нет активного агента");
-
-                _sent.Add(text);
-                return (true, "доставлено следующим ходом");
-            },
             (action, match, content) => action switch
             {
                 "add" => _memory.Add(content),
@@ -101,6 +97,42 @@ public sealed class BusRouterTests
                     ? _skills.Edit(name, match ?? "", replacement ?? "")
                     : _skills.Write(name, when ?? "", body ?? ""));
     }
+
+    /// <summary>
+    /// Поставить на витрину игрушечного агента.
+    /// </summary>
+    /// <remarks>
+    /// Настоящую <c>AgentSession</c> здесь собрать нельзя — она тянет за собой клиента модели,
+    /// петлю и мир, — и не нужно: маршрутизатор видит агента только через делегаты хендла. Это и
+    /// есть довод, по которому хендл несёт делегаты, а не ссылку на сессию.
+    /// </remarks>
+    private AgentHandle Agent(string id, string name = "Агент", bool alive = true)
+    {
+        var handle = new AgentHandle
+        {
+            Id = id,
+            Name = name,
+            Brain = 100,
+            Round = 42,
+            StartedSeq = _bus.Seq,
+            Alive = alive,
+            Capture = () => new AgentSessionDto(id, 100, 42, "хеш", "ПРОМПТ " + id, "[]", 0,
+                new[] { AgentMessageDto.From(0, new Content.Server.AiAgent.Llm.ChatMessageDto { Role = "user", Content = "привет от " + id }) },
+                Stats(), null),
+            Roster = () => new AgentRosterEntryDto(id, name, 100, 42, 0, true, "Core", 1, 1, 0, 10, 1000, 0, false, null),
+            Send = text =>
+            {
+                _sent.Add($"{id}: {text}");
+                return (true, "доставлено следующим ходом");
+            },
+        };
+
+        Assert.That(_agents.Add(handle), Is.True, $"агент {id} не встал на витрину");
+        return handle;
+    }
+
+    private static AgentStatsDto Stats() =>
+        new(1, 1, 0, 0, 0, 0, 0, 10, 3.5, 100, 1000, 1.0, 1.0, 0, 0, "Core", null, null);
 
     private Task<AgentDebugResponse> Get(string path, params (string Key, string Value)[] query)
     {
@@ -195,7 +227,7 @@ public sealed class BusRouterTests
     // ------------------------------------------------------------------ state
 
     [Test]
-    public async Task StateCarriesTheWholeAgent()
+    public async Task StateCarriesTheProcessStores()
     {
         _memory.Add("капитан доверяет мне");
         _skills.Write("restore-core-power", "когда ядро обесточено", "звать инженеров");
@@ -205,8 +237,8 @@ public sealed class BusRouterTests
         Assert.Multiple(() =>
         {
             Assert.That(body.GetProperty("instance").GetString(), Is.EqualTo(_bus.Instance));
-            Assert.That(body.GetProperty("session").ValueKind, Is.EqualTo(JsonValueKind.Null),
-                "агента нет — это нормальный ответ, а не ошибка");
+            Assert.That(body.GetProperty("agents").GetArrayLength(), Is.Zero,
+                "агентов нет — это нормальный ответ, а не ошибка");
             Assert.That(body.GetProperty("memory").GetProperty("memory_live")[0].GetString(),
                 Is.EqualTo("капитан доверяет мне"));
             Assert.That(body.GetProperty("skills")[0].GetProperty("name").GetString(),
@@ -291,9 +323,9 @@ public sealed class BusRouterTests
     // --------------------------------------------------------------- commands
 
     [Test]
-    public async Task MessageWithNoSessionIs409()
+    public async Task MessageToAnAgentThatIsNotThereIs409()
     {
-        var response = await Post("{\"type\":\"message.send\",\"text\":\"открой шлюз\"}");
+        var response = await Post("{\"type\":\"message.send\",\"agent\":\"core\",\"text\":\"открой шлюз\"}");
 
         Assert.Multiple(() =>
         {
@@ -303,18 +335,162 @@ public sealed class BusRouterTests
         });
     }
 
+    /// <summary>
+    /// Сообщение без адресата отклоняется, а не уходит «кому-нибудь».
+    /// </summary>
+    /// <remarks>
+    /// Умолчание здесь было бы худшим из решений: текст оператора всплывает у агента в следующем
+    /// ходу, и отправленный не тому он выглядит как реплика, которую агент сам себе придумал.
+    /// Заметить подмену негде — в ленте она будет в обеих сессиях выглядеть законно.
+    /// </remarks>
     [Test]
-    public async Task MessageWithASessionIsQueuedForTheNextTurn()
+    public async Task MessageWithoutAnAgentIs400()
     {
-        _hasSession = true;
+        Agent("core");
 
-        var body = Body(await Post("{\"type\":\"message.send\",\"text\":\"открой шлюз в атмос\"}"));
+        var response = await Post("{\"type\":\"message.send\",\"text\":\"открой шлюз\"}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(400));
+            Assert.That(_sent, Is.Empty, "сообщение без адресата всё-таки кому-то ушло");
+        });
+    }
+
+    [Test]
+    public async Task MessageIsQueuedForTheNextTurnOfTheNamedAgent()
+    {
+        Agent("core");
+        Agent("combat-1");
+
+        var body = Body(await Post(
+            "{\"type\":\"message.send\",\"agent\":\"combat-1\",\"text\":\"открой шлюз в атмос\"}"));
 
         Assert.Multiple(() =>
         {
             Assert.That(body.GetProperty("ok").GetBoolean(), Is.True);
+            Assert.That(body.GetProperty("agent").GetString(), Is.EqualTo("combat-1"));
             Assert.That(body.GetProperty("applied").GetString(), Is.EqualTo("next_turn"));
-            Assert.That(_sent, Is.EqualTo(new[] { "открой шлюз в атмос" }));
+            Assert.That(_sent, Is.EqualTo(new[] { "combat-1: открой шлюз в атмос" }),
+                "сообщение ушло не тому агенту");
+        });
+    }
+
+    // ------------------------------------------------------- мультисессионность
+
+    /// <summary>
+    /// Процессный снимок больше не несёт ни одной сессии.
+    /// </summary>
+    /// <remarks>
+    /// Прямая защита от возврата к старому: сессия в общем снимке означала бы, что клиент качает
+    /// историю всех агентов, чтобы посмотреть на одного. У четырёх агентов с контекстом под сотню
+    /// тысяч токенов это мегабайты на каждый пересев.
+    /// </remarks>
+    [Test]
+    public async Task StateCarriesTheRosterAndNoSession()
+    {
+        Agent("core", "Аксиома");
+        Agent("combat-1", "Клин");
+
+        var body = Body(await Get("/state"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(body.TryGetProperty("session", out _), Is.False,
+                "в общем снимке снова появилась сессия");
+
+            var agents = body.GetProperty("agents").EnumerateArray()
+                .Select(a => a.GetProperty("id").GetString())
+                .ToList();
+
+            Assert.That(agents, Is.EqualTo(new[] { "core", "combat-1" }),
+                "ростер не тот или порядок не тот — ядро обязано быть первым");
+
+            Assert.That(body.GetProperty("round").GetInt32(), Is.EqualTo(42));
+        });
+    }
+
+    /// <summary>
+    /// Снимок агента несёт ровно того, кого попросили.
+    /// </summary>
+    [Test]
+    public async Task SessionCarriesOnlyTheAskedAgent()
+    {
+        Agent("core");
+        Agent("combat-1");
+
+        var body = Body(await Get("/session", ("agent", "combat-1")));
+        var agent = body.GetProperty("agent");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(agent.GetProperty("id").GetString(), Is.EqualTo("combat-1"));
+            Assert.That(agent.GetProperty("system_prompt").GetString(), Does.Contain("combat-1"));
+            Assert.That(body.TryGetProperty("memory", out _), Is.False,
+                "снимок агента тащит за собой процессные хранилища");
+        });
+    }
+
+    /// <summary>
+    /// Неизвестный агент — 200 с пустым полем, и это НЕ придирка к семантике.
+    /// </summary>
+    /// <remarks>
+    /// Клиент считает 404 терминальным (<c>ApiError.terminal</c>) и после него навсегда
+    /// останавливает опрос. Агент, ушедший между кадром <c>session.started</c> и этим запросом, —
+    /// штатная гонка, и «правильный» код погасил бы из-за неё весь отладчик.
+    /// </remarks>
+    [Test]
+    public async Task SessionOfAnUnknownAgentIs200WithNull()
+    {
+        var response = await Get("/session", ("agent", "combat-9"));
+        var body = Body(response);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Status, Is.EqualTo(200),
+                "404 здесь навсегда останавливает петлю опроса на клиенте");
+            Assert.That(body.GetProperty("agent").ValueKind, Is.EqualTo(JsonValueKind.Null));
+        });
+    }
+
+    /// <summary>
+    /// Снимок без параметра — 400, а не «первый попавшийся».
+    /// </summary>
+    /// <remarks>
+    /// Молчаливый выбор умолчания вернул бы ровно ту ошибку, ради которой этот маршрут появился:
+    /// показать не того агента, ничем не выдав подмены.
+    /// </remarks>
+    [Test]
+    public async Task SessionWithoutTheAgentParamIs400()
+    {
+        Agent("core");
+
+        var response = await Get("/session");
+        Assert.That(response.Status, Is.EqualTo(400));
+    }
+
+    [Test]
+    public async Task EventsCarryTheRoster()
+    {
+        Agent("core");
+
+        var body = Body(await Get("/events", ("since", "0"), ("instance", _bus.Instance)));
+
+        Assert.That(body.GetProperty("agents").GetArrayLength(), Is.EqualTo(1),
+            "ростер не едет вместе с лентой — переключатель агентов обновлять нечем");
+    }
+
+    [Test]
+    public async Task HealthNoLongerClaimsASessionCalledCurrent()
+    {
+        Agent("core");
+
+        var body = Body(await Get("/health"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(body.TryGetProperty("session", out _), Is.False);
+            Assert.That(body.GetProperty("agents").GetArrayLength(), Is.EqualTo(1));
         });
     }
 
@@ -329,7 +505,7 @@ public sealed class BusRouterTests
         {
             Assert.That(body.GetProperty("ok").GetBoolean(), Is.True);
             Assert.That(body.GetProperty("applied").GetString(), Is.EqualTo("disk"));
-            Assert.That(body.GetProperty("visible_to_model").GetString(), Is.EqualTo("next_compaction"),
+            Assert.That(body.GetProperty("visible_to_model").GetString(), Is.EqualTo("next_compaction_of_each_agent"),
                 "без этого оператор правит память, видит то же поведение и решает, что эндпоинт сломан");
             Assert.That(_memory.Entries(), Does.Contain("SMES в инженерном разряжается быстрее"));
         });

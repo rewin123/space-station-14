@@ -318,9 +318,17 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// <summary>Find an empty AI core ON A STATION and put an LLM-driven brain in it.</summary>
     public bool TryClaimAnyCore(out string reason)
     {
-        if (_sessions.Count >= _cfg.GetCVar(AiCVars.MaxAgents))
+        // Проверка «а не занято ли ядро» — смысловая, и она не про количество агентов вообще.
+        //
+        // Раньше здесь стоял общий лимит ai.max_agents, и он считал ВСЕ сессии, включая
+        // борговские. В режиме злого ИИ это ломало раунд наизнанку: правило спавнит киборгов
+        // поддержки на раздаче должностей, то есть РАНЬШЕ, чем ядро занимается на InRound, — и
+        // при лимите в единицу мозг в ядро уже не садился. В логе при этом честная строка про
+        // лимит, а в игре — режим злого ИИ без ИИ. Общий потолок переехал в StartSession, где он
+        // один на оба тела и не зависит от того, кто успел первым.
+        if (_sessions.Values.Any(s => s.Body.Id == CoreAgentId))
         {
-            reason = $"already at ai.max_agents ({_cfg.GetCVar(AiCVars.MaxAgents)})";
+            reason = "ядро уже занято агентом";
             return false;
         }
 
@@ -510,6 +518,17 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (_sessions.ContainsKey(brain))
         {
             reason = $"{ToPrettyString(brain)} уже занят работающим агентом";
+            return false;
+        }
+
+        // Единственный общий потолок на число живых агентов, одинаковый для ядра и для боргов.
+        // Стоит здесь, а не в местах захвата, ровно потому, что мест захвата несколько, а лимит
+        // один: разъехавшись, они дают «лимит соблюдён у одного тела и обойдён у другого».
+        var max = _cfg.GetCVar(AiCVars.MaxAgents);
+
+        if (_sessions.Count >= max)
+        {
+            reason = $"уже работает {_sessions.Count} агентов при ai.max_agents = {max}";
             return false;
         }
 
@@ -752,10 +771,12 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // Каждый тик, без своего интервала: сроки заданы агентом с точностью до секунды, а обход
         // восьми записей под замком дешевле, чем счётчик, который пришлось бы объяснять.
         FireDueTimers();
+        FireRogueNudge();
 
         ReportFinishedScripts();
 
         PruneHandles(frameTime);
+        RefreshAgentDirectory(frameTime);
         ResetWitnessTick(frameTime);
         ReportFrameTime(frameTime);
     }

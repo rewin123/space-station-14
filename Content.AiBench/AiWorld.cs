@@ -1,3 +1,4 @@
+using System.Linq;
 using System;
 using System.Threading.Tasks;
 using Content.IntegrationTests;
@@ -310,9 +311,20 @@ public sealed class AiWorld : IAsyncDisposable
     /// <summary>Что уходит модели полем tools — тут видно, смешались режимы или нет.</summary>
     public Task<string> Wire() => Read(() => System.GetSession(Brain).Registry.WireJson());
 
-    /// <summary>Строки, которые агент прочитает следующим ходом. Очередь не трогает.</summary>
-    public Task<System.Collections.Generic.List<string>> Unread(int max = 30) =>
-        Read(() => System.GetSession(Brain).Queue.PeekUnread(max));
+    /// <summary>
+    /// Блок NEW_EVENTS в том виде, в каком он подмешивается в разговор посреди хода.
+    ///
+    /// <b>Забирает события из очереди</b>, как это делает и сам ход: доставлено — значит удалено.
+    /// Прежний <c>PeekUnread</c> только подсматривал, и именно это давало двойную доставку —
+    /// строки уезжали и в результат инструмента, и следующим ходом в наблюдение.
+    /// </summary>
+    public Task<string?> NewEvents() =>
+        Read(() =>
+        {
+            var (items, dropped) = System.GetSession(Brain).Queue.Drain();
+            var when = items.Count > 0 ? items.Max(i => i.RoundTime) : System.RoundTime();
+            return Content.Server.AiAgent.Perception.ObservationFormatter.FormatSteering(items, dropped, when);
+        });
 
     /// <summary>Таблица фоновых скриптов этой сессии.</summary>
     public Task<Content.Server.AiAgent.Core.Scripting.ScriptProcessTable> ScriptTable() =>

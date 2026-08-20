@@ -16,9 +16,9 @@ const paired = ref(true)
 
 const rows = computed(() =>
   paired.value
-    ? pairConversation(agent.state.messages, agent.state.bodyEpoch)
-    : agent.state.messages.map((message) => ({
-        key: `${agent.state.bodyEpoch}:${message.index}`,
+    ? pairConversation(agent.current.messages, agent.current.bodyEpoch)
+    : agent.current.messages.map((message) => ({
+        key: `${agent.current.bodyEpoch}:${message.index}`,
         message,
         calls: (message.tool_calls ?? []).map((call) => ({ call, result: null, state: 'pending' as const })),
         orphanResult: message.role === 'tool',
@@ -31,7 +31,7 @@ const ambiguous = computed(() =>
 </script>
 
 <template>
-  <NoSession v-if="!agent.state.sessionId" />
+  <NoSession v-if="!agent.current.id" />
 
   <div v-else class="conversation">
     <div class="bar">
@@ -45,11 +45,11 @@ const ambiguous = computed(() =>
       </span>
 
       <span class="meta mono">
-        эпоха {{ agent.state.bodyEpoch }} · {{ agent.state.messages.length }} сообщений
+        эпоха {{ agent.current.bodyEpoch }} · {{ agent.current.messages.length }} сообщений
       </span>
     </div>
 
-    <div v-if="agent.state.sessionGone" class="ended">
+    <div v-if="agent.current.ended" class="ended">
       Сессия завершена. Это её последнее состояние; новые кадры к ней не применяются.
     </div>
 
@@ -59,14 +59,14 @@ const ambiguous = computed(() =>
 
     <MessageBlock v-for="row in rows" :key="row.key" :row="row" :paired="paired" />
 
-    <div v-if="agent.state.lastTurn" class="turn mono">
-      ход {{ agent.state.lastTurn.index }} ·
-      {{ agent.state.lastTurn.exit }} / {{ agent.state.lastTurn.delivery }} ·
-      шагов {{ agent.state.lastTurn.step }} ·
-      вызовов {{ agent.state.lastTurn.tool_calls }}
-      <template v-if="agent.state.lastTurn.forced">· принудительный</template>
-      <template v-if="agent.state.lastTurn.promised">
-        · обещал: {{ agent.state.lastTurn.promised }}
+    <div v-if="agent.current.lastTurn" class="turn mono">
+      ход {{ agent.current.lastTurn.index }} ·
+      {{ agent.current.lastTurn.exit }} / {{ agent.current.lastTurn.delivery }} ·
+      шагов {{ agent.current.lastTurn.step }} ·
+      вызовов {{ agent.current.lastTurn.tool_calls }}
+      <template v-if="agent.current.lastTurn.forced">· принудительный</template>
+      <template v-if="agent.current.lastTurn.promised">
+        · обещал: {{ agent.current.lastTurn.promised }}
       </template>
     </div>
   </div>
