@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Оракул совместимости: запись золотых трасс на стороне ОРИГИНАЛА.
+
+    ПОЧЕМУ это отдельный проект, а не пара файлов в Content.IntegrationTests:
+    оригинал закреплён на 5d531583a7 и правится ровно в одном месте — здесь.
+    Ни один существующий файл ss14_ai не тронут; всё, что нужно от харнесса
+    (PoolManager, GameTest, TestPair), берётся через ProjectReference.
+
+    ПОЧЕМУ это тестовый проект NUnit, а не консольное приложение:
+    GameTest.DoSetup читает TestContext.CurrentContext.Test.Method — без
+    живого NUnit-контекста харнесс просто не поднимется. Дешевле подчиниться
+    харнессу, чем переписывать его (а переписывать нельзя).
+  -->
+  <PropertyGroup>
+    <OutputPath>..\bin\Content.OracleTrace\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <Import Project="../MSBuild/Content.props" />
+  <ItemGroup>
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Content.Client\Content.Client.csproj" />
+    <ProjectReference Include="..\Content.Server\Content.Server.csproj" />
+    <ProjectReference Include="..\Content.Shared\Content.Shared.csproj" />
+    <ProjectReference Include="..\Content.IntegrationTests\Content.IntegrationTests.csproj" />
+  </ItemGroup>
+  <Import Project="..\RobustToolbox\MSBuild\Robust.Properties.targets" />
+  <Import Project="..\RobustToolbox\MSBuild\Robust.CompNetworkGenerator.targets" />
+
+  <Import Project="..\RobustToolbox\Imports\Client.props" />
+  <Import Project="..\RobustToolbox\Imports\Server.props" />
+  <Import Project="..\RobustToolbox\Imports\Shared.props" />
+  <Import Project="..\RobustToolbox\Imports\Testing.props" />
+</Project>
