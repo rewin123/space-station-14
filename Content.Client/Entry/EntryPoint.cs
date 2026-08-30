@@ -29,6 +29,7 @@ using Content.Shared.Ame.Components;
 using Content.Shared.FeedbackSystem;
 using Content.Shared.Gravity;
 using Content.Shared.Localizations;
+using Content.Shared.Silicons.Laws;
 using Robust.Client;
 using Robust.Client.Graphics;
 using Robust.Client.Input;
@@ -131,6 +132,22 @@ namespace Content.Client.Entry
             _prototypeManager.RegisterIgnore("codewordGenerator");
             _prototypeManager.RegisterIgnore("codewordFaction");
 
+            // Виды прототипов нашего форка, объявленные только на сервере (AiLlmProfilePrototype,
+            // AiBackupPowerPrototype). Без этих двух строк клиент из лаунчера теряет половину
+            // каталога _AiAgent, и вот почему.
+            //
+            // Упаковщик склеивает все YAML одного каталога в один __merged.yml
+            // (AssetPassMergeTextDirectories), а разбор прототипов ловит ошибку на весь документ
+            // сразу: неизвестный вид посреди файла прерывает цикл, и всё, что стоит НИЖЕ, не
+            // грузится вовсе. В _AiAgent ниже backup_power.yml лежат законы ИИ, наборы законов и
+            // пресеты режима — на клиенте из лаунчера их просто нет.
+            //
+            // На клиенте из исходников этого не видно: там файлы лежат россыпью и падает только
+            // backup_power.yml сам по себе. Отсюда и расхождение «в разработке работает, в Steam
+            // нет», которое мы неделю искали в сети.
+            _prototypeManager.RegisterIgnore("aiLlmProfile");
+            _prototypeManager.RegisterIgnore("aiBackupPower");
+
             _componentFactory.GenerateNetIds();
             _adminManager.Initialize();
             _screenshotHook.Initialize();
@@ -187,7 +204,50 @@ namespace Content.Client.Entry
             // Disable engine-default viewport since we use our own custom viewport control.
             _userInterfaceManager.MainViewport.Visible = false;
 
+            ReportAiPrototypes();
+
             SwitchToDefaultState();
+        }
+
+        /// <summary>
+        /// ФОРК, ДИАГНОСТИКА (снять, когда петля PVS закроется). Печатает, какие прототипы
+        /// _AiAgent клиент действительно собрал.
+        /// </summary>
+        /// <remarks>
+        /// Нужна потому, что клиент из лаунчера видит каталог прототипов иначе, чем клиент из
+        /// исходников: упаковщик склеивает YAML каталога в один файл, и одна плохая запись рубит
+        /// все, что ниже. Отсутствие шасси клиент обнаруживает не при загрузке, а посреди раунда —
+        /// сущность, которую нельзя создать, роняет применение состояния, клиент просит полное
+        /// состояние и уходит в петлю. По журналу это выглядит как сетевая проблема, хотя ломается
+        /// разбор прототипов при запуске.
+        /// </remarks>
+        private void ReportAiPrototypes()
+        {
+            var sawmill = Robust.Shared.Log.Logger.GetSawmill("ai.proto");
+
+            string[] expected =
+            {
+                "AiBorgChassis",
+                "AiBorgCombatChassis",
+                "AiBorgRogueEngineer",
+                "AiBorgModuleGripper",
+                "AiBorgModuleArms",
+                "AiBorgBuiltInLaser",
+            };
+
+            var missing = new List<string>();
+            foreach (var id in expected)
+            {
+                if (!_prototypeManager.HasIndex<EntityPrototype>(id))
+                    missing.Add(id);
+            }
+
+            var lawsets = _prototypeManager.Count<SiliconLawsetPrototype>();
+
+            if (missing.Count == 0)
+                sawmill.Info($"прототипы ИИ на месте, все {expected.Length}; наборов законов: {lawsets}");
+            else
+                sawmill.Error($"НЕТ ПРОТОТИПОВ ИИ: {string.Join(", ", missing)}; наборов законов: {lawsets}");
         }
 
         private void SwitchToDefaultState(bool disconnected = false)
