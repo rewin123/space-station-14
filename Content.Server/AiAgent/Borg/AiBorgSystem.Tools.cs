@@ -185,9 +185,9 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "shoot",
-            Description = "Выстрелить в цель из оружия в активной руке. Нужна прямая видимость: " +
-                          "сквозь стену не попасть. Это применение силы, и законы силикона на " +
-                          "тебя распространяются.",
+            Description = "Выстрелить в цель из встроенного ствола или из оружия в руке. " +
+                          "Нужна прямая видимость: сквозь стену не попасть. Это применение " +
+                          "силы, и законы силикона на тебя распространяются.",
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{

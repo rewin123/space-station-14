@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using Content.Server.AiAgent.Tools;
+using Content.Server.AiAgent.Vision;
 using Content.Shared.Access.Components;
 using Content.Shared.Doors.Components;
 using Content.Shared.Mobs.Components;
@@ -158,6 +159,123 @@ public sealed partial class StationAiAgentSystem
             GatherByBounds(gridUid.Value, mapGrid, tiles, eye, brain, core.Owner, result, ref profile);
         else
             GatherByTile(gridUid.Value, tiles, eye, brain, core.Owner, result, ref profile);
+
+        profile.GatherMs = Stopwatch.GetElapsedTime(gatherStart).TotalMilliseconds;
+        profile.OnScreen = result.Count;
+
+        return result;
+    }
+
+    /// <summary>
+    /// Проход обзора, растянутый на несколько кадров.
+    ///
+    /// Держит то, что посчитано один раз на старте (глаз, сетка, ядро) и переживает срезы вместе с
+    /// самим <see cref="SlicedView"/>. Отдельным объектом, а не полями системы, потому что проходов
+    /// в полёте может быть несколько: у каждого агента свой, и складывать их в систему значило бы
+    /// поймать чужие тайлы при <c>ai.max_agents &gt; 1</c>.
+    /// </summary>
+    private sealed class ViewPass
+    {
+        public required SlicedView View;
+        public required EntityUid Grid;
+        public required MapGridComponent MapGrid;
+        public required EntityUid Eye;
+        public required EntityUid Core;
+        public double ViewMs;
+    }
+
+    /// <summary>
+    /// Разрешить глаз и сетку. Общий кусок для атомарного и нарезаемого путей — чтобы они не
+    /// разъехались в том, что считают «глазом»; расхождение здесь было бы расхождением в паритете.
+    /// </summary>
+    private bool TryResolveEye(
+        EntityUid brain,
+        out EntityUid eye,
+        out EntityUid core,
+        out EntityUid grid,
+        out BroadphaseComponent broadphase,
+        out MapGridComponent mapGrid,
+        out string? failure)
+    {
+        eye = default;
+        core = default;
+        grid = default;
+        broadphase = default!;
+        mapGrid = default!;
+
+        if (!_stationAi.TryGetCore(brain, out var found) || found.Comp?.RemoteEntity == null)
+        {
+            failure = "нет доступа к ядру — камеры недоступны";
+            return false;
+        }
+
+        core = found.Owner;
+        eye = found.Comp.RemoteEntity.Value;
+
+        var gridUid = Transform(eye).GridUid;
+
+        if (gridUid == null
+            || !TryComp(gridUid, out MapGridComponent? foundGrid)
+            || !TryComp(gridUid, out BroadphaseComponent? foundBroadphase))
+        {
+            failure = "глаз не на станции";
+            return false;
+        }
+
+        grid = gridUid.Value;
+        mapGrid = foundGrid;
+        broadphase = foundBroadphase;
+        failure = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Завести проход обзора. Тяжёлого здесь ничего нет: только разрешение глаза и рамка.
+    /// </summary>
+    private ViewPass? BeginSlicedView(EntityUid brain, float expansion, out string? failure)
+    {
+        if (!TryResolveEye(brain, out var eye, out var core, out var grid, out var broadphase, out var mapGrid, out failure))
+            return null;
+
+        var worldPos = _xform.GetWorldPosition(Transform(eye));
+        var bounds = new Box2Rotated(
+            new Box2(worldPos.X - expansion, worldPos.Y - expansion, worldPos.X + expansion, worldPos.Y + expansion),
+            Angle.Zero,
+            worldPos);
+
+        var view = new SlicedView(EntityManager, _lookup, _mapSystem, _xform, _power);
+        view.Begin((grid, broadphase, mapGrid), bounds, expansion);
+
+        return new ViewPass
+        {
+            View = view,
+            Grid = grid,
+            MapGrid = mapGrid,
+            Eye = eye,
+            Core = core,
+        };
+    }
+
+    /// <summary>
+    /// Собрать сущности по посчитанным тайлам. Тот же сбор, что и у атомарного пути, — резать его
+    /// незачем: по профилю это 3-4 мс против 18-22 у каста.
+    /// </summary>
+    private List<EntityUid> GatherFromPass(ViewPass pass, EntityUid brain, ref LookProfile profile)
+    {
+        var result = new List<EntityUid>();
+
+        profile.ViewMs = pass.ViewMs;
+        profile.Tiles = pass.View.VisibleTiles.Count;
+
+        if (pass.View.VisibleTiles.Count == 0)
+            return result;
+
+        var gatherStart = Stopwatch.GetTimestamp();
+
+        if (_cfg.GetCVar(AiCVars.LookFast))
+            GatherByBounds(pass.Grid, pass.MapGrid, pass.View.VisibleTiles, pass.Eye, brain, pass.Core, result, ref profile);
+        else
+            GatherByTile(pass.Grid, pass.View.VisibleTiles, pass.Eye, brain, pass.Core, result, ref profile);
 
         profile.GatherMs = Stopwatch.GetElapsedTime(gatherStart).TotalMilliseconds;
         profile.OnScreen = result.Count;

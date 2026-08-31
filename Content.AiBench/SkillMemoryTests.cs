@@ -6,6 +6,7 @@ using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Skills;
 using Content.Server.AiAgent.Tools;
+using Content.Server.AiAgent.Vfs;
 using NUnit.Framework;
 using Robust.Shared.Log;
 
@@ -47,12 +48,23 @@ public sealed class SkillMemoryTests
         return store;
     }
 
-    private SkillStore NewSkills()
-    {
-        var store = new SkillStore(_dir, Sawmill);
-        store.LoadFromDisk();
-        return store;
-    }
+    /// <summary>
+    /// Файловая система под разбор: только личные записи, справочник тут не нужен.
+    ///
+    /// Хранение скиллов переехало в <see cref="DocTree"/>, и его собственные правила — правка
+    /// фрагментом, стоппер близнецов, потолок описания — проверяются в <c>VfsTests</c>. Здесь
+    /// осталось то, ради чего этот файл и существует: что разбор пишет, не пачкает игровую
+    /// историю и шлёт тот же массив инструментов.
+    /// </summary>
+    private Vfs NewVfs() => new VfsBuilder(Sawmill)
+        .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
+        .AddMemory(_dir, "memory.md", VfsAccess.Write, "факты о станции")
+        .AddText(Path.Combine(_dir, "CURATOR.md"), "curator.md", VfsAccess.Read, "разбор")
+        .Build();
+
+    /// <summary>Положить промпт разбора рядом, как это делает боевой каталог.</summary>
+    private void SeedCuratorPrompt(string text = "Разбери отрезок.\n{{КОРЕНЬ}}") =>
+        File.WriteAllText(Path.Combine(_dir, "CURATOR.md"), text);
 
     // ------------------------------------------------------------------- memory
 
@@ -169,131 +181,42 @@ public sealed class SkillMemoryTests
 
     // ------------------------------------------------------------------- skills
 
-    [Test]
-    public void Skill_RoundTripsThroughThePlainTextFormat()
+    // Тесты самой библиотеки — правка фрагментом, стоппер близнецов, потолок описания,
+    // устойчивость листинга — переехали в VfsTests вместе с хранением. Здесь остаётся разбор.
+
+    /// <summary>Пустой разговор с готовым префиксом — чтобы не повторять три строки в каждом тесте.</summary>
+    private static ConversationState Fresh()
     {
-        var text = "# закрыть-отдел\nкогда: Загерметизировать отдел, не заперев экипаж.\nШаг один.\nШаг два.";
-        var skill = SkillStore.Parse(text);
-
-        Assert.That(skill, Is.Not.Null);
-        Assert.That(skill!.Name, Is.EqualTo("закрыть-отдел"));
-        Assert.That(skill.When, Is.EqualTo("Загерметизировать отдел, не заперев экипаж."));
-        Assert.That(skill.Body, Does.Contain("Шаг два"));
-
-        var reparsed = SkillStore.Parse(SkillStore.Render(skill));
-        Assert.That(reparsed, Is.EqualTo(skill), "формат обязан пережить круг записи и чтения");
-    }
-
-    [Test]
-    public void Skill_RejectsOverlongWhen()
-    {
-        var s = NewSkills();
-        var result = s.Write("тест", new string('я', 61), "тело");
-
-        Assert.That(result.Ok, Is.False);
-        Assert.That(result.Message, Does.Contain("не доедет до индекса"),
-            "отказ должен объяснять ПОЧЕМУ лимит есть, иначе модель будет считать его придиркой");
-    }
-
-    [Test]
-    public void Skill_StopsNearDuplicates()
-    {
-        // Pleading in the prompt did not work on the mcbot deployment — the model kept creating
-        // safe_mine_ore next to mine_ore — so the stopper is mechanical.
-        var s = NewSkills();
-        Assert.That(s.Write("открыть-дверь", "Открыть дверь по просьбе экипажа.", "тело").Ok, Is.True);
-
-        var dupe = s.Write("быстро-открыть-дверь", "То же самое, но быстрее.", "тело");
-
-        Assert.That(dupe.Ok, Is.False);
-        Assert.That(dupe.Names, Does.Contain("открыть-дверь"));
-    }
-
-    [Test]
-    public void Skill_AllowsSiblingsInTheSameArea()
-    {
-        // The counterweight to the test above, and the reason the stopper looks for a subset
-        // rather than a shared word.
-        //
-        // A library that covers whole domains reuses the domain word by design: питание-apc and
-        // питание-smes are two subjects, not one written twice. Refusing the second because the
-        // first exists does not prevent a twin — it leaves the agent with no name it is allowed to
-        // write, and the lesson goes unrecorded.
-        var s = NewSkills();
-        Assert.That(s.Write("питание-apc", "Вопрос про APC отдела.", "тело").Ok, Is.True);
-
-        var sibling = s.Write("питание-smes", "Вопрос про СМЭС и накопители.", "тело");
-        Assert.That(sibling.Ok, Is.True, sibling.Message);
-
-        // And the twin is still caught inside that same area.
-        var twin = s.Write("питание-apc-подробно", "То же про APC, но длиннее.", "тело");
-        Assert.That(twin.Ok, Is.False);
-        Assert.That(twin.Names, Does.Contain("питание-apc"));
-    }
-
-    [Test]
-    public void Skill_EditByFragment_AppendsAndReplaces()
-    {
-        var s = NewSkills();
-        s.Write("проверка-питания", "Проверить питание перед управлением дверью.", "Сначала inspect.");
-
-        Assert.That(s.Edit("проверка-питания", "", "Грабли: обесточенная дверь не отвечает.").Ok, Is.True);
-        s.TryGet("проверка-питания", out var appended);
-        Assert.That(appended.Body, Does.Contain("Грабли"));
-
-        Assert.That(s.Edit("проверка-питания", "Сначала inspect.", "Сначала inspect, потом device_action.").Ok, Is.True);
-        s.TryGet("проверка-питания", out var replaced);
-        Assert.That(replaced.Body, Does.Contain("потом device_action"));
-    }
-
-    [Test]
-    public void Skill_EditRefusesAnInexactFragment()
-    {
-        var s = NewSkills();
-        s.Write("тест-скилл", "Проверка.", "Точный текст тела.");
-
-        var result = s.Edit("тест-скилл", "приблизительный текст", "неважно");
-
-        Assert.That(result.Ok, Is.False);
-        Assert.That(result.Message, Does.Contain("дословно"));
-    }
-
-    [Test]
-    public void Skill_IndexIsDeterministicAndOnlyCarriesTheWhenLine()
-    {
-        var s = NewSkills();
-        s.Write("яблоко", "Первое.", new string('x', 500));
-        s.Write("банан", "Второе.", new string('y', 500));
-
-        var index = s.RenderIndex();
-
-        Assert.That(index, Does.Contain("Первое."));
-        Assert.That(index, Does.Not.Contain("xxxxx"),
-            "тело в индекс попадать не должно — весь смысл прогрессивного раскрытия в этом");
-        Assert.That(index.IndexOf("банан", System.StringComparison.Ordinal),
-            Is.LessThan(index.IndexOf("яблоко", System.StringComparison.Ordinal)),
-            "порядок обязан быть детерминированным, иначе зона 0 меняется на ровном месте");
+        var conv = new ConversationState();
+        conv.SetPrefix("ПРОМПТ", "[]");
+        conv.AppendUser("наблюдение");
+        return conv;
     }
 
     // ------------------------------------------------------------------ curator
 
     [Test]
-    public async Task Curator_WritesASkill_AndLeavesGameHistoryUntouched()
+    public async Task Curator_WritesAFile_AndLeavesGameHistoryUntouched()
     {
-        var skills = NewSkills();
+        SeedCuratorPrompt();
+
+        var vfs = NewVfs();
         var registry = new AiToolRegistry();
 
         registry.Register(new AiTool
         {
-            Name = "skill_write",
+            Name = "write_file",
             Description = "тест",
             SchemaJson = "{\"type\":\"object\"}",
             Handler = (a, ct) =>
             {
-                var r = skills.Write(
-                    a.GetProperty("name").GetString(),
-                    a.GetProperty("when").GetString(),
-                    a.GetProperty("body").GetString());
+                VfsPath.TryParse(a.GetProperty("path").GetString(), out var path, out _);
+                vfs.TryResolve(path, out var mount, out var relative, out _);
+
+                var r = mount.Write(relative,
+                    a.GetProperty("desc").GetString() ?? "",
+                    a.GetProperty("content").GetString() ?? "");
+
                 return Task.FromResult(r.Ok ? ToolResult.Success() : ToolResult.Fail(ToolError.BadArgs, r.Message));
             },
         });
@@ -306,20 +229,79 @@ public sealed class SkillMemoryTests
         var bodyBefore = conv.Body.Count;
 
         var llm = new ScriptedLlmClient()
-            .ThenCall("skill_write", """{"name":"болты-при-разгерметизации","when":"Опустить болты при разгерметизации.","body":"Сначала crew_status."}""")
-            .Then("Записал скилл про болты.");
+            .ThenCall("write_file", """{"path":"/skills/болты-при-разгерметизации","desc":"Опустить болты при разгерметизации.","content":"Сначала crew_status."}""")
+            .Then("Записал про болты.");
 
         var curator = new Curator(llm, Sawmill);
         var verdict = await curator.ReviewAsync(conv, System.Array.Empty<ToolDto>(),
-            new ToolDispatcher(registry, Sawmill), skills.RenderIndex(), maxSteps: 4, CancellationToken.None);
+            new ToolDispatcher(registry, Sawmill), vfs, maxSteps: 4, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(skills.Count, Is.EqualTo(1), "куратор должен был записать скилл");
+            Assert.That(vfs.Skills!.Count, Is.EqualTo(1), "куратор должен был записать файл");
             Assert.That(verdict, Does.Contain("болты"));
+            Assert.That(curator.LastWrites, Is.EqualTo(1), "успешная запись должна быть посчитана");
             Assert.That(conv.Body.Count, Is.EqualTo(bodyBefore),
                 "ревью идёт по КОПИИ — игровая история не должна испачкаться вопросом куратора");
         });
+    }
+
+    [Test]
+    public async Task Curator_CountsNoWrites_WhenItOnlyLooked()
+    {
+        // Условие отчёта — «записал», а не «ответил». Иначе каждая компакция тратила бы строку
+        // диалога на «посмотрел и решил, что писать нечего», а это законный исход разбора.
+        SeedCuratorPrompt();
+
+        var vfs = NewVfs();
+        var llm = new ScriptedLlmClient().Then("Нечего сохранять.");
+
+        var curator = new Curator(llm, Sawmill);
+        await curator.ReviewAsync(conv: Fresh(), tools: System.Array.Empty<ToolDto>(),
+            dispatcher: new ToolDispatcher(new AiToolRegistry(), Sawmill), vfs: vfs,
+            maxSteps: 2, ct: CancellationToken.None);
+
+        Assert.That(curator.LastWrites, Is.Zero);
+    }
+
+    [Test]
+    public async Task Curator_PromptComesFromTheFile_AndTheRootIsSubstituted()
+    {
+        SeedCuratorPrompt("ОСОБЫЙ ТЕКСТ РАЗБОРА\n{{КОРЕНЬ}}");
+
+        var vfs = NewVfs();
+        var llm = new RecordingLlmClient();
+
+        await new Curator(llm, Sawmill).ReviewAsync(Fresh(), System.Array.Empty<ToolDto>(),
+            new ToolDispatcher(new AiToolRegistry(), Sawmill), vfs, 2, CancellationToken.None);
+
+        var asked = llm.SeenPrompts.Last().Last().Content ?? "";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(asked, Does.Contain("ОСОБЫЙ ТЕКСТ РАЗБОРА"), "промпт разбора берётся из CURATOR.md");
+            Assert.That(asked, Does.Contain("/skills"), "корень дерева обязан быть подставлен");
+            Assert.That(asked, Does.Not.Contain(Curator.RootPlaceholder),
+                "неподставленная скобка означает, что модель читает служебную разметку");
+        });
+    }
+
+    [Test]
+    public async Task Curator_StillRunsWhenThePromptFileIsMissing()
+    {
+        // Молча не разбирать нельзя: снаружи это выглядит как «агент перестал учиться» и не даёт
+        // ни строки в лог. Файл не положен намеренно.
+        var vfs = NewVfs();
+        var llm = new RecordingLlmClient();
+
+        await new Curator(llm, Sawmill).ReviewAsync(Fresh(), System.Array.Empty<ToolDto>(),
+            new ToolDispatcher(new AiToolRegistry(), Sawmill), vfs, 2, CancellationToken.None);
+
+        var asked = llm.SeenPrompts.Last().Last().Content ?? "";
+
+        Assert.That(asked, Does.Contain("разбираешь прошедший отрезок"),
+            "должен был отработать встроенный запасной текст");
+        Assert.That(asked, Does.Not.Contain(Curator.RootPlaceholder));
     }
 
     [Test]
@@ -334,8 +316,10 @@ public sealed class SkillMemoryTests
 
         var tools = new[] { new ToolDto { Function = new ToolFunctionDto { Name = "look" } } };
 
+        SeedCuratorPrompt();
+
         await new Curator(llm, Sawmill)
-            .ReviewAsync(conv, tools, new ToolDispatcher(new AiToolRegistry(), Sawmill), "", 2,
+            .ReviewAsync(conv, tools, new ToolDispatcher(new AiToolRegistry(), Sawmill), NewVfs(), 2,
                 CancellationToken.None);
 
         Assert.That(llm.LastTools, Is.Not.Null);
@@ -373,8 +357,10 @@ public sealed class SkillMemoryTests
             .ThenCall("announce", """{"text":"внимание"}""")
             .Then("готово");
 
+        SeedCuratorPrompt();
+
         await new Curator(llm, Sawmill).ReviewAsync(conv, System.Array.Empty<ToolDto>(),
-            new ToolDispatcher(registry, Sawmill), "", 4, CancellationToken.None);
+            new ToolDispatcher(registry, Sawmill), NewVfs(), 4, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -391,9 +377,11 @@ public sealed class SkillMemoryTests
         conv.SetPrefix("ПРОМПТ", "[]");
         conv.AppendUser("наблюдение");
 
+        SeedCuratorPrompt();
+
         var verdict = await new Curator(new ThrowingLlmClient(), Sawmill)
             .ReviewAsync(conv, System.Array.Empty<ToolDto>(),
-                new ToolDispatcher(new AiToolRegistry(), Sawmill), "", 2, CancellationToken.None);
+                new ToolDispatcher(new AiToolRegistry(), Sawmill), NewVfs(), 2, CancellationToken.None);
 
         Assert.That(verdict, Is.Null, "падение модели не должно ронять ритуал компакции");
     }

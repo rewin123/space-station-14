@@ -224,19 +224,12 @@ public sealed class BorgAgentTests
 
 
     /// <summary>
-    /// Боевой робот вооружён обоими способами, и инструменты сами выбирают нужную руку.
+    /// Боевой робот после захвата имеет клинок в руке и ствол в запертом слоте, не на корне шасси.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Проверяется не «модуль стоит», а «оба инструмента отвечают не отказом об оружии». Разница
-    /// существенная: клинок и ствол лежат в РАЗНЫХ руках одного модуля, и активна из них ровно
-    /// одна. Пока hit и shoot смотрели только в активную руку, половина вооружения робота
-    /// зависела от того, какую руку выбрал апстрим при установке модуля.
-    /// </para>
-    /// <para>
-    /// Цели здесь нет намеренно: с целью тест проверял бы ещё и попадание, то есть падал бы от
-    /// перезарядки и от геометрии. Здесь важно только, что оружие найдено.
-    /// </para>
+    /// Ствол — <c>AiBorgBuiltInLaser</c> в <c>gun_slot</c>. Gun на корпусе Dirty'ил корень
+    /// на каждый разряд ячейки жизни; пистолет в руке спавнился в мир при захвате. Оба
+    /// срывали PVS. Цели здесь нет намеренно: с целью тест проверял бы ещё и попадание.
     /// </remarks>
     [Test]
     public async Task CombatBorg_HasBothWeapons_AndPicksTheRightHand()
@@ -258,10 +251,27 @@ public sealed class BorgAgentTests
             .Select(x => w.Ent.GetComponent<MetaDataComponent>(x).EntityPrototype?.ID ?? "?")
             .ToList());
 
+        var (gunOnChassis, gunInSlot, slotProto) = await w.Read(() =>
+        {
+            var onChassis = w.Ent.HasComponent<Content.Shared.Weapons.Ranged.Components.GunComponent>(borg);
+            var slots = w.Pair.Server.System<Content.Shared.Containers.ItemSlots.ItemSlotsSystem>();
+            var stored = slots.GetItemOrNull(borg, "gun_slot");
+            var proto = stored is { } uid
+                ? w.Ent.GetComponent<MetaDataComponent>(uid).EntityPrototype?.ID
+                : null;
+            return (onChassis, stored != null, proto);
+        });
+
         Assert.Multiple(() =>
         {
             Assert.That(held, Does.Contain("KukriKnife"), $"клинка нет в руках: {string.Join(", ", held)}");
-            Assert.That(held, Does.Contain("WeaponAdvancedLaser"), $"ствола нет в руках: {string.Join(", ", held)}");
+            Assert.That(held, Does.Not.Contain("WeaponAdvancedLaser"),
+                $"пистолет снова в руках: {string.Join(", ", held)}");
+            Assert.That(held, Does.Not.Contain("AiBorgBuiltInLaser"),
+                $"встроенный лазер оказался в руке: {string.Join(", ", held)}");
+            Assert.That(gunOnChassis, Is.False, "Gun снова на корне шасси — вернётся петля PVS");
+            Assert.That(gunInSlot, Is.True, "в gun_slot нет ствола — shoot не найдёт его");
+            Assert.That(slotProto, Is.EqualTo("AiBorgBuiltInLaser"), $"в слоте не тот ствол: {slotProto}");
         });
 
         // Обоим инструментам подсовывается заведомо несуществующий хендл: нас интересует, на чём
@@ -273,7 +283,7 @@ public sealed class BorgAgentTests
         Assert.Multiple(() =>
         {
             Assert.That(hit.Detail ?? "", Does.Not.Contain("нечем бить"), "клинок не найден ни в одной руке");
-            Assert.That(shot.Detail ?? "", Does.Not.Contain("нечем стрелять"), "ствол не найден ни в одной руке");
+            Assert.That(shot.Detail ?? "", Does.Not.Contain("нечем стрелять"), "ствол не найден в слоте шасси");
         });
     }
 
@@ -281,9 +291,8 @@ public sealed class BorgAgentTests
     /// Инженерный робот отказывается стрелять, а не делает вид.
     /// </summary>
     /// <remarks>
-    /// У инженера в руках инструменты, и <c>TryGetGun</c> на них отвечает «нет». Проверяется
-    /// именно текст отказа: он единственное, из чего модель поймёт, что дело не в цели и не в
-    /// перезарядке, а в том, что стрелять нечем и надо менять модуль.
+    /// У инженера нет ни ствола в слоте, ни ствола в руках. Проверяется текст отказа: он
+    /// единственное, из чего модель поймёт, что стрелять нечем.
     /// </remarks>
     [Test]
     public async Task Shoot_WithoutAGun_IsRefused()
@@ -2248,14 +2257,66 @@ public sealed class BorgAgentTests
         {
             var where = ent.GetComponent<TransformComponent>(borg).Coordinates;
             crate = ent.SpawnEntity("CrateGenericSteel", where.Offset(new Vector2(1, 0)));
-            door = ent.SpawnEntity("Airlock", where.Offset(new Vector2(0, 1)));
+            // Шлюз ставится НА КЛЕТКУ САМОГО РОБОТА, и это не небрежность.
+            //
+            // Соседняя клетка ничем не гарантирована: робот спавнится у произвольного маяка, и
+            // сверху-снизу-сбоку от него запросто оказывается стена. Шлюз, поставленный в стену,
+            // выглядит здоровым по всем полям — Powered=True, State=Closed, ClickOpen=True,
+            // anchored=True, расстояние ровно тайл, — но InteractionActivate до него не доходит:
+            // InRangeUnobstructed упирается лучом в ту самую стену, молча возвращает false, и
+            // инструмент честно докладывает «ничего не изменилось». Ровно это и было снято
+            // диагностикой 21.08.2026.
+            //
+            // Клетка робота проходима по построению: TryFreeTileNear выбрал её именно за это.
+            // Тест про то, ЧТО инструмент докладывает об исходе, а не про геометрию карты, и
+            // подпирать его везением с координатой незачем.
+            door = ent.SpawnEntity("Airlock", where);
+
+            // ПИТАНИЕ ШЛЮЗУ ЗАДАЁТСЯ ЯВНО, и это починка, а не удобство.
+            //
+            // Обесточенный шлюз не открывается нажатием ВООБЩЕ: SharedAirlockSystem.CanChangeState
+            // требует Powered, иначе BeforeDoorOpenedEvent отменяется. А свежий шлюз, поставленный
+            // на произвольную клетку, к местному АПС не подключён — под ним нет кабеля.
+            //
+            // Раньше тест этого не знал и был зелёным ПО СЛУЧАЙНОСТИ: робот спавнился в другой
+            // точке карты, где клетка оказывалась запитанной. 20.08.2026 TryFindGrid начал
+            // фильтровать сетку по StationMemberComponent, точка спавна сместилась — и
+            // утверждение «дверь обязана открыться» перестало выполняться. Тест должен проверять
+            // инструмент, а не везение с координатой.
+            if (ent.TryGetComponent<Content.Server.Power.Components.ApcPowerReceiverComponent>(
+                    door, out var recv))
+            {
+                recv.NeedsPower = false;
+            }
         });
 
-        await w.Pair.Server.WaitRunTicks(5);
+        // Десять тиков, а не пять: питание доезжает до створки отдельным событием от энергосети,
+        // и на пяти оно иногда не успевало.
+        await w.Pair.Server.WaitRunTicks(10);
 
         var handle = await w.Read(() => w.System.HandleFor(borg, crate));
 
-        // Нажатием — ящик должен открыться, и инструмент обязан назвать ЧТО изменилось.
+        // ПУТЬ ОТКАЗА — и теперь он ДЕЙСТВИТЕЛЬНО про инструмент.
+        //
+        // Прежняя версия заявляла в комментарии «по ящику ломом», а на деле жала на ящик и ждала
+        // отказа от нажатия. Ящик от нажатия открывается, так что утверждение проверяло
+        // собственную опечатку и держалось зелёным ровно до тех пор, пока нажатие не начало
+        // срабатывать. Это был ложный зелёный, а не регрессия.
+        await w.InvokeOn(borg, "module", "{\"name\":\"tool\"}");
+
+        var wrong = await w.InvokeOn(borg, "use",
+            "{\"target\":\"" + handle + "\",\"tool\":\"multitool\"}");
+        await w.Pair.Server.WaitRunTicks(5);
+
+        var wrongJson = wrong.EffectJson();
+        TestContext.Out.WriteLine("МУЛЬТИТУЛОМ: " + wrongJson[..Math.Min(300, wrongJson.Length)]);
+
+        Assert.That(wrong.Ok, Is.True, $"use отказал: {wrong.Error} {wrong.Detail}");
+        Assert.That(wrongJson, Does.Contain("НЕ ПОЛУЧИЛОСЬ").And.Contain("почему"),
+            "ничего не вышло, а причина не названа");
+
+        // ПУТЬ УСПЕХА, ящик. Нажатие идёт через InteractionActivate, то есть инструмент в руке
+        // ему не мешает — переключённый модуль здесь ни при чём.
         var pressed = await w.InvokeOn(borg, "use", "{\"target\":\"" + handle + "\"}");
         await w.Pair.Server.WaitRunTicks(5);
 
@@ -2263,9 +2324,24 @@ public sealed class BorgAgentTests
         TestContext.Out.WriteLine("НАЖАЛ: " + json[..Math.Min(300, json.Length)]);
 
         Assert.That(pressed.Ok, Is.True, $"use отказал: {pressed.Error} {pressed.Detail}");
-        Assert.That(json, Does.Contain("итог"), "в ответе нет исхода — модель снова увидит голое ok");
 
-        // Путь УСПЕХА: дверь на нажатие обязана поменять состояние, и это обязано быть сказано.
+        Assert.Multiple(() =>
+        {
+            Assert.That(json, Does.Contain("итог"),
+                "в ответе нет исхода — модель снова увидит голое ok");
+            Assert.That(json, Does.Contain("получилось"),
+                "ящик открылся, а инструмент об этом не сказал");
+            Assert.That(json, Does.Contain("открылось"),
+                "не назван характер изменения");
+        });
+
+        // ПУТЬ УСПЕХА, дверь: нажатие меняет состояние створки, и это обязано быть сказано.
+        //
+        // Створка на клетке робота открывается сама, от касания корпусом (DoorBumpOpener), так что
+        // нажатие её ЗАКРЫВАЕТ: «Open → Closing». Проверяется ровно то, ради чего тест написан, —
+        // что инструмент называет смену состояния, а не отвечает голым ok. В какую сторону эта
+        // смена, здесь не важно и специально не закрепляется: закрепи мы «открылась», тест снова
+        // держался бы на побочном обстоятельстве.
         var doorHandle = await w.Read(() => w.System.HandleFor(borg, door));
         var opened = await w.InvokeOn(borg, "use", "{\"target\":\"" + doorHandle + "\"}");
         await w.Pair.Server.WaitRunTicks(5);
@@ -2276,13 +2352,9 @@ public sealed class BorgAgentTests
         Assert.Multiple(() =>
         {
             Assert.That(openJson, Does.Contain("получилось"),
-                "дверь открылась, а инструмент об этом не сказал");
+                "створка сменила состояние, а инструмент об этом не сказал");
             Assert.That(openJson, Does.Contain("дверь:"),
                 "не назван характер изменения — модель снова не поймёт, сработало ли");
-
-            // Путь ОТКАЗА: по ящику ломом. Инструмент обязан сказать, что лом тут ни при чём.
-            Assert.That(json, Does.Contain("НЕ ПОЛУЧИЛОСЬ").And.Contain("почему"),
-                "ничего не вышло, а причина не названа");
         });
     }
 }

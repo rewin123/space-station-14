@@ -9,6 +9,7 @@ using Content.Server.AiAgent.Bus;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Skills;
+using Content.Server.AiAgent.Vfs;
 using NUnit.Framework;
 using Robust.Shared.Log;
 
@@ -31,6 +32,16 @@ public sealed class BusSnapshotTests
     private string _dir = "";
 
     /// <summary>Пустое хранилище заметок: снимок обязан собираться и когда агент ещё никого не знает.</summary>
+    /// <summary>
+    /// Файловая система одного агента. Снимок теперь берут с неё целиком, а не с трёх сторов
+    /// по отдельности: библиотеки стали своими у каждого тела.
+    /// </summary>
+    private Vfs NewVfs() => new VfsBuilder(Sawmill)
+        .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
+        .AddNotes(_dir, "players", VfsAccess.Write, "заметки о людях", () => "[раунд 1 · 01.01]")
+        .AddMemory(_dir, "memory.md", VfsAccess.Write, "факты о станции")
+        .Build();
+
     private PlayerNoteStore Notes()
     {
         var notes = new PlayerNoteStore(_dir, Sawmill);
@@ -102,13 +113,10 @@ public sealed class BusSnapshotTests
         conv.AttachSink(bus.ForSession("current"));
         conv.SetPrefix("ПРОМПТ", "[]");
 
-        var memory = new MemoryStore(_dir, Sawmill);
-        memory.AttachSink(bus.ForProcess());
-        memory.LoadFromDisk();
-
-        var skills = new SkillStore(_dir, Sawmill);
-        skills.AttachSink(bus.ForProcess());
-        skills.LoadFromDisk();
+        var vfs = NewVfs();
+        vfs.AttachSink(bus.ForProcess());
+        var memory = vfs.Memory!;
+        var skills = vfs.Skills!;
 
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
@@ -130,7 +138,7 @@ public sealed class BusSnapshotTests
             {
                 var n = 0;
                 while (!stop.IsCancellationRequested)
-                    skills.Write("скилл", "когда угодно", $"тело {n++}");
+                    skills.Write("скилл", "скилл", "когда угодно", $"тело {n++}");
             }),
         };
 
@@ -138,7 +146,7 @@ public sealed class BusSnapshotTests
         {
             for (var i = 0; i < 200 && !stop.IsCancellationRequested; i++)
             {
-                var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
+                var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), vfs, 7);
                 Assert.That(snapshot.Instance, Is.EqualTo(bus.Instance));
             }
         });
@@ -157,15 +165,15 @@ public sealed class BusSnapshotTests
         // lands on disk at once but reaches zone 0 only at the next prefix rebuild. Showing one
         // without the other is how an operator concludes the endpoint is broken.
         var bus = new AgentEventBus(256);
-        var memory = new MemoryStore(_dir, Sawmill);
-        memory.LoadFromDisk();
+        var vfs = NewVfs();
+        vfs.AttachSink(bus.ForProcess());
+        var memory = vfs.Memory!;
 
         memory.Add("записано после того, как префикс заморозили");
+        var skills = vfs.Skills!;
+        skills.Reload();
 
-        var skills = new SkillStore(_dir, Sawmill);
-        skills.LoadFromDisk();
-
-        var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
+        var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), vfs, 7);
 
         Assert.Multiple(() =>
         {
@@ -178,7 +186,7 @@ public sealed class BusSnapshotTests
         });
 
         memory.RefreshSnapshot();
-        var after = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
+        var after = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), vfs, 7);
 
         Assert.That(after.Memory.MemoryFrozen,
             Does.Contain("записано после того, как префикс заморозили"),
@@ -189,12 +197,13 @@ public sealed class BusSnapshotTests
     public void SnapshotWithoutASessionIsNotAnError()
     {
         var bus = new AgentEventBus(64);
-        var memory = new MemoryStore(_dir, Sawmill);
-        memory.LoadFromDisk();
-        var skills = new SkillStore(_dir, Sawmill);
-        skills.LoadFromDisk();
+        var vfs = NewVfs();
+        vfs.AttachSink(bus.ForProcess());
+        var memory = vfs.Memory!;
+        var skills = vfs.Skills!;
+        skills.Reload();
 
-        var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7);
+        var snapshot = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), vfs, 7);
 
         Assert.Multiple(() =>
         {
@@ -211,17 +220,16 @@ public sealed class BusSnapshotTests
         // The zone-0 index is ordinal-sorted for determinism; the debug view matches it so a
         // refresh does not reshuffle the list under the reader.
         var bus = new AgentEventBus(256);
-        var skills = new SkillStore(_dir, Sawmill);
-        skills.LoadFromDisk();
 
-        skills.Write("яблоко", "когда яблоко", "тело");
-        skills.Write("абрикос", "когда абрикос", "тело");
-        skills.Write("банан", "когда банан", "тело");
+        var vfs = NewVfs();
+        vfs.AttachSink(bus.ForProcess());
 
-        var memory = new MemoryStore(_dir, Sawmill);
-        memory.LoadFromDisk();
+        var skills = vfs.Skills!;
+        skills.Write("яблоко", "яблоко", "когда яблоко", "тело");
+        skills.Write("абрикос", "абрикос", "когда абрикос", "тело");
+        skills.Write("банан", "банан", "когда банан", "тело");
 
-        var names = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7)
+        var names = AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), vfs, 7)
             .Skills.Select(s => s.Name).ToList();
 
         Assert.That(names, Is.EqualTo(names.OrderBy(n => n, StringComparer.Ordinal).ToList()));
@@ -231,15 +239,15 @@ public sealed class BusSnapshotTests
     public void SnapshotSerialisesWithCyrillicIntact()
     {
         var bus = new AgentEventBus(256);
-        var memory = new MemoryStore(_dir, Sawmill);
-        memory.LoadFromDisk();
+        var vfs = NewVfs();
+        vfs.AttachSink(bus.ForProcess());
+        var memory = vfs.Memory!;
         memory.Add("Иван Петров — инженер");
-
-        var skills = new SkillStore(_dir, Sawmill);
-        skills.LoadFromDisk();
+        var skills = vfs.Skills!;
+        skills.Reload();
 
         var json = JsonSerializer.Serialize(
-            AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), memory, skills, Notes(), 7), LlmJson.Options);
+            AgentDebugState.CaptureGlobal(bus, new AgentDirectory(), vfs, 7), LlmJson.Options);
 
         Assert.Multiple(() =>
         {

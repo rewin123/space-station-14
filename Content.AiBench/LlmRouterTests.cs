@@ -67,6 +67,9 @@ public sealed class LlmRouterTests
         public FakeClient Timeout()
             => Then(() => throw new OperationCanceledException("таймаут"));
 
+        public FakeClient Disposed()
+            => Then(() => throw new ObjectDisposedException("HttpClient"));
+
         /// <summary>Повторять последний шаг сценария бесконечно.</summary>
         public bool Repeat { get; set; } = true;
 
@@ -506,6 +509,103 @@ public sealed class LlmRouterTests
         await catcher.Done;
 
         return catcher.Body;
+    }
+
+    // ------------------------------------------- разобранный клиент не хоронит провайдеров
+
+    /// <summary>
+    /// Гонка рестарта раунда: ResetLlmClient уже разобрал клиентов, а прощальная компакция ещё
+    /// ходит в модель. ObjectDisposedException при этом — смерть экземпляра, а не провайдера, и в
+    /// общий (переживающий раунды) счётчик она попадать не должна: иначе свежая цепочка
+    /// следующего раунда получает все звенья в кулдауне и три минуты отвечает
+    /// «ни один провайдер не ответил за 0с» (наблюдалось живьём 25.08.2026, раунд после 19:11).
+    /// </summary>
+    [Test]
+    public void DisposedClientDoesNotPoisonSharedState()
+    {
+        using var h = new Harness();
+        var state = h.NewState();
+
+        h.C("a").Disposed();
+        h.C("b").Ok();
+
+        var oldRouter = h.Build(state, "a", "b");
+
+        // Прощальный вызов через разобранный клиент: исключение уходит наверх как есть...
+        Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            oldRouter.ChatAsync(new[] { ChatMessageDto.User("проба") }, null, CancellationToken.None));
+
+        // ...и оба звена остаются живыми в общем счётчике: «b» даже не пробовали.
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.IsAvailable("a", out var whyA), Is.True, $"a усыплён: {whyA}");
+            Assert.That(state.IsAvailable("b", out var whyB), Is.True, $"b усыплён: {whyB}");
+            Assert.That(h.C("b").Calls, Is.Zero, "разобран весь экземпляр — идти по цепочке некуда");
+        });
+
+        // Новый раунд: свежие клиенты, тот же счётчик — первый же ход обязан пройти по «a».
+        h.Clients["a"] = new FakeClient("a").Ok();
+        var newRouter = h.Build(state, "a", "b");
+
+        var response = newRouter.ChatAsync(new[] { ChatMessageDto.User("проба") }, null, CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        Assert.That(response.Profile, Is.EqualTo("a"), "свежая цепочка не должна наследовать чужую смерть");
+    }
+
+    // --------------------------------------------------- vLLM и его null-поля в ответе
+
+    /// <summary>
+    /// Ответ vLLM с натуры (25.08.2026, vllm-0.27.1), сокращён только текст рассуждения.
+    /// Незаполненные поля протокола vLLM шлёт как <c>null</c>, а не опускает — в каждом ответе.
+    /// </summary>
+    private const string VllmCompletion =
+        """
+        {"id":"chatcmpl-93d8b171bd54cb1d","object":"chat.completion","created":1787650614,
+         "model":"qwen3.8-27b-awq",
+         "choices":[{"index":0,"message":{"role":"assistant","content":null,"refusal":null,
+           "annotations":null,"audio":null,"function_call":null,
+           "tool_calls":[{"id":"chatcmpl-tool-83644ae4b07001b4","type":"function",
+             "function":{"name":"say","arguments":"{\"text\": \"привет\"}"}}],
+           "reasoning":"…"},
+           "logprobs":null,"finish_reason":"tool_calls","stop_reason":null,
+           "token_ids":null,"routed_experts":null}],
+         "service_tier":null,"system_fingerprint":"vllm-0.27.1-tp2-ff481821",
+         "usage":{"prompt_tokens":311,"total_tokens":411,"completion_tokens":100,
+           "prompt_tokens_details":null},
+         "prompt_logprobs":null,"prompt_token_ids":null,"prompt_text":null,
+         "kv_transfer_params":null,"ec_transfer_params":null,"metrics":null}
+        """;
+
+    /// <summary>
+    /// Разбор обязан пережить null-поля vLLM — сутки немого ИИ (24–25.08.2026) случились ровно
+    /// здесь: <c>"prompt_tokens_details": null</c> ронял каждый ход исключением из
+    /// <c>TryGetProperty</c> по Null-элементу, при том что сам запрос проходил с кодом 200.
+    /// </summary>
+    [Test]
+    public async Task VllmNullFieldsDoNotBreakParsing()
+    {
+        using var catcher = new BodyCatcher(VllmCompletion);
+
+        using var client = new LlamaClient(
+            new LlmEndpoint("probe", catcher.Prefix.TrimEnd('/') + "/v1", "m", "", LlmDialect.OpenAiCompat,
+                TimeSpan.FromSeconds(15)),
+            new LlmSampling(0.3f, 0.85f, 20, 0.05f, 0, IdSlot: 0, ThinkingEffort: "low"),
+            Sawmill);
+
+        var response = await client.ChatAsync(new[] { ChatMessageDto.User("привет") }, null, CancellationToken.None);
+        await catcher.Done;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.ToolCalls, Has.Count.EqualTo(1), "вызов инструмента должен пережить content:null рядом с собой");
+            Assert.That(response.ToolCalls[0].Function.Name, Is.EqualTo("say"));
+            Assert.That(response.Content, Is.Null, "content:null — это отсутствие текста, а не ошибка");
+            Assert.That(response.PromptTokens, Is.EqualTo(311));
+            Assert.That(response.CompletionTokens, Is.EqualTo(100));
+            Assert.That(response.CachedTokens, Is.EqualTo(0), "prompt_tokens_details:null означает «неизвестно», то есть ноль");
+            Assert.That(response.FinishReason, Is.EqualTo("tool_calls"));
+        });
     }
 
     [Test]

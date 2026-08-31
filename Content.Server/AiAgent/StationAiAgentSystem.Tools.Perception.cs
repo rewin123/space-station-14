@@ -35,15 +35,37 @@ public sealed partial class StationAiAgentSystem
         TryGetString(args, "near", out var near);
         TryGetString(args, "kind", out var kind);
 
-        // A longer timeout than the default: GetView is the one genuinely expensive call in the
-        // whole tool surface, and upstream says as much in a comment.
-        return OnMainAsync(s, "look", () =>
-        {
-            var profile = new LookProfile();
+        // Обзор идёт СРЕЗАМИ, а не одним вызовом. Разбор — у OnMainSlicedAsync и у SlicedView;
+        // коротко: теневой каст это три четверти времени look и целый кадр сервера, а в режиме
+        // Lua скрипт зовёт look в цикле, и ограничитель в виде круга через модель исчез.
+        var profile = new LookProfile();
+        ViewPass? pass = null;
+        string? failure = null;
 
-            var seen = GetVisibleEntities(s.Brain, 8.5f + expand * 4f, out var failure, ref profile);
+        return OnMainSlicedAsync(s, "look",
+            budget =>
+            {
+                if (pass == null && failure == null)
+                    pass = BeginSlicedView(s.Brain, 8.5f + expand * 4f, out failure);
+
+                if (pass == null)
+                    return true;
+
+                var done = pass.View.Step(budget);
+
+                // Не настенные часы: нарезанный обзор живёт секунду, а главный поток занимает
+                // двадцать миллисекунд. Считать секундомером снаружи — объявить починку регрессией.
+                if (done)
+                    pass.ViewMs = pass.View.BusyMs;
+
+                return done;
+            },
+            () =>
+        {
             if (failure != null)
                 return ToolResult.Fail(ToolError.Internal, failure, retry: "later");
+
+            var seen = GatherFromPass(pass!, s.Brain, ref profile);
 
             var rowsStart = Stopwatch.GetTimestamp();
 

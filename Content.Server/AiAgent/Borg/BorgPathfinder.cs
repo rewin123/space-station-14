@@ -34,6 +34,25 @@ namespace Content.Server.AiAgent.Borg;
 public static class BorgPathfinder
 {
     /// <summary>
+    /// Во что обошёлся один поиск.
+    /// </summary>
+    /// <remarks>
+    /// Заведено потому, что перепланировка маршрута идёт не через шину мира, а прямо в
+    /// <c>Update</c>, — то есть её цена не попадала ни в бюджет кадра, ни в профиль, ни в
+    /// <c>aiagent cost</c>. Ровно из-за этой слепой зоны поломка со счётчиком заторов держалась
+    /// живой при чистом профиле: в журнале было видно 'look' и 'observation', а восемьдесят
+    /// миллисекунд поиска в секунду не было видно нигде.
+    /// </remarks>
+    public sealed class PathStats
+    {
+        /// <summary>Снятых с очереди узлов.</summary>
+        public int Expanded;
+
+        /// <summary>Проверок проходимости. Самое дорогое здесь: каждая — поход в чужой навмеш.</summary>
+        public int Probes;
+    }
+
+    /// <summary>
     /// Потолок развёрнутых узлов.
     ///
     /// На порядок больше апстримовых 512 и всё ещё дёшев: узел это чтение из словаря чанков и
@@ -161,9 +180,15 @@ public static class BorgPathfinder
     /// </para>
     /// </param>
     public static List<Vector2i>? FindPath(NavMapComponent navMap, Vector2i start, Vector2i goal,
-        Func<Vector2i, bool>? walkable = null)
+        Func<Vector2i, bool>? walkable = null, PathStats? stats = null)
     {
-        bool Open(Vector2i t) => Passable(navMap, t) && (walkable == null || walkable(t));
+        bool Open(Vector2i t)
+        {
+            if (stats != null)
+                stats.Probes++;
+
+            return Passable(navMap, t) && (walkable == null || walkable(t));
+        }
 
         if (start == goal)
             return new List<Vector2i> { start };
@@ -190,6 +215,9 @@ public static class BorgPathfinder
 
             if (++expanded > NodeLimit)
                 break;
+
+            if (stats != null)
+                stats.Expanded = expanded;
 
             foreach (var dir in Neighbours)
             {

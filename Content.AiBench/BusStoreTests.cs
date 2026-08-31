@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Content.Server.AiAgent.Bus;
 using Content.Server.AiAgent.Skills;
+using Content.Server.AiAgent.Vfs;
 using NUnit.Framework;
 using Robust.Shared.Log;
 
@@ -167,12 +168,12 @@ public sealed class BusStoreTests
     public void SkillEventsReplayToTheLibrary()
     {
         var bus = new AgentEventBus(1024);
-        var skills = new SkillStore(_dir, Sawmill);
+        var skills = new DocTree(Path.Combine(_dir, "skills"), Sawmill);
         skills.AttachSink(bus.ForProcess());
-        skills.LoadFromDisk();
+        skills.Reload();
 
-        skills.Write("restore-core-power", "когда ядро обесточено", "1. station_status\n2. звать инженеров");
-        skills.Write("bolt-armoury", "когда оружейную вскрывают", "опустить болты, объявить");
+        skills.Write("restore-core-power", "restore-core-power", "когда ядро обесточено", "1. station_status\n2. звать инженеров");
+        skills.Write("bolt-armoury", "bolt-armoury", "когда оружейную вскрывают", "опустить болты, объявить");
 
         // Empty match is the append path — a different branch from the fragment replace below.
         skills.Edit("restore-core-power", "", "Грабли: APC ядра не доступен для move_camera.");
@@ -240,15 +241,15 @@ public sealed class BusStoreTests
         // whatever parsed. A per-survivor event says nothing about the ones that went, so a client
         // folding them into a map keeps ghosts — and reloads happen at every compaction.
         var bus = new AgentEventBus(256);
-        var skills = new SkillStore(_dir, Sawmill);
+        var skills = new DocTree(Path.Combine(_dir, "skills"), Sawmill);
         skills.AttachSink(bus.ForProcess());
-        skills.LoadFromDisk();
+        skills.Reload();
 
-        skills.Write("останется", "когда-нибудь", "тело");
-        skills.Write("исчезнет", "когда-нибудь", "тело");
+        skills.Write("останется", "останется", "когда-нибудь", "тело");
+        skills.Write("исчезнет", "исчезнет", "когда-нибудь", "тело");
 
         File.Delete(Path.Combine(_dir, "skills", "исчезнет.md"));
-        skills.LoadFromDisk();
+        skills.Reload();
 
         var reloads = bus.Read(bus.Instance, 0).Events
             .Where(e => e.Kind == AgentEventKind.SkillsReloaded).ToList();
@@ -261,8 +262,8 @@ public sealed class BusStoreTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(names, Does.Contain("останется"));
-            Assert.That(names, Does.Not.Contain("исчезнет"),
+            Assert.That(names, Does.Contain("останется.md"));
+            Assert.That(names, Does.Not.Contain("исчезнет.md"),
                 "удалённый скилл остался бы призраком в любом клиенте, складывающем skill.updated в карту");
         });
     }
@@ -377,9 +378,9 @@ public sealed class BusStoreTests
         memory.LoadFromDisk();
         memory.Add("запись");
 
-        var skills = new SkillStore(_dir, Sawmill);
-        skills.LoadFromDisk();
-        skills.Write("скилл", "когда-нибудь", "тело");
+        var skills = new DocTree(Path.Combine(_dir, "skills"), Sawmill);
+        skills.Reload();
+        skills.Write("скилл", "скилл", "когда-нибудь", "тело");
 
         var notes = new PlayerNoteStore(_dir, Sawmill);
         notes.LoadFromDisk();

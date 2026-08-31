@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Bus;
 using Content.Server.AiAgent.Skills;
+using Content.Server.AiAgent.Vfs;
 using NUnit.Framework;
 using Robust.Shared.Log;
 
@@ -35,6 +36,13 @@ public sealed class BusServerTests
     // ASCII: the token travels in an Authorization header, and headers are ASCII-only.
     private const string Token = "socket-test-token";
 
+    /// <summary>Та же таблица монтирований, что у живого агента, но без справочника.</summary>
+    private static Vfs NewVfs(string dir) => new VfsBuilder(Sawmill)
+        .AddFolder(Path.Combine(dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
+        .AddNotes(dir, "players", VfsAccess.Write, "заметки о людях", () => "[раунд 1 · 01.01]")
+        .AddMemory(dir, "memory.md", VfsAccess.Write, "факты о станции")
+        .Build();
+
     private static ISawmill Sawmill => new LogManager().GetSawmill("bus-server-test");
 
     [Test]
@@ -45,25 +53,24 @@ public sealed class BusServerTests
 
         var bus = new AgentEventBus(256);
 
-        var memory = new MemoryStore(dir, Sawmill);
-        memory.AttachSink(bus.ForProcess());
-        memory.LoadFromDisk();
-        memory.Add("Иван Петров — инженер");
+        var vfs = NewVfs(dir);
+        vfs.AttachSink(bus.ForProcess());
 
-        var skills = new SkillStore(dir, Sawmill);
-        skills.AttachSink(bus.ForProcess());
-        skills.LoadFromDisk();
+        var memory = vfs.Memory!;
+        memory.Add("Иван Петров — инженер");
 
         var router = new AgentDebugRouter(
             bus, Token,
             // Пустая витрина: тела никто не занял. Проверяется транспорт, а не агенты.
             new AgentDirectory(),
-            () => memory,
-            () => skills,
-            () => new PlayerNoteStore(dir, Sawmill),
+            () => vfs,
             () => 7,
             (_, _, c) => memory.Add(c),
-            (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
+            (n, w, b, _, _) =>
+            {
+                var r = vfs.Skills!.Write(n, n, w ?? "", b ?? "");
+                return new SkillResult(r.Ok, r.Message, r.Hints);
+            });
 
         // A free port, found by binding one and letting go. HttpListener has no port-0 mode, so
         // this is the only way to avoid a fixed number that a leftover process could be sitting on.
@@ -146,14 +153,16 @@ public sealed class BusServerTests
 
         try
         {
-            var memory = new MemoryStore(dir, Sawmill);
-            var skills = new SkillStore(dir, Sawmill);
+            var vfs = NewVfs(dir);
 
             var router = new AgentDebugRouter(
-                bus, "", new AgentDirectory(), () => memory, () => skills,
-                () => new PlayerNoteStore(dir, Sawmill), () => 7,
-                (_, _, c) => memory.Add(c),
-                (n, w, b, _, _) => skills.Write(n, w ?? "", b ?? ""));
+                bus, "", new AgentDirectory(), () => vfs, () => 7,
+                (_, _, c) => vfs.Memory!.Add(c),
+                (n, w, b, _, _) =>
+                {
+                    var r = vfs.Skills!.Write(n, n, w ?? "", b ?? "");
+                    return new SkillResult(r.Ok, r.Message, r.Hints);
+                });
 
             var server = AgentDebugServer.TryStart($"127.0.0.1:{FreePort()}", "", router, Sawmill);
 

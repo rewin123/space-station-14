@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Linq;
 using Content.Server.Administration;
+using Content.Server.AiAgent.Vfs;
 using Content.Shared.Administration;
 using Robust.Shared.Configuration;
 using Robust.Shared.Console;
@@ -107,10 +108,22 @@ public sealed class AiAgentCommand : IConsoleCommand
                 break;
             }
 
-            case "skills":
+            case "ls":
             {
-                var index = system.Skills.RenderIndex();
-                shell.WriteLine(index.Length > 0 ? index : "библиотека скиллов пуста");
+                // Ходить по дереву агента руками: та же оболочка, что у модели, тот же вывод.
+                // Первым аргументом — агент, потому что библиотеки теперь свои у каждого тела и
+                // «показать библиотеку» без указания чьей стало вопросом без ответа.
+                var who = args.Length > 1 ? args[1] : StationAiAgentSystem.CoreAgentId;
+                var where = args.Length > 2 ? args[2] : "/";
+
+                if (!system.TryGetVfs(who, out var vfs))
+                {
+                    shell.WriteLine($"нет агента '{who}' — попробуй aiagent status");
+                    break;
+                }
+
+                var result = new Shell(vfs).Run($"ls {where}");
+                shell.WriteLine(result.Text);
                 break;
             }
 

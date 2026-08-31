@@ -228,6 +228,67 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
+    /// Прогнать апстримовый обзор и наш нарезаемый по одному глазу в ОДНОМ кадре и вернуть оба
+    /// множества тайлов.
+    ///
+    /// <para>
+    /// Ради этого метода нарезаемая версия и имеет право существовать. Свой теневой каст — это
+    /// копия чужого алгоритма, а копия расходится с оригиналом молча: ИИ начинает видеть на тайл
+    /// больше или меньше, чем увидел бы игрок на этой роли, и заметить это в игре невозможно.
+    /// Утверждение «мы перенесли точно» либо проверяемо, либо это обещание.
+    /// </para>
+    /// <para>
+    /// Оба прогона в одном кадре — по тому же доводу, что и у сравнения быстрого и медленного
+    /// сбора: между двумя кадрами кто-то успевает шагнуть, и тест поймал бы чужой шаг вместо
+    /// геометрии.
+    /// </para>
+    /// <param name="grain">
+    /// Бюджет одного среза в миллисекундах. Ноль означает «резать на каждом удобном месте» — это
+    /// и есть самый злой режим: чем мельче срез, тем больше шансов, что состояние между кадрами
+    /// сохранено неверно.
+    /// </param>
+    /// </summary>
+    public (HashSet<Vector2i> Upstream, HashSet<Vector2i> Sliced, int Slices)
+        CompareViewPathsForTest(EntityUid brain, int expand, double grain = 0)
+    {
+        var expansion = 8.5f + expand * 4f;
+
+        if (!TryResolveEye(brain, out var eye, out _, out var grid, out var broadphase, out var mapGrid, out var why))
+            throw new InvalidOperationException(why);
+
+        var worldPos = _xform.GetWorldPosition(Transform(eye));
+        var bounds = new Box2Rotated(
+            new Box2(worldPos.X - expansion, worldPos.Y - expansion, worldPos.X + expansion, worldPos.Y + expansion),
+            Angle.Zero,
+            worldPos);
+
+        var upstream = new HashSet<Vector2i>();
+        _vision.GetView((grid, broadphase, mapGrid), bounds, upstream, expansion);
+
+        var view = new Vision.SlicedView(EntityManager, _lookup, _mapSystem, _xform, _power);
+        view.Begin((grid, broadphase, mapGrid), bounds, expansion);
+
+        var slices = 0;
+        while (true)
+        {
+            // Дедлайн в прошлом = бюджет исчерпан сразу, то есть срез рвётся при первой же
+            // возможности. Именно так проверяется, что состояние переживает границу кадра.
+            var deadline = System.Diagnostics.Stopwatch.GetTimestamp()
+                           + (long)(grain / 1000.0 * System.Diagnostics.Stopwatch.Frequency);
+
+            slices++;
+
+            if (view.Step(new Threading.JobBudget(deadline)))
+                break;
+
+            if (slices > 100_000)
+                throw new InvalidOperationException("нарезаемый обзор не сходится — больше ста тысяч срезов");
+        }
+
+        return (upstream, view.VisibleTiles, slices);
+    }
+
+    /// <summary>
     /// Build zone 0 the way a session start or a compaction would.
     ///
     /// Exists so a test can build it twice and compare: an interpolated clock, counter or GUID in

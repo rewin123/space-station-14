@@ -1,12 +1,16 @@
 using System;
+using System.Collections.Generic;
+using System.Numerics;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using Content.IntegrationTests;
 using Content.IntegrationTests.Fixtures;
 using Content.IntegrationTests.Fixtures.Attributes;
 using Robust.Client.GameStates;
+using Robust.Server.GameStates;
 using Robust.Shared;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Player;
 
 namespace Content.AiBench;
 
@@ -267,4 +271,342 @@ public sealed class PvsResyncTests : GameTest
         });
 #endif
     }
+
+    /// <summary>
+    /// Петля раунда 205: ходячая сущность + один ресинк не должны давать ВТОРОЙ ресинк.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Что воспроизводим.</b> Боевой раунд 205 (24.08.2026): клиент из локальной сети — то есть
+    /// БЕЗ большого пинга и без потерь — вошёл в петлю «запрос полного состояния каждые 11–31
+    /// тиков» на шесть минут, и каждый запрос называл одну и ту же сущность: шагающего киборга.
+    /// Сервер при этом считал, что сущность у клиента есть (EntityLastAcked свежий,
+    /// LastLeftView=0), и слал голые дельты. Внутрипроцессная пара — тот же случай: доставка
+    /// мгновенная, потерь нет. Если петля системная, она обязана воспроизвестись здесь.
+    /// </para>
+    /// <para>
+    /// Ходьба — SetLocalPosition каждый тик: сущность грязная каждый тик и регулярно пересекает
+    /// границы чанков (ChunkSize = 8), как киборг на маршруте. Двое ходоков, как в раунде.
+    /// </para>
+    /// </remarks>
+    [Test]
+    [TestCase(false, false, TestName = "ходоки, sync, без массового входа")]
+    [TestCase(true, false, TestName = "ходоки, async как на бою, без массового входа")]
+    [TestCase(true, true, TestName = "ходоки, async, ресинк посреди массового входа (прилёт)")]
+    public async Task WalkingEntity_SingleResync_DoesNotLoop(bool asyncPvs, bool massEntry)
+    {
+        var pair = Pair;
+        var (server, client) = pair;
+
+        await ProductionNetSettings();
+
+        // Боевой сервер работает с net.pvs_async = true (умолчание движка); стенд по своим
+        // причинам ставит false. Петля может жить в гонке асинхронного расчёта — проверяем оба.
+        await OverrideCVar(Side.Server, CVars.NetPvsAsync, asyncPvs);
+
+        var xformSys = server.System<SharedTransformSystem>();
+
+        EntityUid walkerA = default;
+        EntityUid walkerB = default;
+        Vector2 originA = default;
+        Vector2 originB = default;
+        EntityUid gridUid = default;
+
+        await server.WaitPost(() =>
+        {
+            var player = ServerSession?.AttachedEntity;
+            Assert.That(player, Is.Not.Null, "у сессии нет тела");
+
+            var xform = server.EntMan.GetComponent<TransformComponent>(player!.Value);
+            var where = xform.Coordinates;
+            gridUid = xform.ParentUid;
+            walkerA = server.EntMan.SpawnAtPosition("MobHuman", where);
+            walkerB = server.EntMan.SpawnAtPosition("MobHuman", where.Offset(new Vector2(2, 0)));
+            originA = server.EntMan.GetComponent<TransformComponent>(walkerA).LocalPosition;
+            originB = server.EntMan.GetComponent<TransformComponent>(walkerB).LocalPosition;
+        });
+
+        await pair.RunTicksSync(20);
+
+        var netA = server.EntMan.GetNetEntity(walkerA);
+        var netB = server.EntMan.GetNetEntity(walkerB);
+        Assert.That(client.EntMan.TryGetEntity(netA, out _), Is.True, "клиент не получил ходока A до ресинка");
+
+        if (massEntry)
+        {
+            // Прилёт: раунд 205 вошёл в петлю в момент стыковки шаттла прибытия, когда в поле
+            // зрения клиента разом вошла станция и вход растянулся бюджетом на десятки тиков.
+            // Здесь тот же профиль дешевле: игрока уносит в пустоту за пределы дальности PVS,
+            // мир у клиента пустеет, возврат — массовый вход, и ресинк бьёт ровно в его середину.
+            var player = ServerSession!.AttachedEntity!.Value;
+            Vector2 home = default;
+            await server.WaitPost(() =>
+            {
+                home = server.EntMan.GetComponent<TransformComponent>(player).LocalPosition;
+                xformSys.SetLocalPosition(player, home + new Vector2(120f, 0));
+            });
+            await pair.RunTicksSync(30);
+            await server.WaitPost(() => xformSys.SetLocalPosition(player, home));
+            await pair.RunTicksSync(3); // вход начался, бюджет 200/50 ещё далеко не выбран
+        }
+
+        // Один ресинк — как MissingMetadataException на бою: клиент просит полный мир.
+        await client.ExecuteCommand("fullstatereset");
+
+        // Ходьба: туда-обратно на ±10 тайлов, 0.25 тайла за тик. Пересечение границы чанка
+        // каждые ~32 тика — период, с которым в раунде 205 и шли запросы.
+        var lossesA = new List<int>();
+        var lossesB = new List<int>();
+        var presentA = true;
+        var presentB = true;
+
+        const int ticks = 400;
+        for (var t = 0; t < ticks; t++)
+        {
+            var phase = t * 0.25f % 40f;
+            var dx = phase < 20f ? phase : 40f - phase; // 0..10..0
+
+            var t1 = t;
+            await server.WaitPost(() =>
+            {
+                if (server.EntMan.Deleted(walkerA) || server.EntMan.Deleted(walkerB))
+                    return;
+                xformSys.SetLocalPosition(walkerA, originA + new Vector2(dx, 0));
+                xformSys.SetLocalPosition(walkerB, originB + new Vector2(0, dx));
+            });
+
+            await pair.RunTicksSync(1);
+
+            var nowA = client.EntMan.TryGetEntity(netA, out _);
+            var nowB = client.EntMan.TryGetEntity(netB, out _);
+            if (presentA && !nowA)
+                lossesA.Add(t);
+            if (presentB && !nowB)
+                lossesB.Add(t);
+            presentA = nowA;
+            presentB = nowB;
+        }
+
+        TestContext.Out.WriteLine(
+            $"потери ходока A на тиках: [{string.Join(", ", lossesA)}]; "
+            + $"B: [{string.Join(", ", lossesB)}]");
+
+        Assert.Multiple(() =>
+        {
+            // Первая потеря — сам ресинк (PartialStateReset может на тик снести, пока полное в
+            // пути). Всё, что после первых 60 тиков, — та самая петля.
+            Assert.That(lossesA.FindAll(x => x > 60), Is.Empty,
+                "ходок A потерян клиентом ПОСЛЕ восстановления от ресинка — петля раунда 205");
+            Assert.That(lossesB.FindAll(x => x > 60), Is.Empty,
+                "ходок B потерян клиентом ПОСЛЕ восстановления от ресинка — петля раунда 205");
+            Assert.That(presentA && presentB, Is.True, "к концу прогона ходоки так и не вернулись");
+        });
+    }
+
+    /// <summary>
+    /// Возврат в зону видимости без ack не должен копить полные состояния всей станции в одном пакете.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Журнал 26.08.2026: ресинков ноль, сервер 33 мс/такт, клиент из локальной сети замерзал.
+    /// <c>IsEnteringPvsRange</c> держал <c>entering=true</c> для каждой сущности с
+    /// <c>EntityLastAcked &lt; fromTick</c>, даже если её слали прошлый такт, и бюджет на это не
+    /// брался. Полное состояние копилось: 200 → 2098 сущностей за три секунды.
+    /// </para>
+    /// <para>
+    /// Стенд: прогреть зону, увести игрока (сущности уходят, ack ещё живой), заморозить ack
+    /// через <c>DropStates</c>, вернуть игрока. Стены не грязные — в пакет они попадают только
+    /// веткой входа. С поломкой они остаются в каждом следующем пакете; с патчем №14 — только
+    /// в тике появления, дальше бюджет входа 200 за тик и без накопления.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task ReentryWithoutAck_DoesNotAccumulateFullStates()
+    {
+// Тесту нужны сразу две вещи: ClientGameStateManager.DropStates (он есть только под DEBUG) и
+// серверная диагностика TryGetPvsSendDiag, которой в ванильном движке нет — она была нашим
+// дополнением и уехала вместе с откатом на v286.0.0. Тело сохранено, а не удалено: вернётся
+// диагностика — вернётся и тест, символ надо будет объявить в csproj.
+#if !FORK_PVS_SEND_DIAG
+        Assert.Ignore("нужны DropStates (только DEBUG) и TryGetPvsSendDiag, которого в ванильном движке нет");
+#else
+        var pair = Pair;
+        var (server, client) = pair;
+        var xformSys = server.System<SharedTransformSystem>();
+
+        await ProductionNetSettings();
+        await pair.RunTicksSync(60);
+
+        var session = ServerSession;
+        Assert.That(session, Is.Not.Null, "нет сессии игрока");
+        var player = session!.AttachedEntity;
+        Assert.That(player, Is.Not.Null, "у сессии нет тела");
+
+        var settled = client.EntMan.EntityCount;
+        TestContext.Out.WriteLine($"зона после прогрева: {settled} сущностей у клиента");
+        Assert.That(settled, Is.GreaterThan(100),
+            "зона видимости слишком пустая — аккумулятору нечего копить");
+
+        Vector2 home = default;
+        await server.WaitPost(() =>
+        {
+            home = server.EntMan.GetComponent<TransformComponent>(player!.Value).LocalPosition;
+            xformSys.SetLocalPosition(player.Value, home + new Vector2(120f, 0));
+        });
+        await pair.RunTicksSync(30);
+
+        var stateMan = (ClientGameStateManager) client.ResolveDependency<IClientGameStateManager>();
+        await client.WaitPost(() => stateMan.DropStates = true);
+        await server.WaitPost(() => xformSys.SetLocalPosition(player!.Value, home));
+
+        var maxEntities = 0;
+        var maxEntered = 0;
+        const int reentryTicks = 15;
+        for (var i = 0; i < reentryTicks; i++)
+        {
+            await pair.RunTicksSync(1);
+            var diag = await LastPvsDiag(session);
+            maxEntities = Math.Max(maxEntities, diag.Entities);
+            maxEntered = Math.Max(maxEntered, diag.Entered);
+            TestContext.Out.WriteLine(
+                $"возврат тик {i}: в пакете {diag.Entities} (вошло {diag.Entered}, новых {diag.Created})");
+        }
+
+        await client.WaitPost(() => stateMan.DropStates = false);
+        await pair.RunTicksSync(30);
+
+        TestContext.Out.WriteLine(
+            $"за {reentryTicks} тиков возврата без ack: max в пакете {maxEntities}, " +
+            $"max вошло {maxEntered}; зона была {settled}");
+
+        // С поломкой пакет за несколько тиков дорастает до всей зоны. С патчем №14 в каждом
+        // пакете не больше бюджета входа (200) плюс немного грязного — далеко от полной зоны.
+        Assert.That(maxEntities, Is.LessThan(settled * 2 / 3),
+            $"возврат без ack набрал {maxEntities} сущностей в одном пакете при зоне {settled}. " +
+            "Полные состояния входящих копятся из тика в тик — патч №14 не сработал");
+#endif
+    }
+
+    /// <summary>
+    /// Грязная сущность, которую клиент никогда не подтверждал, не должна уходить дельтой без метадаты.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Боевая подпись Клина: после полного слепка <c>LastSeen</c> свежий, <c>LastLeftView=0</c>,
+    /// <c>EntityLastAcked=0</c>, сущность грязная каждый тик, сервер шлёт дельту от
+    /// <c>fromTick</c> без MetaData. Клиент сущности не создавал — MissingMetadata — новое полное.
+    /// Внутрипроцессный ack мгновенный, поэтому <see cref="WalkingEntity_SingleResync_DoesNotLoop"/>
+    /// этот хвост не ловит: к моменту ходьбы клиент сущность уже имеет.
+    /// </para>
+    /// <para>
+    /// Стенд: полный ресинк (EntityLastAcked обнулён, LastSeen проставлен), сразу после применения
+    /// полного слепка сущность у клиента стираем — как PartialStateReset / потеря фрагментов —
+    /// и грязним каждый тик. Без патча №21 CreateNewEntity бросает MissingMetadataException.
+    /// С патчем приезжает полное состояние сущности, клиент создаёт её снова, второго ресинка нет.
+    /// </para>
+    /// </remarks>
+    [Test]
+    public async Task DirtyNeverAcked_SendsFullEntityState_DoesNotLoop()
+    {
+        var pair = Pair;
+        var (server, client) = pair;
+        var xformSys = server.System<SharedTransformSystem>();
+
+        await ProductionNetSettings();
+
+        EntityUid watched = default;
+        Vector2 origin = default;
+
+        await server.WaitPost(() =>
+        {
+            var player = ServerSession?.AttachedEntity;
+            Assert.That(player, Is.Not.Null, "у сессии нет тела — некуда ставить наблюдаемую сущность");
+
+            var where = server.EntMan.GetComponent<TransformComponent>(player!.Value).Coordinates;
+            watched = server.EntMan.SpawnAtPosition("MobHuman", where);
+            origin = server.EntMan.GetComponent<TransformComponent>(watched).LocalPosition;
+        });
+
+        await pair.RunTicksSync(20);
+
+        var netEnt = server.EntMan.GetNetEntity(watched);
+        Assert.That(client.EntMan.TryGetEntity(netEnt, out _), Is.True,
+            "клиент не получил сущность даже до ресинка — стенд собран неверно");
+
+        await client.ExecuteCommand("fullstatereset");
+
+        var appeared = false;
+        for (var i = 0; i < 30 && !appeared; i++)
+        {
+            await pair.RunTicksSync(1);
+            appeared = client.EntMan.TryGetEntity(netEnt, out _);
+        }
+
+        Assert.That(appeared, Is.True, "после полного слепка клиент так и не получил сущность");
+
+        // Клиент слепок применил, сервер EntityLastAcked ещё не сдвинул (аванс LastReceivedAck
+        // без PendingAcks, патч №13). Стираем сущность у клиента — дальше она для него «новая».
+        await client.WaitPost(() =>
+        {
+            if (client.EntMan.TryGetEntity(netEnt, out var uid))
+                client.EntMan.DeleteEntity(uid.Value);
+        });
+
+        Assert.That(client.EntMan.TryGetEntity(netEnt, out _), Is.False,
+            "не удалось стереть сущность у клиента — стенд не воспроизводит дыру");
+
+        var losses = new List<int>();
+        var present = false;
+        const int ticks = 80;
+
+        for (var t = 0; t < ticks; t++)
+        {
+            var phase = t * 0.25f % 40f;
+            var dx = phase < 20f ? phase : 40f - phase;
+
+            await server.WaitPost(() =>
+            {
+                if (server.EntMan.Deleted(watched))
+                    return;
+                xformSys.SetLocalPosition(watched, origin + new System.Numerics.Vector2(dx, 0));
+            });
+
+            await pair.RunTicksSync(1);
+
+            var now = client.EntMan.TryGetEntity(netEnt, out _);
+            if (present && !now)
+                losses.Add(t);
+            present = now;
+        }
+
+        TestContext.Out.WriteLine(
+            $"после стирания сущность вернулась: {present}; повторные потери на тиках: [{string.Join(", ", losses)}]");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(present, Is.True,
+                "грязная неподтверждённая сущность не вернулась к клиенту — дельта ушла без MetaData (патч №21)");
+            Assert.That(losses, Is.Empty,
+                "сущность вернулась и снова пропала — петля MissingMetadata / полного ресинка");
+        });
+    }
+
+#if FORK_PVS_SEND_DIAG
+    private async Task<(int Entities, int Entered, int Created)> LastPvsDiag(ICommonSession session)
+    {
+        var entities = 0;
+        var entered = 0;
+        var created = 0;
+        var ok = false;
+
+        await Pair.Server.WaitPost(() =>
+        {
+            var gsm = Pair.Server.ResolveDependency<IServerGameStateManager>();
+            ok = gsm.TryGetPvsSendDiag(session, out entities, out entered, out created);
+        });
+
+        Assert.That(ok, Is.True, "у сессии нет PVS-диагностики — клиент не в игре?");
+        return (entities, entered, created);
+    }
+#endif
 }

@@ -59,7 +59,13 @@ public sealed class AgentSession : IDisposable
     private readonly Func<bool, CancellationToken, Task<TurnPerception?>> _buildObservation;
     private readonly Func<string, Task> _announce;
     private readonly Func<string, string?, Task<bool>> _speak;
-    private readonly Func<Task>? _curate;
+    /// <summary>
+    /// Разбор отрезка. Возвращает короткий отчёт, если что-то записал, и <c>null</c>, если нет.
+    ///
+    /// Возвращаемое значение появилось вместе с отчётом в диалоге: раньше вердикт уходил только в
+    /// лог, и агент не знал, что вообще что-то записал, — разбор шёл на копии и исчезал вместе с ней.
+    /// </summary>
+    private readonly Func<Task<string?>>? _curate;
     private readonly Func<(string SystemPrompt, string ToolsJson)> _rebuildPrefix;
 
     private readonly TurnRunner _turn;
@@ -283,7 +289,7 @@ public sealed class AgentSession : IDisposable
         Func<bool, CancellationToken, Task<TurnPerception?>> buildObservation,
         Func<string, Task> announce,
         Func<string, string?, Task<bool>> speak,
-        Func<Task>? curate,
+        Func<Task<string?>>? curate,
         Func<(string SystemPrompt, string ToolsJson)> rebuildPrefix,
         CompactionOptions compaction,
         Journal journal,
@@ -658,7 +664,13 @@ public sealed class AgentSession : IDisposable
         Mode = AgentMode.Review;
         try
         {
-            await _curate().ConfigureAwait(false);
+            var report = await _curate().ConfigureAwait(false);
+
+            // Здесь, в отличие от ритуала, свёртки не было: тело кончается результатом инструмента
+            // или репликой модели, и отдельное user-сообщение законно. Зона 0 при этом остаётся
+            // прежней до следующей перестройки префикса — ровно как после любой другой записи.
+            if (!string.IsNullOrWhiteSpace(report))
+                Conv.AppendUserOrMerge(report!);
         }
         catch (OperationCanceledException)
         {

@@ -32,7 +32,7 @@
     # УСТАРЕЛО с 19.08.2026: llama-server поднят с `--parallel 3`, три агента идут
     # параллельно и чужой префикс друг у друга не вытесняют. Четвёртый ждёт очереди.
     # Прежний обход (`cvar ai.auto_claim false` до startround) больше не нужен.
-    llmChain: deepseek
+    llmChain: deepseek,awq
     channels:
     - Binary
     - Common
@@ -121,24 +121,21 @@
   id: AiBorgModuleArms
   parent: [ BaseBorgModule, BaseProviderBorgModule ]
   name: combat cyborg module
-  description: "Боевой манипулятор: клинок и лазерный пистолет."
+  description: "Боевой манипулятор: клинок."
   components:
   - type: Sprite
     layers:
     - state: generic
     - state: icon-tools
-  # Две руки в ОДНОМ модуле, а не два модуля.
+  # Только клинок. Ствол — отдельная сущность в запертом слоте шасси (AiBorgBuiltInLaser),
+  # не рука и не компонент на корне: ProvideItems спавнит предмет в мир в момент захвата,
+  # а Gun+BatteryAmmoProvider на корпусе Dirty'ит шасси на каждый разряд ячейки жизни.
+  # Оба варианта цитировались петлёй PVS как «Клин без метаданных».
   #
-  # Иначе выбор между ближним и дальним боем превращался бы в смену модуля, то есть в отдельный
-  # ход, который модель должна сообразить сделать посреди драки. Инструменты hit и shoot сами
-  # находят нужную руку и делают её активной — ровно то, что живой игрок делает клавишей.
-  #
-  # Лазер апстримовый и без переделок: у WeaponAdvancedLaser есть BatterySelfRecharger, то есть
-  # робот не останется с пустым стволом навсегда — а в оружейную он сходить не может.
+  # КУКРИ, А НЕ ЭНЕРГОМЕЧ: энергомеч — ItemToggle, модель про выключенную рукоять не знает.
   - type: ItemBorgModule
     hands:
     - item: KukriKnife
-    - item: WeaponAdvancedLaser
 
 # Тип боевого робота. Свой, а не апстримовый: whitelist ограничен BorgModuleGeneric, то есть
 # в него не влезет ни один синдикатский модуль, даже если кто-то положит его роботу в руки.
@@ -173,6 +170,41 @@
   petSuccessString: petting-success-generic-cyborg
   petFailureString: petting-failure-generic-cyborg
 
+# Встроенный ствол боевого шасси. Своя батарея, без автозаряда.
+#
+# Не WeaponAdvancedLaser: у того BatterySelfRecharger тикает сущность каждый такт.
+# Не компонент на корне шасси: см. gun_slot у AiBorgCombatChassis.
+# fireCost 50 при 1800 заряда — 36 выстрелов, как у прежней гипер-ячейки шасси.
+- type: entity
+  id: AiBorgBuiltInLaser
+  parent: BaseWeaponBatterySmall
+  name: встроенный лазер
+  description: Ствол, встроенный в корпус киборга. Снаружи не снять.
+  categories: [ HideSpawnMenu ]
+  components:
+  - type: Sprite
+    sprite: Objects/Weapons/Guns/Battery/advancedlasergun.rsi
+    layers:
+    - state: base
+      map: ["enum.GunVisualLayers.Base"]
+  - type: Gun
+    fireRate: 2
+    selectedMode: SemiAuto
+    availableModes:
+    - SemiAuto
+    soundGunshot:
+      path: /Audio/Weapons/Guns/Gunshots/laser_cannon.ogg
+  - type: BatteryAmmoProvider
+    proto: RedMediumLaser
+    fireCost: 50
+  - type: Battery
+    maxCharge: 1800
+    startingCharge: 1800
+  - type: Tag
+    tags:
+    - LaserWeapon
+    - Sidearm
+
 - type: entity
   id: AiBorgCombatChassis
   parent: BorgChassisSelectable
@@ -193,7 +225,7 @@
     # rogue_ai.yml: слотов у llama-server стало три, и довод «четыре мозга не влезают»
     # отпал. Вернуть облако — `grok46,grok,local`; цепочкой, а не одним профилем, чтобы
     # робот доигрывал смену на локальной модели, если мост упадёт посреди вечера.
-    llmChain: deepseek
+    llmChain: deepseek,awq
     channels:
     - Binary
     - Common
@@ -207,6 +239,24 @@
       cell_slot:
         name: power-cell-slot-component-slot-name-default
         startingItem: PowerCellHyper
+      # Ствол — дочерняя сущность в слоте, как ячейка. startingItem кладётся на MapInit,
+      # до захвата и до чужого PVS. Слот заперт: его нельзя вынуть, сменить, подобрать.
+      #
+      # Не на корне шасси: BatteryAmmoProvider слушает ChargeChanged, а ячейка жизни
+      # шлёт его на корпус каждый тик разряда — Dirty корня, дельта без MetaData,
+      # «Клин без метаданных». Не в руке: ProvideItems спавнит в мир в момент claim.
+      gun_slot:
+        name: встроенный лазер
+        startingItem: AiBorgBuiltInLaser
+        locked: true
+        disableEject: true
+        swap: false
+        insertOnInteract: false
+        ejectOnBreak: false
+        ejectOnDeconstruct: false
+        whitelist:
+          tags:
+          - LaserWeapon
   # Лоусет режима вместо Crewsimov, и subverted — чтобы интерфейс законов не утверждал, будто
   # робот подчиняется экипажу, ровно когда он уже не подчиняется.
   - type: SiliconLawProvider
@@ -229,7 +279,7 @@
     # rogue_ai.yml: слотов у llama-server стало три, и довод «четыре мозга не влезают»
     # отпал. Вернуть облако — `grok46,grok,local`; цепочкой, а не одним профилем, чтобы
     # робот доигрывал смену на локальной модели, если мост упадёт посреди вечера.
-    llmChain: deepseek
+    llmChain: deepseek,awq
     channels:
     - Binary
     - Common

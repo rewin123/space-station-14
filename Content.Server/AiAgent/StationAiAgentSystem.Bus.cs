@@ -62,9 +62,9 @@ public sealed partial class StationAiAgentSystem
             _bus,
             _cfg.GetCVar(AiCVars.DebugToken),
             _agents,
-            () => Memory,
-            () => Skills,
-            () => Notes,
+            // Библиотека ядра. Может быть null до первой сессии — отладчик поднимается раньше
+            // тела, и отдать пустой снимок честнее, чем отложить старт эндпоинта.
+            () => CoreVfs,
             CurrentRoundId,
             ChangeMemory,
             ChangeSkill);
@@ -251,23 +251,39 @@ public sealed partial class StationAiAgentSystem
     /// the next prefix rebuild, and an operator who is not told that watches the agent behave
     /// identically and concludes the endpoint is broken.
     /// </summary>
-    public MemoryResult ChangeMemory(string action, string match, string content) =>
-        action switch
+    public MemoryResult ChangeMemory(string action, string match, string content)
+    {
+        if (CoreVfs?.Memory is not { } memory)
+            return new MemoryResult(false, "агент ещё не запускался, память не смонтирована");
+
+        return action switch
         {
-            "add" => Memory.Add(content),
-            "replace" => Memory.Replace(match, content),
-            "remove" => Memory.Remove(match),
+            "add" => memory.Add(content),
+            "replace" => memory.Replace(match, content),
+            "remove" => memory.Remove(match),
             _ => new MemoryResult(false, $"неизвестное действие '{action}' — ожидалось add, replace или remove"),
         };
+    }
 
-    /// <summary>Write or edit a skill from outside the agent. Same disk-versus-prefix caveat.</summary>
+    /// <summary>
+    /// Правка записи агента снаружи. Та же оговорка про диск против префикса.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="name"/> — путь внутри <c>/skills</c>, например <c>питание/смес</c>. Это
+    /// изменение формата: раньше имена были плоскими. Старое плоское имя по-прежнему работает и
+    /// означает файл в корне <c>/skills</c>.
+    /// </remarks>
     public SkillResult ChangeSkill(string name, string? when, string? body, string? match, string? replacement)
     {
-        // Two shapes on one command: (name, when, body) writes the skill whole, (name, match,
-        // replacement) edits a fragment. Mirrors the two tools the model itself has.
-        if (match != null || replacement != null)
-            return Skills.Edit(name, match ?? "", replacement ?? "");
+        if (CoreVfs?.Skills is not { } skills)
+            return new SkillResult(false, "агент ещё не запускался, библиотека не смонтирована");
 
-        return Skills.Write(name, when ?? "", body ?? "");
+        // Две формы одной команды: (name, when, body) пишет файл целиком, (name, match,
+        // replacement) правит фрагмент. Повторяет два инструмента, которые есть у самой модели.
+        var result = match != null || replacement != null
+            ? skills.Edit(name, match ?? "", replacement ?? "")
+            : skills.Write(name, name, when ?? "", body ?? "");
+
+        return new SkillResult(result.Ok, result.Message, result.Hints);
     }
 }

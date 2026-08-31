@@ -104,7 +104,7 @@ public sealed class ContextTests
     /// <summary>The three doors the ritual has outward, with sane no-ops for the ones under test.</summary>
     private static CompactionHooks Hooks(
         Func<string, Task> announce = null,
-        Func<Task> curate = null,
+        Func<Task<string?>> curate = null,
         Func<(string, string)> prefix = null) =>
         new()
         {
@@ -272,7 +272,7 @@ public sealed class ContextTests
 
         await compactor.CompactAsync(StateOf(conv), System.Array.Empty<ToolDto>(),
             Hooks(announce: _ => { order.Add("announce"); return Task.CompletedTask; },
-                  curate: () => { order.Add("curator"); return Task.CompletedTask; }),
+                  curate: () => { order.Add("curator"); return Task.FromResult<string?>(null); }),
             "T+0:05:00", CancellationToken.None);
 
         Assert.That(order, Is.EqualTo(new[] { "announce", "curator" }),
@@ -353,7 +353,7 @@ public sealed class ContextTests
 
         var ok = await compactor.CompactAsync(StateOf(conv), System.Array.Empty<ToolDto>(),
             Hooks(announce: _ => { announced = true; return Task.CompletedTask; },
-                  curate: () => { curated = true; return Task.CompletedTask; }),
+                  curate: () => { curated = true; return Task.FromResult<string?>(null); }),
             "T+0:05:00", CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -607,10 +607,18 @@ internal sealed class RecordingLlmClient : ILlmClient
 {
     public System.Collections.Generic.IReadOnlyList<ToolDto> LastTools { get; private set; }
 
+    /// <summary>Каждая цепочка сообщений, какой её увидела модель. Нужна, чтобы читать сам вопрос.</summary>
+    public System.Collections.Generic.List<System.Collections.Generic.IReadOnlyList<ChatMessageDto>> SeenPrompts { get; } = new();
+
     public Task<LlmResponse> ChatAsync(System.Collections.Generic.IReadOnlyList<ChatMessageDto> messages,
         System.Collections.Generic.IReadOnlyList<ToolDto> tools, CancellationToken ct)
     {
         LastTools = tools;
+
+        // КОПИЯ, а не ссылка. Куратор дописывает ответ модели в тот же самый список, который сюда
+        // передал, — записанная ссылка показывала бы состояние ПОСЛЕ вызова, то есть не то, что
+        // модель на самом деле видела. Рекордер, пишущий живую ссылку, ничего не записывает.
+        SeenPrompts.Add(new System.Collections.Generic.List<ChatMessageDto>(messages));
         return Task.FromResult(new LlmResponse("сводка", System.Array.Empty<ToolCallDto>(), 100, 90, 10, 0.1));
     }
 

@@ -8,6 +8,7 @@ using Content.Shared.Interaction;
 using Robust.Shared.Containers;
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map;
+using Robust.Shared.Maths;
 
 namespace Content.OracleTrace;
 
@@ -30,6 +31,7 @@ public sealed class ScenarioRunner
 
     private readonly SharedInteractionSystem _interaction;
     private readonly SharedContainerSystem _containers;
+    private readonly SharedTransformSystem _transform;
 
     public ScenarioRunner(IEntityManager entMan, IComponentFactory factory, TraceRecorder recorder, MapId map)
     {
@@ -38,6 +40,7 @@ public sealed class ScenarioRunner
         _map = map;
         _interaction = entMan.System<SharedInteractionSystem>();
         _containers = entMan.System<SharedContainerSystem>();
+        _transform = entMan.System<SharedTransformSystem>();
 
         foreach (var type in factory.AllRegisteredTypes)
             _compTypes[type.Name] = type;
@@ -75,6 +78,16 @@ public sealed class ScenarioRunner
 
                 AssignMember(type, comp, set.Field, set.Value, op.Line);
                 _entMan.Dirty(uid, comp);
+                break;
+            }
+
+            case MoveOp move:
+            {
+                // Мировые позиция и поворот разом: локальные координаты в двух
+                // движках значат разное (здесь сущность висит на сетке, у порта
+                // сеток нет вовсе), а мировые — одно и то же.
+                var uid = _recorder.Resolve(move.Entity);
+                _transform.SetWorldPositionRotation(uid, new Vector2(move.X, move.Y), new Angle(move.Rot));
                 break;
             }
 

@@ -68,6 +68,33 @@ public sealed class OracleScenarios : GameTest
     [Test]
     public Task ContainerApart() => RunScenario("container-apart", checkDoorSanity: false);
 
+    // Пять сценариев ниже расширяют оракул туда, где расхождение container-apart
+    // (дерево трансформов) ещё не проверено на глубину, на удаление и на прямой
+    // перенос, плюс один новый угол на дверях. Подробности — в "//" каждого
+    // in.jsonl; здесь только регистрация тестов, сама трасса и её обоснование
+    // живут в traces/<имя>/in.jsonl.
+    [Test]
+    public Task ContainerNestTwoLevels() => RunScenario("container-nest-two-levels", checkDoorSanity: false);
+
+    [Test]
+    public Task ContainerOwnerDeleted() => RunScenario("container-owner-deleted", checkDoorSanity: false);
+
+    [Test]
+    public Task ContainerTransferDirect() => RunScenario("container-transfer-direct", checkDoorSanity: false);
+
+    [Test]
+    public Task ContainerSubtreeAttachGrid() => RunScenario("container-subtree-attach-grid", checkDoorSanity: false);
+
+    [Test]
+    public Task DoorDestroyDuringPartialClose() => RunScenario("door-destroy-during-partial-close", checkDoorSanity: true);
+
+    // Долг фазы 6: движения и поворота в корпусе оракула не было вовсе —
+    // ноль снимков с ненулевым rot на 1452 снимка и шесть смен позиции на
+    // одиннадцать сценариев. Здесь тело ездит, вертится и своим ПОВОРОТОМ
+    // решает, закроется дверь или нет.
+    [Test]
+    public Task MotionRotateCollide() => RunScenario("motion-rotate-collide", checkDoorSanity: true);
+
     private async Task RunScenario(string name, bool checkDoorSanity)
     {
         var dir = OraclePaths.ScenarioDir(name);

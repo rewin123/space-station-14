@@ -53,7 +53,12 @@ async function save(): Promise<void> {
 <template>
   <div class="skills">
     <aside>
-      <p v-if="!agent.globals.skills.length" class="dim">Библиотека пуста.</p>
+      <p class="dim hint">
+        Свои записи Станционного ИИ — то, что он написал сам. Вычитанный справочник живёт в
+        <code>/wiki_ru</code> и правится на диске, а не отсюда. У киборгов записи свои, в
+        <code>ai_data/agents/&lt;id&gt;/skills/</code>.
+      </p>
+      <p v-if="!agent.globals.skills.length" class="dim">Агент ещё ничего не записал.</p>
       <button
         v-for="skill in agent.globals.skills"
         :key="skill.name"

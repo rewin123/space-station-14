@@ -104,8 +104,12 @@ public sealed record Observation(
     /// сколько накоплено, видно сразу, и по одной строке уже понятно, стоит ли тратить ход на
     /// чтение.
     /// </summary>
-    public static Observation Note(string name, int entries, TimeSpan t) =>
-        new(ObsKind.Note, string.Empty, name,
+    /// <param name="slug">
+    /// Имя файла в <c>/players</c>. Едет в <see cref="Channel"/>, чтобы напоминание сразу называло
+    /// путь: раньше строка советовала инструмент, и агенту оставалось угадать, как записан человек.
+    /// </param>
+    public static Observation Note(string name, string slug, int entries, TimeSpan t) =>
+        new(ObsKind.Note, slug, name,
             entries.ToString(System.Globalization.CultureInfo.InvariantCulture), t);
 
     /// <summary>

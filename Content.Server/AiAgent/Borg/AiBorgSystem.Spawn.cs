@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Content.Shared.Maps;
 using Content.Shared.Physics;
+using Content.Shared.Station.Components;
 using Content.Shared.Pinpointer;
 using Robust.Shared.Map;
 using Robust.Shared.Map.Components;
@@ -77,20 +79,72 @@ public sealed partial class AiBorgSystem
         return false;
     }
 
-    /// <summary>Сетка станции: та, на которой стоит ИИ-ядро.</summary>
+    /// <summary>
+    /// Клетки, на которые мы уже кого-то поставили в этом раунде.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Нужен потому, что <c>IsTileBlocked</c> НЕ ВИДИТ только что заспавненного робота. Режим
+    /// ставит троих одним заходом, в одном кадре; физическая фикстура у новой сущности появляется
+    /// сразу, а вот дерево broadphase, по которому и спрашивает <c>IsTileBlocked</c>, обновляется
+    /// на следующем шаге физики. Внутри одного кадра запрос честно отвечает «свободно» про клетку,
+    /// где уже кто-то стоит.
+    /// </para>
+    /// <para>
+    /// На боевом раунде 159 это дало трёх роботов в одной точке буквально друг в друге. Добавление
+    /// <c>CollisionGroup.MobMask</c> к проверке эту половину беды не лечит по той же причине —
+    /// смотреть просто некуда, дерево ещё пустое. Поэтому учёт свой.
+    /// </para>
+    /// <para>
+    /// Живёт до конца раунда, а не до конца пачки: робот, поставленный консолью посреди смены,
+    /// тоже не должен встать в того, кого режим поставил на старте.
+    /// </para>
+    /// </remarks>
+    private readonly HashSet<(EntityUid Grid, Vector2i Tile)> _takenTiles = new();
+
+    /// <summary>Забыть занятые клетки — карта следующего раунда будет другой.</summary>
+    public void ForgetTakenTiles() => _takenTiles.Clear();
+
+    /// <summary>Сетка станции: та, на которой стоит ИИ-ядро НАСТОЯЩЕЙ станции.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Проверка на принадлежность станции обязательна, и это починка (20.08.2026).</b> Прежняя
+    /// версия брала первое попавшееся ядро из запроса по компоненту и объявляла его сетку
+    /// станцией. Ядро на карте не одно: своё есть у Central Command, и порядок обхода
+    /// <c>EntityQueryEnumerator</c> ничем не обещает, что первым попадётся наше.
+    /// </para>
+    /// <para>
+    /// На боевом раунде 159 попалось чужое: все три киборга поддержки встали на сетке
+    /// <c>Central Command</c> в точке (21.5, −30.5), за сотни тайлов от станции, координаты
+    /// которой лежат в диапазоне 200–400. Экипаж их не видел и не слышал, а сами они не могли
+    /// сдвинуться и честно докладывали «не вижу пола ни под собой, ни у цели» — навигационной
+    /// карты станции под ними, разумеется, не было. Режим при этом рапортовал «киборгов
+    /// поддержки: 3 из 3», то есть выглядел исправным.
+    /// </para>
+    /// <para>
+    /// <see cref="StationMemberComponent"/> — ровно тот признак, который отличает сетку станции от
+    /// любой другой на карте: его вешает <c>StationSystem</c> при <c>Adding grid N to station</c>.
+    /// Центком, шаттлы и обломки его не носят.
+    /// </para>
+    /// </remarks>
     public bool TryFindGrid(out EntityUid grid)
     {
         grid = default;
 
         var query = EntityQueryEnumerator<Shared.Silicons.StationAi.StationAiCoreComponent>();
-        if (!query.MoveNext(out var core, out _))
-            return false;
+        while (query.MoveNext(out var core, out _))
+        {
+            if (Transform(core).GridUid is not { } found)
+                continue;
 
-        if (Transform(core).GridUid is not { } found)
-            return false;
+            if (!HasComp<StationMemberComponent>(found))
+                continue;
 
-        grid = found;
-        return true;
+            grid = found;
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -141,11 +195,23 @@ public sealed partial class AiBorgSystem
                     if (_turf.IsSpace(tileRef) || _turf.IsTileBlocked(tileRef, CollisionGroup.Impassable))
                         continue;
 
+                    // МОБЫ ТОЖЕ ЗАНИМАЮТ ТАЙЛ. Проверка выше их не видит: у робота маска
+                    // MobMask, а не Impassable, и тайл под уже стоящим корпусом считался
+                    // свободным. Режим ставит троих подряд одним вызовом на маяк, и все трое
+                    // получали ОДНУ И ТУ ЖЕ клетку — на раунде 159 все три оказались в точке
+                    // (21.5, −30.5) буквально друг в друге.
+                    if (_turf.IsTileBlocked(tileRef, CollisionGroup.MobMask))
+                        continue;
+
+                    if (_takenTiles.Contains((grid, tile)))
+                        continue;
+
                     var candidate = new EntityCoordinates(grid, new Vector2(tile.X + 0.5f, tile.Y + 0.5f));
 
                     if (requireNavmesh && _pathfinding.GetPoly(candidate) == null)
                         continue;
 
+                    _takenTiles.Add((grid, tile));
                     where = candidate;
                     return true;
                 }

@@ -25,20 +25,26 @@ namespace Content.Server.AiAgent.Bus;
 public static class AgentDebugState
 {
     /// <summary>
-    /// Процессный снимок: память, навыки, заметки и ростер. Одного агента здесь нет.
+    /// Процессный снимок: память, записи, заметки и ростер.
     /// </summary>
     /// <remarks>
-    /// Разделение снимка на процессный и агентный — не косметика. Память, навыки и заметки общие
-    /// на всех агентов и весят десятки килобайт; системный промпт и переписка принадлежат одному
-    /// и весят мегабайты. Слитый воедино ответ заставлял бы качать четыре истории, чтобы
-    /// посмотреть на одну.
+    /// <para>
+    /// Разделение снимка на процессный и агентный — не косметика: системный промпт и переписка
+    /// принадлежат одному агенту и весят мегабайты, а этот снимок мал. Слитый воедино ответ
+    /// заставлял бы качать четыре истории, чтобы посмотреть на одну.
+    /// </para>
+    /// <para>
+    /// <b>Отдаётся библиотека ЯДРА.</b> Раньше она была одна на процесс и слово «процессный» было
+    /// правдой; теперь у каждого тела своя, и здесь показано тело ядра — то, ради которого этот
+    /// отладчик и открывают. Библиотеки боргов лежат в <c>ai_data/agents/&lt;id&gt;/</c>; довести их
+    /// до вкладки — отдельная работа, и до неё честнее показывать одну правдиво, чем четыре
+    /// вперемешку.
+    /// </para>
     /// </remarks>
     public static AgentStateSnapshot CaptureGlobal(
         AgentEventBus bus,
         AgentDirectory directory,
-        MemoryStore memory,
-        SkillStore skills,
-        PlayerNoteStore notes,
+        Vfs.Vfs? vfs,
         int roundId)
     {
         // The sequence number is read FIRST, and that single line is what makes this safe.
@@ -64,25 +70,29 @@ public static class AgentDebugState
         var instance = bus.Instance;
         var seq = bus.Seq;
 
-        var memoryDto = new AgentMemoryDto(
-            memory.Entries(),
-            memory.Snapshot(),
-            memory.MemoryLimit);
+        var memory = vfs?.Memory;
+        var notes = vfs?.Notes;
 
-        var skillDtos = skills.All
-            .OrderBy(s => s.Name, System.StringComparer.Ordinal)
+        var memoryDto = memory == null
+            ? new AgentMemoryDto(System.Array.Empty<string>(), string.Empty, 0)
+            : new AgentMemoryDto(memory.Entries(), memory.Snapshot(), memory.MemoryLimit);
+
+        // Имя записи теперь путь внутри /skills («питание/смес»), а не плоское имя. Проводной
+        // формат при этом прежний, поэтому клиент отладчика продолжает работать без правок.
+        var skillDtos = (vfs?.Skills?.All ?? System.Array.Empty<Skill>())
             .Select(s => new AgentSkillDto(s.Name, s.When, s.Body))
             .ToList();
 
         // Порядок задаёт стор (по слагу, ординально), а не эта строка: тот же порядок уезжает в
         // notes.reloaded, и клиент, применяющий снимок и поток вперемешку, не переставляет список
         // под читателем.
-        var noteDtos = notes.All
+        var noteDtos = (notes?.All ?? System.Array.Empty<PlayerNote>())
             .Select(n => new AgentPlayerNoteDto(n.Slug, n.Name, n.Entries))
             .ToList();
 
         return new AgentStateSnapshot(
-            instance, seq, roundId, directory.Roster(), memoryDto, skillDtos, noteDtos, notes.NoteLimit);
+            instance, seq, roundId, directory.Roster(), memoryDto, skillDtos, noteDtos,
+            notes?.NoteLimit ?? 0);
     }
 
     /// <summary>
@@ -114,8 +124,43 @@ public static class AgentDebugState
             conv.ToolsJson,
             conv.BodyEpoch,
             messages,
+            Files(session.Body.Vfs),
             Stats(session),
             LastTurn(session));
+    }
+
+    /// <summary>
+    /// Дерево файлов агента на два уровня: корень и содержимое каждой папки верхнего уровня.
+    /// </summary>
+    /// <remarks>
+    /// Глубина ограничена намеренно. Полное дерево справочника — это 226 строк, то есть ровно тот
+    /// список, ради избавления от которого всё и переделывалось; отдавать его в каждом снимке
+    /// значило бы вернуть болезнь с другой стороны. Кто хочет глубже — раскрывает папку отдельным
+    /// запросом.
+    /// </remarks>
+    private static IReadOnlyList<AgentFileDto> Files(Vfs.Vfs vfs)
+    {
+        var files = new List<AgentFileDto>();
+
+        foreach (var mount in vfs.Mounts)
+        {
+            var access = mount.Writable ? "rw-" : "r--";
+            files.Add(new AgentFileDto("/" + mount.Point, !mount.IsFile, mount.Description, 0, access));
+
+            if (mount.IsFile)
+                continue;
+
+            foreach (var entry in mount.List(Vfs.VfsPath.Root, out var error))
+            {
+                if (error.Length > 0)
+                    break;
+
+                files.Add(new AgentFileDto(
+                    $"/{mount.Point}/{entry.Name}", entry.IsDir, entry.Desc, entry.Size, access));
+            }
+        }
+
+        return files;
     }
 
     /// <summary>

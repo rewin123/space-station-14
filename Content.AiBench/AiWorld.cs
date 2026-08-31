@@ -133,6 +133,7 @@ public sealed class AiWorld : IAsyncDisposable
             // Agent files go to a scratch directory so a benchmark never writes into the live
             // agent's memory or skill library.
             cfg.SetCVar(AiCVars.DataDir, world.DataDir);
+            SeedLibrary(world.DataDir);
             cfg.SetCVar(AiCVars.CuratorEnabled, false);
             cfg.SetCVar(AiCVars.ScriptMode, scriptMode);
         });
@@ -157,7 +158,7 @@ public sealed class AiWorld : IAsyncDisposable
         await server.WaitPost(() =>
         {
             world.System.ResetLlmClient();
-            world.System.ReloadAgentFiles();
+            world.System.ReloadSharedLibrary();
         });
 
         var ent = server.ResolveDependency<IEntityManager>();
@@ -392,5 +393,34 @@ public sealed class AiWorld : IAsyncDisposable
             await Pair.Server.WaitPost(() => System?.ReleaseAll("bench teardown"));
             await Pair.CleanReturnAsync();
         }
+    }
+
+    /// <summary>
+    /// Положить в рабочий каталог минимальный справочник.
+    ///
+    /// <para>
+    /// Не косметика. <c>/wiki_ru</c> смонтирован только на чтение, и пустой каталог под чтение —
+    /// это <c>Error</c> в лог: «агент разучился» иначе разбирают сутками, поэтому сигнал громкий
+    /// намеренно. А стенд валит любой тест, чей сервер написал хоть одну ошибку. Заглушить сигнал
+    /// ради зелёных тестов значило бы выключить единственную сигнализацию о пропавшей библиотеке;
+    /// вместо этого стенд получает настоящий справочник, пусть и крошечный.
+    /// </para>
+    /// </summary>
+    private static void SeedLibrary(string dataDir)
+    {
+        var wiki = global::System.IO.Path.Combine(dataDir, "wiki_ru", "атмосфера");
+        global::System.IO.Directory.CreateDirectory(wiki);
+
+        global::System.IO.File.WriteAllText(
+            global::System.IO.Path.Combine(dataDir, "wiki_ru", "_index.md"),
+            "# справочник\nкогда: Вопрос про устройство станции\nОглавление справочника.\n");
+
+        global::System.IO.File.WriteAllText(
+            global::System.IO.Path.Combine(wiki, "_index.md"),
+            "# атмосфера\nкогда: Газы, трубы, разгерметизация\nОбзор раздела.\n");
+
+        global::System.IO.File.WriteAllText(
+            global::System.IO.Path.Combine(wiki, "насосы.md"),
+            "# насосы\nкогда: Насосы, вентили, давление в трубах\nGas Volume Pump качает объём.\n");
     }
 }

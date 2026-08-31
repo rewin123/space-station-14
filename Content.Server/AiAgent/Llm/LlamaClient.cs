@@ -269,28 +269,31 @@ public sealed class LlamaClient : ILlmClient, IDisposable
                 finishReason = finishEl.GetString();
             }
 
-            var message = choices[0].GetProperty("message");
-
-            if (message.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.String)
-                text = contentEl.GetString();
-
-            if (message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
+            if (TryGetObject(choices[0], "message", out var message))
             {
-                foreach (var tc in toolCalls.EnumerateArray())
+                if (message.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.String)
+                    text = contentEl.GetString();
+
+                if (message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
                 {
-                    var fn = tc.GetProperty("function");
-                    calls.Add(new ToolCallDto
+                    foreach (var tc in toolCalls.EnumerateArray())
                     {
-                        Id = tc.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "",
-                        Type = "function",
-                        Function = new FunctionCallDto
+                        if (!TryGetObject(tc, "function", out var fn))
+                            continue;
+
+                        calls.Add(new ToolCallDto
                         {
-                            Name = fn.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "",
-                            Arguments = fn.TryGetProperty("arguments", out var argEl)
-                                ? (argEl.ValueKind == JsonValueKind.String ? argEl.GetString() ?? "{}" : argEl.GetRawText())
-                                : "{}",
-                        },
-                    });
+                            Id = tc.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "",
+                            Type = "function",
+                            Function = new FunctionCallDto
+                            {
+                                Name = fn.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "",
+                                Arguments = fn.TryGetProperty("arguments", out var argEl) && argEl.ValueKind != JsonValueKind.Null
+                                    ? (argEl.ValueKind == JsonValueKind.String ? argEl.GetString() ?? "{}" : argEl.GetRawText())
+                                    : "{}",
+                            },
+                        });
+                    }
                 }
             }
         }
@@ -304,18 +307,18 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         // the most direct signal; `usage.prompt_tokens_details.cached_tokens` is the OpenAI-shaped
         // fallback; if neither exists the ratio is simply unavailable and the caller says so
         // rather than reporting a confident zero.
-        if (root.TryGetProperty("usage", out var usage))
+        if (TryGetObject(root, "usage", out var usage))
         {
             prompt = GetInt(usage, "prompt_tokens");
             completion = GetInt(usage, "completion_tokens");
 
-            if (usage.TryGetProperty("prompt_tokens_details", out var details))
+            if (TryGetObject(usage, "prompt_tokens_details", out var details))
                 cached = GetInt(details, "cached_tokens");
 
             // Reasoning models spend part of the completion budget thinking before they write, and
             // that share does not appear anywhere else. Without it, "out 300т" looks like a verbose
             // answer when it was in fact 215 tokens of deliberation and a sentence that got cut off.
-            if (usage.TryGetProperty("completion_tokens_details", out var completionDetails))
+            if (TryGetObject(usage, "completion_tokens_details", out var completionDetails))
                 reasoning = GetInt(completionDetails, "reasoning_tokens");
 
             // DeepSeek reports its cache split under its own names.
@@ -323,7 +326,7 @@ public sealed class LlamaClient : ILlmClient, IDisposable
                 cached = GetInt(usage, "prompt_cache_hit_tokens");
         }
 
-        if (root.TryGetProperty("timings", out var timings))
+        if (TryGetObject(root, "timings", out var timings))
         {
             var cacheN = GetInt(timings, "cache_n");
             var promptN = GetInt(timings, "prompt_n");
@@ -392,9 +395,29 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         return _endpoint.CtxLimit > 0 ? _endpoint.CtxLimit : null;
     }
 
+    /// <summary>
+    /// Как <c>TryGetProperty</c>, но берёт поле только если оно — объект.
+    /// </summary>
+    /// <remarks>
+    /// vLLM сериализует незаполненные поля протокола как <c>null</c>, а не опускает их:
+    /// <c>"usage": {..., "prompt_tokens_details": null}</c> приходит В КАЖДОМ ответе, с кэшем и
+    /// без. Голый <c>TryGetProperty</c> такое поле находит, возвращает true с Null-элементом,
+    /// и следующий же вызов по этому элементу бросает InvalidOperationException — «requires
+    /// 'Object', but ... has 'Null'». Ровно этим сутки (24–25.08.2026) молчал ИИ на одиночном
+    /// эндпоинте с awq: vLLM отвечал 200, а разбор ронял каждый ход. llama.cpp и облачные API
+    /// null-полей не шлют, поэтому на них дыра не проявлялась ни разу.
+    /// </remarks>
+    private static bool TryGetObject(JsonElement el, string name, out JsonElement value)
+    {
+        value = default;
+        return el.ValueKind == JsonValueKind.Object
+               && el.TryGetProperty(name, out value)
+               && value.ValueKind == JsonValueKind.Object;
+    }
+
     private static int GetInt(JsonElement el, string name)
     {
-        if (!el.TryGetProperty(name, out var v))
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var v))
             return 0;
 
         return v.ValueKind switch

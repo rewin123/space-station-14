@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Content.Server.AiAgent.Bus;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Skills;
+using Content.Server.AiAgent.Vfs;
 using NUnit.Framework;
 using Robust.Shared.Log;
 
@@ -30,9 +31,15 @@ public sealed class BusRouterTests
 
     private string _dir = "";
     private AgentEventBus _bus = null!;
-    private MemoryStore _memory = null!;
-    private SkillStore _skills = null!;
-    private PlayerNoteStore _notes = null!;
+    /// <summary>
+    /// Файловая система «ядра». Роутер получает её целиком, а не три стора по отдельности:
+    /// библиотеки стали своими у каждого тела, и «отдай память процесса» перестало быть вопросом
+    /// с ответом.
+    /// </summary>
+    private Vfs _vfs = null!;
+
+    private MemoryStore _memory => _vfs.Memory!;
+    private DocTree _skills => _vfs.Skills!;
     private ConversationState _conv = null!;
     /// <summary>
     /// Витрина агентов. Пустая означает «тело никто не занял», непустая — сколько угодно агентов.
@@ -46,14 +53,8 @@ public sealed class BusRouterTests
         Directory.CreateDirectory(_dir);
 
         _bus = new AgentEventBus(512);
-        _memory = new MemoryStore(_dir, Sawmill);
-        _memory.AttachSink(_bus.ForProcess());
-        _memory.LoadFromDisk();
-
-        _skills = new SkillStore(_dir, Sawmill);
-        _notes = new PlayerNoteStore(_dir, Sawmill);
-        _skills.AttachSink(_bus.ForProcess());
-        _skills.LoadFromDisk();
+        _vfs = NewVfs();
+        _vfs.AttachSink(_bus.ForProcess());
 
         _conv = new ConversationState();
         _conv.AttachSink(_bus.ForSession("current"));
@@ -73,6 +74,13 @@ public sealed class BusRouterTests
     /// <summary>Records what the router asked the system to do, so commands can be asserted.</summary>
     private readonly List<string> _sent = new();
 
+    /// <summary>Та же таблица монтирований, что у живого агента, но без справочника.</summary>
+    private Vfs NewVfs(int memoryLimit = 4000) => new VfsBuilder(Sawmill)
+        .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
+        .AddNotes(_dir, "players", VfsAccess.Write, "заметки о людях", () => "[раунд 1 · 01.01]")
+        .AddMemory(_dir, "memory.md", VfsAccess.Write, "факты о станции", memoryLimit)
+        .Build();
+
     private AgentDebugRouter Router()
     {
         return new AgentDebugRouter(
@@ -81,9 +89,7 @@ public sealed class BusRouterTests
             // Маршрутизатор никогда не ищет сессию сам — ему дают витрину. Пустая моделирует
             // «тело никто не занял».
             _agents,
-            () => _memory,
-            () => _skills,
-            () => _notes,
+            () => _vfs,
             () => 42,
             (action, match, content) => action switch
             {
@@ -93,9 +99,13 @@ public sealed class BusRouterTests
                 _ => new MemoryResult(false, $"неизвестное действие '{action}'"),
             },
             (name, when, body, match, replacement) =>
-                match != null || replacement != null
+            {
+                var result = match != null || replacement != null
                     ? _skills.Edit(name, match ?? "", replacement ?? "")
-                    : _skills.Write(name, when ?? "", body ?? ""));
+                    : _skills.Write(name, name, when ?? "", body ?? "");
+
+                return new SkillResult(result.Ok, result.Message, result.Hints);
+            });
     }
 
     /// <summary>
@@ -118,6 +128,7 @@ public sealed class BusRouterTests
             Alive = alive,
             Capture = () => new AgentSessionDto(id, 100, 42, "хеш", "ПРОМПТ " + id, "[]", 0,
                 new[] { AgentMessageDto.From(0, new Content.Server.AiAgent.Llm.ChatMessageDto { Role = "user", Content = "привет от " + id }) },
+                System.Array.Empty<AgentFileDto>(),
                 Stats(), null),
             Roster = () => new AgentRosterEntryDto(id, name, 100, 42, 0, true, "Core", 1, 1, 0, 10, 1000, 0, false, null),
             Send = text =>
@@ -230,7 +241,7 @@ public sealed class BusRouterTests
     public async Task StateCarriesTheProcessStores()
     {
         _memory.Add("капитан доверяет мне");
-        _skills.Write("restore-core-power", "когда ядро обесточено", "звать инженеров");
+        _skills.Write("restore-core-power", "restore-core-power", "когда ядро обесточено", "звать инженеров");
 
         var body = Body(await Get("/state"));
 
@@ -242,7 +253,7 @@ public sealed class BusRouterTests
             Assert.That(body.GetProperty("memory").GetProperty("memory_live")[0].GetString(),
                 Is.EqualTo("капитан доверяет мне"));
             Assert.That(body.GetProperty("skills")[0].GetProperty("name").GetString(),
-                Is.EqualTo("restore-core-power"));
+                Is.EqualTo("restore-core-power.md"));
         });
     }
 
@@ -554,9 +565,7 @@ public sealed class BusRouterTests
     [Test]
     public async Task RefusedMemoryChangeIs400AndChangesNothing()
     {
-        var full = new MemoryStore(_dir, Sawmill) { MemoryLimit = 20 };
-        full.LoadFromDisk();
-        _memory = full;
+        _vfs = NewVfs(memoryLimit: 20);
 
         var response = await Post(
             "{\"type\":\"memory.change\",\"action\":\"add\",\"content\":\"" +
@@ -565,7 +574,7 @@ public sealed class BusRouterTests
         Assert.Multiple(() =>
         {
             Assert.That(response.Status, Is.EqualTo(400));
-            Assert.That(full.Entries(), Is.Empty);
+            Assert.That(_memory.Entries(), Is.Empty);
         });
     }
 }

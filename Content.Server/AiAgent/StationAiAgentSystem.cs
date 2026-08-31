@@ -59,6 +59,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     [Dependency] private RadioSystem _radio = default!;
     [Dependency] private SharedStationAiSystem _stationAi = default!;
     [Dependency] private MobStateSystem _mobState = default!;
+    [Dependency] private RoundEndConditionsSystem _roundEndConditions = default!;
     [Dependency] private SharedTransformSystem _xform = default!;
     [Dependency] private EntityLookupSystem _lookup = default!;
     [Dependency] private IPrototypeManager _protoMan = default!;
@@ -148,9 +149,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // out of nowhere to whoever connects first.
         StartDebugBus();
 
-        // Eagerly, so no first touch from the agent thread can race one from the main thread and
-        // build a second store that silently swallows whatever the loser wrote.
-        ReloadAgentFiles();
+        // Общий слой — до первой сессии: справочник и вика игры одни на процесс, и собирать их
+        // при первом обращении значило бы дать двум потокам построить по своему экземпляру.
+        ReloadSharedLibrary();
 
         // Роль Station AI закрывается для людей ДО того, как кто-либо заспавнится.
         //
@@ -577,8 +578,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
                 // point of the frozen-snapshot design: writes during play went to disk immediately
                 // but left the prefix untouched, and this is the one moment we are paying for a
                 // prefill anyway.
-                Memory.RefreshSnapshot();
-                Skills.LoadFromDisk();
+                body.Vfs.Reload();
                 return (body.BuildPrompt(), registry.WireJson());
             },
             new CompactionOptions
@@ -1101,8 +1101,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (!session.FirstUtteranceOf(speaker))
             return;
 
-        if (_notes != null && _notes.TryPeek(speaker, out var display, out var entries))
-            session.Queue.Push(Observation.Note(display, entries, now));
+        // Заметки теперь свои у каждого тела, поэтому и спрашиваем у этого тела. Побочный эффект,
+        // и он желаемый: борг перестал получать напоминания по досье Станционного ИИ.
+        if (session.Body.Vfs.Notes is { } notes && notes.TryPeek(speaker, out var display, out var entries))
+            session.Queue.Push(Observation.Note(display, Skills.PlayerNoteStore.Slugify(display), entries, now));
     }
 
     private void OnEntitySpoke(EntitySpokeEvent args)
@@ -1279,6 +1281,10 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         BumpGeneration(ent.Owner);
         Release(ent.Owner, "the AI died");
+
+        // Конец раунда решается в отдельной системе, но зовётся отсюда: подписаться на эту же пару
+        // «компонент + событие» второй раз движок не даёт (EntityEventBus.Directed.cs:418).
+        _roundEndConditions.OnStationAiDied(ent.Owner);
     }
 
     private void OnBrainInserted(Entity<LlmStationAiComponent> ent, ref EntGotInsertedIntoContainerMessage args)
@@ -1504,26 +1510,38 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// refuse with <c>review_mode</c> while the skill and memory tools keep working — which is why
     /// the tool array can stay byte-identical to play and the warm prefix survives.
     /// </summary>
-    private async Task RunCuratorAsync(AgentSession session, Tools.AiToolRegistry registry)
+    /// <returns>
+    /// Короткий отчёт с припиской <c>CURATOR</c>, если разбор что-то записал, иначе <c>null</c>.
+    /// Кладёт его в диалог не этот метод, а шаг <c>report</c> ритуала — после свёртки, чтобы она
+    /// его не стёрла, и до перестройки префикса, чтобы отчёт и свежий блок ПАМЯТЬ приехали вместе.
+    /// </returns>
+    private async Task<string?> RunCuratorAsync(AgentSession session, Tools.AiToolRegistry registry)
     {
         if (!_cfg.GetCVar(AiCVars.CuratorEnabled))
-            return;
+            return null;
 
         // Куратор один на процесс, и клиент ему достаётся от того агента, который первым дошёл до
         // компакции. Это осознанное упрощение: куратор — разбор собственных записей, а не игровое
         // действие, и держать по экземпляру на тело значило бы дублировать его счётчики ради
         // разницы, которой в отчёте не видно.
         _curator ??= new Skills.Curator(EnsureClientFor(session.Body)!, _sawmill);
-        Memory.ResetTurnCounters();
-        Notes.ResetTurnCounters();
+        session.Body.Vfs.Memory?.ResetTurnCounters();
+        session.Body.Vfs.Notes?.ResetTurnCounters();
 
-        await _curator.ReviewAsync(
+        var verdict = await _curator.ReviewAsync(
             session.Conv,
             registry.WireSchemas(),
             session.Dispatcher,
-            Skills.RenderIndex(),
+            session.Body.Vfs,
             maxSteps: _cfg.GetCVar(AiCVars.MaxToolCallsPerTurn),
             session.Cts.Token).ConfigureAwait(false);
+
+        // Отчёт только когда разбор ДЕЙСТВИТЕЛЬНО что-то записал. «Прочитал и решил, что писать
+        // нечего» — законный исход, и тратить на него строку в диалоге каждую компакцию незачем.
+        if (_curator.LastWrites == 0 || string.IsNullOrWhiteSpace(verdict))
+            return null;
+
+        return $"CURATOR {verdict!.Trim()}";
     }
 
     /// <summary>

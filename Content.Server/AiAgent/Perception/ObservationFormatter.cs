@@ -30,8 +30,7 @@ public static class ObservationFormatter
         ObsKind.Arrival => string.IsNullOrEmpty(o.Text)
             ? $"ARRIVAL {o.Speaker}"
             : $"ARRIVAL {o.Speaker} ({o.Text})",
-        ObsKind.Note => $"NOTE о «{o.Speaker}» есть заметки ({o.Text}) — " +
-                        "read_player_related_memory, если пригодится",
+        ObsKind.Note => $"NOTE о «{o.Speaker}» есть заметки ({o.Text}) — /players/{o.Channel}",
         ObsKind.Observed => $"OBSERVED {o.Channel} | {o.Text}",
         _ => $"EVENT {o.Text}",
     };

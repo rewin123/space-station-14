@@ -199,4 +199,80 @@ public sealed class LookCostTests
         var cost = await w.Read(() => w.System.LastLookCost());
         return cost.ViewMs + cost.GatherMs + cost.RowsMs;
     }
+    /// <summary>
+    /// Нарезаемый обзор видит РОВНО то же, что апстримовый, — тайл в тайл, при любой мелкости среза.
+    ///
+    /// <para>
+    /// Это единственное, что оправдывает существование своей копии теневого каста. Копия чужого
+    /// алгоритма расходится с оригиналом молча: ИИ начинает видеть на тайл больше или меньше, чем
+    /// увидел бы игрок на этой роли, и в игре это неотличимо от «модель так решила». Утверждение
+    /// «перенесли точно» либо проверяемо, либо это обещание.
+    /// </para>
+    /// <para>
+    /// Гоняется дважды. Целым срезом — проверка, что порт верен сам по себе. Срезом с нулевым
+    /// бюджетом, то есть с разрывом при первой возможности, — проверка, что состояние переживает
+    /// границу кадра: именно здесь всплыло бы забытое поле или счётчик, сброшенный не там.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task SlicedView_MatchesUpstreamTileForTile()
+    {
+        await using var w = await AiStation.Create();
+
+        var places = new List<string> { "Bridge", "Atmospherics", "Medical", "Cargo" };
+        var checkedSpots = 0;
+
+        foreach (var place in places)
+        {
+            var at = await w.Beacon(place);
+            if (at == null)
+                continue;
+
+            var moved = await w.Invoke("move_camera",
+                $"{{\"x\":{at.Value.X.ToString("F0", global::System.Globalization.CultureInfo.InvariantCulture)}," +
+                $"\"y\":{at.Value.Y.ToString("F0", global::System.Globalization.CultureInfo.InvariantCulture)}}}");
+
+            if (!moved.Ok)
+                continue;
+
+            foreach (var expand in new[] { 0, 2 })
+            {
+                foreach (var grain in new double[] { 1000, 0 })
+                {
+                    var (upstream, sliced, slices) =
+                        await w.Read(() => w.System.CompareViewPathsForTest(w.Brain, expand, grain));
+
+                    var lost = upstream.Except(sliced).ToList();
+                    var extra = sliced.Except(upstream).ToList();
+
+                    TestContext.Out.WriteLine(
+                        $"{place} expand={expand} зерно={grain}мс: апстрим {upstream.Count} тайлов, " +
+                        $"нарезкой {sliced.Count} за {slices} срезов, " +
+                        $"потеряно {lost.Count}, лишних {extra.Count}");
+
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(lost, Is.Empty,
+                            $"{place} expand={expand}: нарезка потеряла {lost.Count} тайлов из тех, что видит апстрим");
+                        Assert.That(extra, Is.Empty,
+                            $"{place} expand={expand}: нарезка выдумала {extra.Count} тайлов, которых апстрим не видит");
+                    });
+
+                    // При нулевом зерне резаться обязано хотя бы раз: иначе тест «переживает границу
+                    // кадра» ничего не проверил, а просто прогнал всё одним куском.
+                    if (grain == 0 && upstream.Count > 0)
+                    {
+                        Assert.That(slices, Is.GreaterThan(1),
+                            $"{place} expand={expand}: обзор посчитался одним срезом — резка не сработала");
+                    }
+
+                    checkedSpots++;
+                }
+            }
+        }
+
+        Assert.That(checkedSpots, Is.GreaterThan(0),
+            "ни одного маяка не нашлось — сравнивать было нечего, и зелёный тест ничего не значит");
+    }
+
 }

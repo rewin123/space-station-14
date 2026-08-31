@@ -90,13 +90,15 @@ public sealed class PerceptionTests
     }
 
     [Test]
-    public void Note_RendersTheNameAndHowToOpenIt()
+    public void Note_RendersTheNameAndWhereToOpenIt()
     {
+        // Путь, а не имя инструмента. Прежняя строка советовала инструмент и оставляла агенту
+        // угадывать, как записан человек; теперь напоминание сразу называет файл.
         var line = ObservationFormatter.FormatLine(
-            Observation.Note("Иван Петров", 3, TimeSpan.FromMinutes(3)));
+            Observation.Note("Иван Петров", "иван-петров", 3, TimeSpan.FromMinutes(3)));
 
         Assert.That(line, Is.EqualTo(
-            "NOTE о «Иван Петров» есть заметки (3) — read_player_related_memory, если пригодится"));
+            "NOTE о «Иван Петров» есть заметки (3) — /players/иван-петров"));
     }
 
     [Test]

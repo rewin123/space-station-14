@@ -67,6 +67,21 @@ public sealed record InteractOp(
     bool CheckCanInteract,
     bool CheckAccess) : ScenarioOp;
 
+/// <summary>
+/// Телепорт тела: МИРОВЫЕ позиция и поворот разом.
+///
+/// ПОЧЕМУ ОТДЕЛЬНАЯ ОПЕРАЦИЯ, А НЕ <see cref="SetOp"/> ПО ПОЛЯМ ТРАНСФОРМА.
+/// Мировая позиция в Robust — не поле компонента, а величина, считаемая по
+/// цепочке родителей; запись в LocalPosition рефлексией не перевесила бы
+/// сущность между сеткой и картой и не подняла бы событие движения. Обоим
+/// движкам доступен ровно один общий вход —
+/// SharedTransformSystem.SetWorldPositionRotation, — в него операция и бьёт.
+///
+/// Позиция и поворот задаются ВМЕСТЕ, потому что вместе их ставит и оригинал:
+/// два раздельных вызова подняли бы два события движения вместо одного.
+/// </summary>
+public sealed record MoveOp(int Entity, float X, float Y, double Rot) : ScenarioOp;
+
 /// <summary>Операция контейнера: положить или достать.</summary>
 public sealed record ContainerOp(string Action, int Owner, string Key, int Entity) : ScenarioOp;
 
@@ -189,6 +204,22 @@ public sealed class Scenario
                     Req(el, "comp", path, line).GetString(),
                     Req(el, "field", path, line).GetString(),
                     Req(el, "value", path, line).Clone()) { Line = line };
+            case "move":
+            {
+                var at = Req(el, "at", path, line);
+                var coords = at.EnumerateArray().Select(x => x.GetSingle()).ToArray();
+                if (coords.Length != 2)
+                    throw new InvalidDataException($"{path}:{line}: \"at\" — ровно два числа [x, y]");
+
+                // Поворот обязателен, а не «оставить нынешний»: умолчание
+                // пришлось бы читать из мира, и два движка прочли бы его в
+                // разный момент.
+                return new MoveOp(
+                    Req(el, "entity", path, line).GetInt32(),
+                    coords[0],
+                    coords[1],
+                    Req(el, "rot", path, line).GetDouble()) { Line = line };
+            }
             case "interact":
                 return new InteractOp(
                     Req(el, "kind", path, line).GetString(),

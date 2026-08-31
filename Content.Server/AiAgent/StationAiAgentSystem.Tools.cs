@@ -333,8 +333,11 @@ public sealed partial class StationAiAgentSystem
         // ---------------------------------------------------------------- таймеры
         RegisterTimerTools(s, r);
 
-        // ------------------------------------------------- skills and memory
-        RegisterMemoryTools(s, r);
+        // ---------------------------------------------- файловая система агента
+        //
+        // Ни один из трёх не помечен GameAction — и это несущее свойство. Именно оно позволяет
+        // куратору писать на разборе отрезка, когда игровые инструменты отвечают review_mode.
+        RegisterVfsTools(s, r);
     }
 
     // ---------------------------------------------------------------- observation
@@ -567,6 +570,38 @@ public sealed partial class StationAiAgentSystem
     /// «жив» для мозга в ядре и для шасси на батарее — разные вопросы.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// То же, что <see cref="OnMainAsync"/>, но тяжёлая часть режется по бюджету кадра.
+    ///
+    /// <para>
+    /// Заведено под <c>look</c> и пока используется только им. Причина в цифрах: по профилю фаз
+    /// теневой каст — это 18-22 мс из 24-29, то есть кадр целиком, а сбор сущностей и строки —
+    /// единицы миллисекунд. Пока каждый вызов стоил круга через модель, это было терпимо; в режиме
+    /// Lua скрипт зовёт look в цикле, и главный поток встал.
+    /// </para>
+    /// </summary>
+    public Task<ToolResult> OnMainSlicedAsync(
+        AgentSession s,
+        string what,
+        Func<Threading.JobBudget, bool> step,
+        Func<ToolResult> finish,
+        CancellationToken ct,
+        TimeSpan? timeout = null)
+    {
+        var brain = s.Brain;
+        var generation = s.Generation;
+        var alive = s.Body.Alive;
+
+        // Проверка живости стоит в ОБОИХ половинах, и это не дублирование: между первым срезом и
+        // хвостом проходят кадры, за которые агента вполне может не стать. В тяжёлой части она
+        // работает как выход — считать обзор для выбывшего незачем.
+        var job = new Threading.SteppedJob<ToolResult>(what, PriorityOf(what),
+            budget => !alive() || step(budget),
+            () => !alive() ? ToolResult.Fail(ToolError.Dead, "агент больше не в игре") : finish());
+
+        return _world.SubmitAsync(job, job.Task, generation, () => GenerationOf(brain), ct, timeout);
+    }
+
     public Task<ToolResult> OnMainAsync(AgentSession s, string what, Func<ToolResult> body,
         CancellationToken ct, TimeSpan? timeout = null)
     {

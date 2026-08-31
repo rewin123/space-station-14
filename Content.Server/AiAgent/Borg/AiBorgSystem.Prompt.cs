@@ -76,7 +76,7 @@ public sealed partial class AiBorgSystem
         уезжает на шаг. Сомневаешься в обстановке — сделай свежий look, а не пересчёт.
         """;
 
-    private string BuildBorgPrompt(EntityUid borg, AiBorgComponent comp, bool scripted)
+    private string BuildBorgPrompt(EntityUid borg, AiBorgComponent comp, bool scripted, Vfs.Vfs? vfs = null)
     {
         // Режим решается один раз, при сборке тела, и дальше не меняется. Читать cvar отсюда было
         // бы ошибкой: промпт живёт в замороженном префиксе и пересобирается только на старте
@@ -113,7 +113,7 @@ public sealed partial class AiBorgSystem
               LAWS текст                         — твои законы изменили
               EVENT текст                        — прочее; сюда же приходят ARRIVED и NOPATH
               TIMER имя | текст                  — сработал твой таймер
-              NOTE имя | n                       — у тебя есть заметки об этом человеке
+              NOTE о «имя» есть заметки (n) — путь — заметки об этом человеке у тебя есть
               OBSERVED вид | участники | Δ(dx,dy) (x,y) — что произошло рядом с тобой
               SELF ...                           — твоё состояние
               DROPPED n                          — столько строк не поместилось
@@ -160,6 +160,20 @@ public sealed partial class AiBorgSystem
             и замедляешься. Заряжаться — на зарядной станции. Тебя можно чинить, разбирать и
             выключать; ты уязвим.
 
+            """);
+
+        if (TryGetBorgGun(borg, out _))
+        {
+            sb.Append("""
+                ВСТРОЕННЫЙ СТВОЛ
+
+                Лазер сидит в корпусе, не в руке. shoot стреляет им. Свой заряд, не батарея шасси:
+                модули живут отдельно. Сел ствол — стрелять нечем до конца смены.
+
+                """);
+        }
+
+        sb.Append("""
             КАК ТЫ СЕБЯ ВЕДЁШЬ
 
             Ты сотрудник станции, а не голосовой помощник. Отвечай коротко и по делу. Если к тебе
@@ -172,13 +186,15 @@ public sealed partial class AiBorgSystem
         if (!string.IsNullOrWhiteSpace(soul))
             sb.Append("\n\n").Append(soul);
 
-        var memory = _host.Memory.Snapshot();
+        // Своя память и своё дерево, а не хозяйские. До расшивки сюда уезжали снимок памяти и
+        // индекс скиллов Станционного ИИ — двадцать килобайт чужой библиотеки, применить которую
+        // роботу нечем, и досье на экипаж, знать которые он не должен.
+        var memory = vfs?.Memory?.Snapshot() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(memory))
             sb.Append("\n\n").Append(memory);
 
-        var skills = _host.Skills.RenderIndex();
-        if (!string.IsNullOrWhiteSpace(skills))
-            sb.Append("\n\n").Append(skills);
+        if (vfs != null)
+            sb.Append("\n\n").Append(vfs.RenderRoot());
 
         return sb.ToString();
     }
@@ -288,6 +304,9 @@ public sealed partial class AiBorgSystem
             parts.Add(held.Count > 0
                 ? $"в_руках=[{string.Join(", ", held)}]"
                 : "в_руках=пусто");
+
+            if (TryGetBorgGun(borg, out _))
+                parts.Add("ствол=встроенный лазер");
 
             parts.Add(IsWalking(borg) ? "иду=да" : "иду=нет");
         }

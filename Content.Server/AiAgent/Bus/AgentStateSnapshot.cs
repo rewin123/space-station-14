@@ -106,6 +106,26 @@ public sealed record AgentRosterEntryDto(
     [property: JsonPropertyName("pending_input")] bool PendingInput,
     [property: JsonPropertyName("last_error")] string? LastError);
 
+/// <summary>
+/// Один узел файловой системы агента: путь, вид, описание, размер, права.
+///
+/// <para>
+/// Тела файла здесь нет намеренно — дерево запрашивают, чтобы посмотреть на состав, а тела статей
+/// справочника весят полтора мегабайта на всех. Тело открывается отдельным запросом, как и раньше
+/// открывалось тело скилла.
+/// </para>
+/// <para>
+/// Права отдаются строкой <c>r--</c>/<c>rw-</c>, а не булевым флагом: в интерфейсе это подпись, а
+/// не логика, и одинаковая с тем, что видит сам агент в зоне 0.
+/// </para>
+/// </summary>
+public sealed record AgentFileDto(
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("dir")] bool IsDir,
+    [property: JsonPropertyName("desc")] string Desc,
+    [property: JsonPropertyName("size")] int Size,
+    [property: JsonPropertyName("access")] string Access);
+
 public sealed record AgentSkillDto(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("when")] string When,
@@ -138,6 +158,17 @@ public sealed record AgentSessionDto(
     [property: JsonPropertyName("tools_json")] string ToolsJson,
     [property: JsonPropertyName("body_epoch")] int BodyEpoch,
     [property: JsonPropertyName("messages")] IReadOnlyList<AgentMessageDto> Messages,
+    /// <summary>
+    /// Дерево файлов ЭТОГО агента, на два уровня от корня.
+    ///
+    /// <para>
+    /// Появилось, когда библиотеки перестали быть общими: процессный снимок с одной памятью и
+    /// одним списком записей стал неправдой — у ядра и у каждого киборга они свои. Глубже двух
+    /// уровней не ходим: полное дерево справочника это те самые 226 строк, ради избавления от
+    /// которых всё и затевалось.
+    /// </para>
+    /// </summary>
+    [property: JsonPropertyName("files")] IReadOnlyList<AgentFileDto> Files,
     [property: JsonPropertyName("stats")] AgentStatsDto Stats,
     [property: JsonPropertyName("last_turn")] AgentTurnDto? LastTurn);
 

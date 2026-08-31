@@ -229,9 +229,8 @@ public sealed class ContractTests
         {
             foreach (var needed in new[]
                      {
-                         "read_player_related_memory",
-                         "edit_player_related_memory",
-                         "search_player_related_notes",
+                         "/players",
+                         "edit_file",
                          "[раунд",
                          "NOTE",
                      })
@@ -269,6 +268,53 @@ public sealed class ContractTests
             Assert.That(prompt, Does.Not.Contain("Бонифаций Крот"));
             Assert.That(prompt, Does.Not.Contain("Ботаник."));
         });
+    }
+
+    /// <summary>
+    /// Списка файлов в зоне 0 быть не должно — это и была вся болезнь.
+    ///
+    /// Прежний индекс скиллов занимал 16 425 символов замороженного префикса и рос от каждой
+    /// записи агента. Зеркало теста про заметки: у них такой индекс не завёлся, у скиллов завёлся
+    /// и жил, пока не съел заметную долю окна.
+    /// </summary>
+    [Test]
+    [Category("AiTools")]
+    public async Task Prompt_DoesNotCarryAFileIndex()
+    {
+        await using var w = await AiWorld.Create();
+        var prompt = await w.Read(() => w.System.BuildSystemPromptForTest());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prompt, Does.Contain("ФАЙЛОВАЯ СИСТЕМА"), "корень дерева обязан быть");
+            Assert.That(prompt, Does.Contain("/wiki_ru"));
+
+            // Ни одной статьи справочника по имени: они открываются, а не перечисляются.
+            Assert.That(prompt, Does.Not.Contain("атмосфера/насосы"));
+            Assert.That(prompt, Does.Not.Contain("СКИЛЛЫ (открывай"));
+        });
+    }
+
+    /// <summary>
+    /// А вот ПАМЯТЬ из зоны 0 уезжать не должна — и это отдельный сторож, а не придирка.
+    ///
+    /// Индекс и память лежали рядом и подавались одинаково; убирая индекс, ровно так же легко
+    /// унести и память, а заметит это только живой раунд, на котором агент перестанет помнить
+    /// станцию.
+    /// </summary>
+    [Test]
+    [Category("AiTools")]
+    public async Task Prompt_StillCarriesTheMemoryBlock()
+    {
+        await using var w = await AiWorld.Create();
+
+        await w.Post(() => w.System.Memory.Add("АПЦ научного отдела питает и криогенику"));
+        await w.Post(() => w.System.Memory.RefreshSnapshot());
+
+        var prompt = await w.Read(() => w.System.BuildSystemPromptForTest());
+
+        Assert.That(prompt, Does.Contain("АПЦ научного отдела питает и криогенику"),
+            "MEMORY.md — главный источник памяти и грузится в промпт целиком");
     }
 
     [Test]

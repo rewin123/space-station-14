@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Content.Server.AiAgent.Context;
 using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Tools;
+using Content.Server.AiAgent.Vfs;
 
 namespace Content.Server.AiAgent.Skills;
 
@@ -32,6 +33,23 @@ public sealed class Curator
     public int Runs { get; private set; }
     public string? LastVerdict { get; private set; }
 
+    /// <summary>
+    /// Сколько раз последний разбор реально что-то записал.
+    ///
+    /// <para>
+    /// Считаются успешные вызовы записи, а не ответы модели. Отчёт в диалог уходит только когда
+    /// это число больше нуля: «прочитал и решил, что записывать нечего» — законный исход разбора,
+    /// и сообщать о нём агенту значило бы каждую компакцию тратить строку на «ничего не сделал».
+    /// </para>
+    /// </summary>
+    public int LastWrites { get; private set; }
+
+    /// <summary>Имена инструментов, успешный вызов которых считается записью.</summary>
+    private static readonly HashSet<string> Writers = new(StringComparer.Ordinal)
+    {
+        "write_file", "edit_file",
+    };
+
     public Curator(ILlmClient llm, ISawmill sawmill)
     {
         _llm = llm;
@@ -48,15 +66,16 @@ public sealed class Curator
         ConversationState conv,
         IReadOnlyList<ToolDto>? tools,
         ToolDispatcher dispatcher,
-        string skillIndex,
+        Vfs.Vfs vfs,
         int maxSteps,
         CancellationToken ct)
     {
         Runs++;
+        LastWrites = 0;
 
         // A copy: the review question and its answers must never contaminate the game history.
         var messages = conv.Build();
-        messages.Add(ChatMessageDto.User(BuildPrompt(skillIndex)));
+        messages.Add(ChatMessageDto.User(BuildPrompt(vfs)));
 
         string? verdict = null;
 
@@ -109,90 +128,68 @@ public sealed class Curator
                 // curator that decided to call announce simply announced, mid-round.
                 var inv = await dispatcher.InvokeAsync(call, DispatchGate.NoGameActions, ct).ConfigureAwait(false);
                 messages.Add(ChatMessageDto.Tool(call.Id, inv.Result.ToJson()));
+
+                if (inv.Result.Ok && Writers.Contains(call.Function.Name))
+                    LastWrites++;
             }
         }
 
         LastVerdict = verdict;
-        _sawmill.Info($"куратор #{Runs}: {Truncate(verdict, 300)}");
+        _sawmill.Info($"куратор #{Runs}: записей {LastWrites}, вердикт {Truncate(verdict, 300)}");
         return verdict;
     }
 
     /// <summary>
-    /// The review prompt, carried over from hermes with the station substituted for the user.
-    ///
-    /// Two lists do the heavy lifting. The <b>preference order</b> keeps the library from
-    /// degenerating into a flat pile of one-session entries. The <b>anti-capture list</b> keeps out
-    /// the things that harden into self-imposed constraints — above all negative claims about
-    /// tools, which the original puts plainly: they become refusals the agent cites against itself
-    /// for months after the actual problem was fixed.
+    /// Имя файла с промптом разбора и подстановка внутри него.
     /// </summary>
-    private static string BuildPrompt(string skillIndex)
+    /// <remarks>
+    /// Файл, а не константа в коде, потому что правка файла рядом с <c>SOUL.md</c> — главный
+    /// отладочный аффорданс этого проекта, а промпт разбора правится чаще личности. Смонтирован он
+    /// только на чтение: инструкция разбора, которую разбор может себе переписать, перестаёт быть
+    /// инструкцией.
+    /// </remarks>
+    public const string PromptFile = "CURATOR.md";
+
+    /// <summary>Куда в файле встаёт корень файловой системы.</summary>
+    public const string RootPlaceholder = "{{КОРЕНЬ}}";
+
+    /// <summary>
+    /// Собрать вопрос разбора: текст из <c>CURATOR.md</c> плюс подставленный корень дерева.
+    ///
+    /// <para>
+    /// Корень повторяется здесь, хотя он уже стоит в зоне 0, — по той же причине, по которой
+    /// раньше повторялся индекс: десятью тысячами токенов раньше модель его не замечает. Разница в
+    /// цене: индекс стоил 16 килобайт на каждый разбор, корень стоит около семисот символов.
+    /// </para>
+    /// </summary>
+    private string BuildPrompt(Vfs.Vfs vfs)
     {
-        // The index is repeated here even though it is already in zone 0: ten thousand tokens
-        // earlier, the model does not notice it.
-        var index = string.IsNullOrWhiteSpace(skillIndex) ? "  (библиотека пуста)" : skillIndex;
+        var text = vfs.Curator?.Text() ?? string.Empty;
 
-        // $$ — чтобы литеральные фигурные скобки в примерах вызова инструментов не читались как
-        // интерполяция; интерполируется только {{index}}.
-        return $$"""
-            Разговор выше окончен, ты сейчас не играешь — ты разбираешь прошедший отрезок.
-            Игровые инструменты сейчас откажут, и это нормально.
+        if (text.Length == 0)
+        {
+            // Молча не разбирать нельзя: снаружи это выглядит как «агент перестал учиться» и не
+            // даёт ни строки в лог. Запасной текст короткий намеренно — он должен работать, а не
+            // подменять собой файл, который надо вернуть на место.
+            _sawmill.Error($"{PromptFile} не найден — разбор идёт по встроенному запасному тексту");
+            text = Fallback;
+        }
 
-            Обнови три вещи.
-
-            ПАМЯТЬ — что ты знаешь о станции и о мире. Записывай факты, которые пригодятся через
-            час и через раунд: чей APC что питает, где что стоит, на чём ты сам обжёгся.
-            memory(action='add'|'replace'|'remove', ...). Про людей сюда не пиши — для них
-            отдельные заметки, см. ниже.
-
-            ЛЮДИ — по заметке на человека, и это всё, что ты о людях помнишь.
-            Про каждого, с кем сегодня был разговор по делу, запиши строку:
-            edit_player_related_memory {"name":"<имя>","new":"<что узнал>"}. Номер раунда и дату
-            проставлю я. Имя бери ровно то, каким человек звучит в эфире; не уверен, что заметка
-            уже есть, — search_player_related_notes {"approx_name":"<имя>"}.
-            Про кого писать: кто обещал и сделал, кто соврал, кто просил доступ и зачем, кто
-            оказался не тем, за кого себя выдавал. Про кого НЕ писать: «зашёл, поздоровался» — это
-            не знание.
-
-            СКИЛЛЫ — как делать этот класс задач. Будь активен: почти каждый отрезок даёт хотя бы
-            одну правку. Проход, который ничего не записал, — это упущенный урок, а не нейтральный
-            результат.
-
-            Твоя нынешняя библиотека:
-            {{index}}
-
-            Поводы записать скилл (хватит любого):
-              • застрял и выбрался — запиши, как выбрался;
-              • инструмент повёл себя не так, как обещал скилл, — почини скилл немедленно;
-              • узнал про станцию что-то неочевидное;
-              • цепочка действий сработала от начала до конца.
-
-            Порядок предпочтения, бери первое подходящее:
-              1. Дополни скилл, которым ты пользовался в этом отрезке.
-              2. Дополни существующий подходящий скилл через skill_edit.
-              3. И только если ничего не подходит — создай новый, на уровне КЛАССА задач.
-                 Если имя осмысленно только для сегодняшнего случая, оно неправильное.
-
-            Опирайся на поле effect в ответах инструментов — это то, что сервер реально считал
-            после действия, а не твоё намерение. Если effect не подтвердил результат, значит
-            действие не сработало, как бы уверенно ты о нём ни думал.
-
-            НЕ записывай:
-              • разовые сбои окружения (обесточено, провод перерезан, не было связи) — это состояние
-                мира на минуту, а не правило;
-              • утверждения вида «инструмент X не работает» — они затвердевают в отказы, которые ты
-                потом месяцами цитируешь сам себе, хотя проблему давно починили;
-              • пересказ того, что было, без вывода;
-              • цепочку неудачных попыток как «надёжный способ» — это выдаёт непроверенную
-                последовательность за проверенное руководство.
-
-            Если у тебя провалилась попытка и ты не понял почему — так и запиши в память одной
-            строкой, но скилл на этом не строй.
-
-            Когда закончишь, ответь одной-двумя фразами: что записал и почему. Если записывать
-            действительно нечего — скажи «Нечего сохранять» и объясни, почему.
-            """;
+        return text.Replace(RootPlaceholder, vfs.RenderRoot(), StringComparison.Ordinal);
     }
+
+    /// <summary>Запасной текст на случай пропажи файла. Не замена ему, а способ не молчать.</summary>
+    private const string Fallback = """
+        Разговор выше окончен, ты сейчас не играешь — ты разбираешь прошедший отрезок.
+        Игровые инструменты сейчас откажут, и это нормально.
+
+        Обнови три вещи: память (/memory.md), заметки о людях (/players) и свои записи (/skills).
+        Сначала посмотри, что там уже есть: sh {"cmd":"ls /skills"}.
+
+        {{КОРЕНЬ}}
+
+        Когда закончишь, ответь одной-двумя фразами: что записал и почему.
+        """;
 
     private static string Truncate(string? s, int max) =>
         string.IsNullOrEmpty(s) ? "(пусто)" : s.Length <= max ? s : s[..max] + "…";

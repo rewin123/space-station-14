@@ -36,12 +36,18 @@ public sealed partial class StationAiAgentSystem
         // при переключении cvar посреди раунда.
         var scripted = _cfg.GetCVar(AiCVars.ScriptMode);
 
+        // Своя файловая система ядра. Сохраняется полем, потому что BuildSystemPrompt — Func<string>
+        // без аргументов: и блок ПАМЯТЬ, и корень дерева обязаны описывать одно и то же тело.
+        var vfs = BuildVfs(CoreAgentId);
+        CoreVfs = vfs;
+
         return new AgentBody
         {
             Owner = brain,
             Id = CoreAgentId,
             Name = AgentName,
             SoulFile = StationSoulFile(),
+            Vfs = vfs,
             LlmChain = StationLlmChain(),
             Eye = () => _stationAi.TryGetCore(brain, out var core) ? core.Comp?.RemoteEntity : null,
             Alive = () => IsPlayable(brain),

@@ -21,7 +21,10 @@ public sealed class CompactionHooks
     public required Func<(string SystemPrompt, string ToolsJson)> RebuildPrefix { get; init; }
 
     /// <summary>The review. Optional because <c>ai.curator_enabled</c> can turn it off.</summary>
-    public Func<Task>? Curate { get; init; }
+    /// <summary>
+    /// Разбор отрезка. Возвращает короткий отчёт о том, что записал, или <c>null</c>.
+    /// </summary>
+    public Func<Task<string?>>? Curate { get; init; }
 }
 
 /// <summary>Everything one compaction may read or write. A step cannot reach for anything else.</summary>
@@ -49,6 +52,9 @@ public sealed class CompactionContext
     public int BeforeMessages { get; set; }
     public int BeforeTokens { get; set; }
     public int TailCount { get; set; }
+
+    /// <summary>Отчёт разбора, если он что-то записал. Пишет шаг curator, читает шаг report.</summary>
+    public string? CuratorReport { get; set; }
 }
 
 /// <summary>One step of the ritual.</summary>
@@ -86,6 +92,7 @@ public static class CompactionSteps
         new CurateStep(),
         new SummariseStep(),
         new FoldStep(),
+        new ReportStep(),
         new RebuildPrefixStep(),
         new CommitStep(),
     };
@@ -149,7 +156,7 @@ public static class CompactionSteps
         public async Task<bool> RunAsync(CompactionContext ctx, CancellationToken ct)
         {
             if (ctx.Hooks.Curate != null)
-                await ctx.Hooks.Curate().ConfigureAwait(false);
+                ctx.CuratorReport = await ctx.Hooks.Curate().ConfigureAwait(false);
 
             return true;
         }
@@ -247,6 +254,41 @@ public static class CompactionSteps
             // One message, and no tail after it. Two adjacent user messages would fabricate a turn
             // boundary, and an orphaned tool result would be a protocol error outright.
             ctx.Conv.ReplaceBody(body, Array.Empty<ChatMessageDto>());
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <summary>
+    /// Вернуть агенту отчёт о том, что разбор записал.
+    ///
+    /// <para>
+    /// Раньше вердикт уходил только в лог. Агент не знал, что вообще что-то записал: разбор идёт
+    /// на копии цепочки и исчезает вместе с ней. Правило «разбор не загрязняет игровую историю»
+    /// этим сужается сознательно — стенограмма разбора по-прежнему не попадает в диалог ни одной
+    /// строкой, попадает только вывод в одну-две фразы.
+    /// </para>
+    /// <para>
+    /// <b>Место в ритуале — не случайность.</b> Раньше свёртки отчёт был бы стёрт: <c>ReplaceBody</c>
+    /// чистит тело. Позже перестройки префикса он разошёлся бы с зоной 0: отчёт говорит «записал в
+    /// /memory.md», а блок ПАМЯТЬ ещё показывал бы прежний текст. Между ними — единственная точка,
+    /// где обе вещи приезжают к агенту согласованными.
+    /// </para>
+    /// <para>
+    /// Кладётся через <c>AppendUserOrMerge</c>, а не <c>AppendUser</c>: свёртка только что
+    /// положила в тело одно user-сообщение со сводкой, и второе подряд сфабриковало бы границу
+    /// хода там, где её нет.
+    /// </para>
+    /// </summary>
+    private sealed class ReportStep : ICompactionStep
+    {
+        public string Name => "report";
+        public bool Fatal => false;
+
+        public Task<bool> RunAsync(CompactionContext ctx, CancellationToken ct)
+        {
+            if (!string.IsNullOrWhiteSpace(ctx.CuratorReport))
+                ctx.Conv.AppendUserOrMerge(ctx.CuratorReport!);
+
             return Task.FromResult(true);
         }
     }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using Content.Shared.NPC;
@@ -6,6 +7,7 @@ using Content.Shared.Pinpointer;
 using Robust.Shared.Physics;
 using Robust.Shared.Physics.Systems;
 using Robust.Shared.Map;
+using Robust.Shared.Map.Components;
 
 namespace Content.Server.AiAgent.Borg;
 
@@ -33,8 +35,65 @@ namespace Content.Server.AiAgent.Borg;
 /// </summary>
 public sealed partial class AiBorgSystem
 {
-    /// <summary>Куда робот шёл на самом деле и сколько раз мы уже перекладывали маршрут.</summary>
-    private readonly Dictionary<EntityUid, (EntityCoordinates Dest, string Goal, int Replans)> _goals = new();
+    /// <summary>
+    /// Куда робот шёл на самом деле, сколько раз мы уже перекладывали маршрут и ГДЕ ЦЕЛЬ БЫЛА,
+    /// когда маршрут прокладывали.
+    /// </summary>
+    /// <remarks>
+    /// Последнее поле нужно для погони. Цель по хендлу привязана к самой сущности
+    /// (<c>new EntityCoordinates(target, zero)</c>) именно затем, чтобы человек, к которому робот
+    /// пошёл, мог продолжать идти, — так написано в <c>TryResolveDestination</c>. Но привязка
+    /// делала половину дела: координата ехала за человеком, а путь оставался проложенным до места,
+    /// где тот стоял в момент вызова <c>goto</c>. Робот доходил до пустого пола и докладывал
+    /// прибытие. Разность между «где цель сейчас» и «где она была при прокладке» — единственный
+    /// дешёвый способ это заметить: спрашивать координату можно каждый кадр, а перекладывать
+    /// маршрут — нет, это полный A* по станции.
+    /// </remarks>
+    private readonly Dictionary<EntityUid, (EntityCoordinates Dest, string Goal, int Replans, Vector2 PlannedAt)> _goals = new();
+
+    /// <summary>Сколько кадров прошло с последней перекладки под ушедшую цель.</summary>
+    private readonly Dictionary<EntityUid, int> _sinceRetarget = new();
+
+    /// <summary>
+    /// На сколько тайлов цель должна отъехать, чтобы маршрут перекладывали.
+    /// </summary>
+    /// <remarks>
+    /// Три — это заметно больше дальности руки (1.5) и заметно меньше комнаты. Меньший порог
+    /// заставил бы гоняться за каждым шагом человека, больший — приводил бы робота в соседний
+    /// отсек.
+    /// </remarks>
+    private const float RetargetTiles = 3f;
+
+    /// <summary>Не чаще раза в столько кадров. Полторы секунды при тикрейте 30.</summary>
+    /// <remarks>
+    /// Погоня за бегущим человеком иначе превращается в поиск пути каждый кадр — то есть ровно в
+    /// ту поломку, из-за которой сервер ложился при движении роботов. Полторы секунды означают
+    /// худший случай около шести миллисекунд поиска в секунду на одного гонящегося робота.
+    /// </remarks>
+    private const int RetargetEvery = 45;
+
+    /// <summary>
+    /// Во что обошёлся поиск пути с начала работы сервера: сколько раз, сколько всего и худший.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Не украшение и не любопытство. Поиск пути — единственная тяжёлая работа агента, которая
+    /// идёт МИМО <see cref="Content.Server.AiAgent.Threading.WorldBus"/>: перепланировка
+    /// вызывается из <c>Update</c>, то есть уже на главном потоке, и через шину её проводить
+    /// незачем — она добавила бы только задержку. Но вместе с шиной поиск терял и профиль, и
+    /// предупреждение о перерасходе кадра.
+    /// </para>
+    /// <para>
+    /// Ценой этой слепоты стал целый раунд разбирательств: в журнале честно светились 'look' и
+    /// 'observation', а восемьдесят миллисекунд поиска в секунду не светились нигде, и вывод «обзор
+    /// починен, а лаги остались» был единственным доступным. Теперь строка перерасхода пишется тем
+    /// же текстом, что и у шины, и ищется тем же grep.
+    /// </para>
+    /// </remarks>
+    public (int Searches, double TotalMs, double WorstMs, int WorstProbes) RouteCost { get; private set; }
+
+    /// <summary>Обнулить счётчики поиска — для стенда, который меряет один сценарий.</summary>
+    public void ResetRouteCost() => RouteCost = default;
 
     /// <summary>
     /// Сколько раз перекладывать маршрут, прежде чем признать, что дороги нет.
@@ -149,7 +208,12 @@ public sealed partial class AiBorgSystem
         if (goalTile.Value != to)
             _sawmill.Debug($"заказан тайл {to}, маршрут ведёт в {goalTile.Value} («{goal}»)");
 
-        var path = BorgPathfinder.FindPath(navMap, startTile.Value, goalTile.Value, Walkable);
+        var stats = new BorgPathfinder.PathStats();
+        var started = Stopwatch.GetTimestamp();
+        var path = BorgPathfinder.FindPath(navMap, startTile.Value, goalTile.Value, Walkable, stats);
+        var ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+
+        ObserveSearch(ms, stats);
 
         if (path == null)
         {
@@ -165,14 +229,42 @@ public sealed partial class AiBorgSystem
         _lastWalk.Remove(borg);
         _walking[borg] = goal;
 
-        if (!_goals.TryGetValue(borg, out var known) || known.Goal != goal)
-            _goals[borg] = (destination, goal, 0);
+        TraceBorgMove(borg, "start", $"goal={goal.Replace(' ', '_')} tiles={path.Count}");
+
+        // Точка цели запоминается ВСЕГДА, а счётчик перекладок — только при смене задачи: одно
+        // говорит «где она была», другое «сколько раз мы уже упирались», и путать их нельзя.
+        _goals[borg] = !_goals.TryGetValue(borg, out var known) || known.Goal != goal
+            ? (destination, goal, 0, destMap.Position)
+            : (known.Dest, known.Goal, known.Replans, destMap.Position);
+
+        _sinceRetarget[borg] = 0;
 
         _sawmill.Info(
             $"{ToPrettyString(borg)} маршрут до «{goal}»: {path.Count} тайлов; " +
             $"старт {startTile.Value} цель {goalTile.Value}");
 
         return true;
+    }
+
+    /// <summary>Записать стоимость одного поиска и пожаловаться, если он съел кадр.</summary>
+    private void ObserveSearch(double ms, BorgPathfinder.PathStats stats)
+    {
+        var c = RouteCost;
+
+        RouteCost = (c.Searches + 1, c.TotalMs + ms,
+            Math.Max(c.WorstMs, ms),
+            Math.Max(c.WorstProbes, stats.Probes));
+
+        var budget = _cfg.GetCVar(AiCVars.MainThreadBudgetMs);
+
+        if (ms <= budget)
+            return;
+
+        // Формулировка дословно как у шины (WorldBus.Observe): один grep обязан находить оба
+        // источника перерасхода, иначе разбор снова упрётся в «профиль чистый, а лаги есть».
+        _sawmill.Warning(
+            $"main-thread call 'route' took {ms:F1}ms (budget {budget:F1}ms), " +
+            $"узлов {stats.Expanded}, проверок проходимости {stats.Probes}");
     }
 
     private static Vector2i ToTile(Vector2 local) =>
@@ -186,13 +278,63 @@ public sealed partial class AiBorgSystem
     {
         _goals.Remove(borg);
         _blocked.Remove(borg);
+        _sinceRetarget.Remove(borg);
     }
 
     /// <summary>Робот продвинулся — счётчик перепланировок обнулить.</summary>
     private void ForgetReplans(EntityUid borg)
     {
         if (_goals.TryGetValue(borg, out var g) && g.Replans != 0)
-            _goals[borg] = (g.Dest, g.Goal, 0);
+            _goals[borg] = (g.Dest, g.Goal, 0, g.PlannedAt);
+    }
+
+    /// <summary>
+    /// Цель ушла — догнать её, переложив маршрут.
+    /// </summary>
+    /// <returns><c>true</c>, если маршрут переложен.</returns>
+    /// <remarks>
+    /// <para>
+    /// Зовётся каждый кадр для каждого идущего робота, поэтому дешёвая часть стоит первой: сравнить
+    /// две точки можно сколько угодно раз, а строить путь — нет.
+    /// </para>
+    /// <para>
+    /// Счётчик перекладок (<see cref="MaxReplans"/>) здесь НЕ тратится, и это не оплошность.
+    /// Тот бюджет отвечает на вопрос «есть ли вообще дорога», а погоня отвечает на другой — «туда
+    /// ли я иду». Человек, уходящий от робота через полстанции, исчерпал бы общий бюджет за
+    /// полминуты, и робот объявил бы «дороги нет» о совершенно проходимом коридоре.
+    /// </para>
+    /// </remarks>
+    private bool TryFollowMovingGoal(EntityUid borg)
+    {
+        if (!_goals.TryGetValue(borg, out var goal))
+            return false;
+
+        // Отсек и координата не ходят: у них привязка к сетке, а не к сущности.
+        if (!Exists(goal.Dest.EntityId) || HasComp<MapGridComponent>(goal.Dest.EntityId))
+            return false;
+
+        var since = _sinceRetarget.TryGetValue(borg, out var n) ? n + 1 : 1;
+        _sinceRetarget[borg] = since;
+
+        if (since < RetargetEvery)
+            return false;
+
+        _sinceRetarget[borg] = 0;
+
+        var now = _xform.ToMapCoordinates(goal.Dest).Position;
+
+        if ((now - goal.PlannedAt).Length() < RetargetTiles)
+            return false;
+
+        if (!TryStartRoute(borg, goal.Dest, goal.Goal, out _))
+            return false;
+
+        // Точка отсчёта затора берётся заново: робот пошёл в другую сторону, и старая точка
+        // объявила бы его застрявшим на первом же шаге назад.
+        _progress.Remove(borg);
+
+        _sawmill.Debug($"{ToPrettyString(borg)} догоняет ушедшую цель «{goal.Goal}»");
+        return true;
     }
 
     /// <summary>
@@ -220,7 +362,7 @@ public sealed partial class AiBorgSystem
         if (goal.Replans >= MaxReplans)
             return false;
 
-        _goals[borg] = (goal.Dest, goal.Goal, goal.Replans + 1);
+        _goals[borg] = (goal.Dest, goal.Goal, goal.Replans + 1, goal.PlannedAt);
 
         if (TryStartRoute(borg, goal.Dest, goal.Goal, out _))
         {

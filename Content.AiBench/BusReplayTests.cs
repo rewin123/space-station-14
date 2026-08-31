@@ -190,6 +190,7 @@ public sealed class BusReplayTests
         {
             nameof(ConversationState.SetPrefix),
             nameof(ConversationState.AppendUser),
+            nameof(ConversationState.AppendUserOrMerge),
             nameof(ConversationState.AppendAssistant),
             nameof(ConversationState.AppendToolResult),
             nameof(ConversationState.CloseTurn),

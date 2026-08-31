@@ -6,8 +6,10 @@ using Content.Server.NPC.Pathfinding;
 using Content.Shared.Doors;
 using Content.Shared.Doors.Components;
 using Content.Shared.Doors.Systems;
+using Robust.Shared;
 using Robust.Shared.Map;
 using Robust.Shared.Physics.Systems;
+using Robust.Shared.Timing;
 
 namespace Content.Server.AiAgent.Borg;
 
@@ -76,17 +78,88 @@ public sealed partial class AiBorgSystem
     /// </summary>
     private readonly Dictionary<EntityUid, string> _lastWalk = new();
 
-    /// <summary>Где робот был в прошлой проверке и сколько раз подряд не сдвинулся.</summary>
+    /// <summary>
+    /// ТОЧКА ОТСЧЁТА затора: откуда робот не может уйти, и сколько кадров он этого не делает.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Слово «отсчёта» здесь несущее. Первая версия держала в этом поле позицию из ПРОШЛОГО кадра
+    /// и переписывала её каждый раз, в том числе внутри ветки «не сдвинулся». То есть счётчик
+    /// заторов на самом деле мерил сдвиг за один тик, а не застой, — и с порогом в 0.15 тайла это
+    /// была не мелкая неточность, а поломка ровно посередине рабочего диапазона: шасси идёт
+    /// спринтом 4.5 тайла в секунду, тикрейт 30, то есть ровно 0.15 тайла за тик. Замерено на
+    /// стенде: за 120 тиков ходьбы максимум сдвига 0.1500, и НИ ОДНОГО тика выше порога.
+    /// </para>
+    /// <para>
+    /// Идущий на полной скорости робот считался стоящим каждый тик. Отсюда обе жалобы разом:
+    /// раз в 30 тиков он объявлял непроходимым тайл, по которому шёл, и перекладывал маршрут —
+    /// а перепланировка это полный A* по станции, который идёт прямо здесь, в <see cref="Update"/>,
+    /// мимо бюджета шины и мимо её профиля. Четыре робота на ходу давали около восьмидесяти
+    /// миллисекунд поиска в секунду и по тридцать запросов в broadphase — это и видно в игре как
+    /// «начал двигаться и fps лёг». Заодно каждая такая перепланировка травила собственный
+    /// коридор робота, путь удлинялся от попытки к попытке (64 → 54 → 43 тайла в одном раунде на
+    /// пути к Tools) и кончался «дороги нет» — это вторая жалоба, «не могу до тебя дойти».
+    /// </para>
+    /// <para>
+    /// Теперь точка отсчёта СТОИТ на месте, пока робот не уйдёт от неё на <see cref="ProgressTiles"/>.
+    /// Порог перестал зависеть от скорости шасси: он спрашивает «ушёл ли вообще», а не «успел ли
+    /// за один тик».
+    /// </para>
+    /// <para>
+    /// Цена поломки видна и в самой ходьбе, а не только в кадре: один и тот же проход за 150 тиков
+    /// давал 2.2 тайла со старым счётчиком и 14.3 с новым (<c>RouteCostTests</c>). Робот тратил
+    /// шесть седьмых дороги на то, чтобы объявлять непроходимым коридор, по которому шёл, и
+    /// перекладывать маршрут заново.
+    /// </para>
+    /// </remarks>
     private readonly Dictionary<EntityUid, (Vector2 Where, int Stalls)> _progress = new();
 
-    /// <summary>Столько проверок без движения — и пробуем нажать на дверь.</summary>
-    private const int StallsBeforeDoor = 4;
+    /// <summary>
+    /// Насколько надо уйти от точки отсчёта, чтобы затор считался пройденным. Полтайла.
+    /// </summary>
+    /// <remarks>
+    /// Половина клетки — это заведомо больше любого дрожания на месте (толкотня, отдача от двери,
+    /// поворот корпуса) и заведомо меньше одного шага по маршруту. Робот, который наматывает круги
+    /// вокруг одной точки, отсюда не уходит и правильно считается застрявшим.
+    /// </remarks>
+    private const float ProgressTiles = 0.5f;
 
-    /// <summary>Столько — и признаём, что здесь не пройти, и перекладываем маршрут.</summary>
-    private const int StallsBeforeReplan = 30;
+    /// <summary>Столько кадров без ухода с места — и пробуем нажать на дверь. Полсекунды.</summary>
+    /// <remarks>
+    /// Счёт в кадрах, смысл в секундах: <see cref="PollWalking"/> зовётся каждый тик, тикрейт 30.
+    /// Прежние четыре кадра означали семь с половиной запросов в broadphase в секунду на каждого
+    /// идущего робота — и это при том, что «идущий» и «стоящий» тогда не различались вовсе.
+    /// </remarks>
+    private const int StallsBeforeDoor = 15;
+
+    /// <summary>
+    /// Столько — и признаём, что здесь не пройти, и перекладываем маршрут. Три секунды.
+    /// </summary>
+    /// <remarks>
+    /// Дорого именно это: перепланировка строит полный путь по станции и при неудаче разворачивает
+    /// весь достижимый пол. Три секунды неподвижности — это уже не «человек в дверях», а настоящее
+    /// препятствие, и цену поиска в такой ситуации не жалко.
+    /// </remarks>
+    private const int StallsBeforeReplan = 90;
 
     private void InitializeMovement()
     {
+        Subs.CVar(_cfg, AiCVars.BorgMoveTrace, v => _netTrace = v, true);
+    }
+
+    private int _netTrace;
+
+    private void TraceBorgMove(EntityUid borg, string phase, string extra = "")
+    {
+        if (_netTrace < 1)
+            return;
+
+        var coords = _xform.GetMapCoordinates(borg);
+        _sawmill.Warning(
+            $"NET TRACE kind=borg_move phase={phase} tick={_timing.CurTick} uid={borg} " +
+            $"name={ToPrettyString(borg).ToString().Replace(' ', '_')} " +
+            $"pos={coords.Position.X:F1},{coords.Position.Y:F1} map={coords.MapId} " +
+            extra);
     }
 
     public override void Update(float frameTime)
@@ -132,9 +205,19 @@ public sealed partial class AiBorgSystem
                 continue;
             }
 
+            // Догнать ушедшую цель — ДО шага: иначе кадр уходит на движение по маршруту, который
+            // уже признан устаревшим.
+            TryFollowMovingGoal(borg);
+
             if (StepAlongTrail(borg))
             {
                 WatchForStall(borg, what);
+                if (_netTrace >= 2 && _timing.CurTick.Value % 30 == 0)
+                {
+                    _progress.TryGetValue(borg, out var prog);
+                    TraceBorgMove(borg, "walk",
+                        $"goal={what.Replace(' ', '_')} stalls={prog.Stalls}");
+                }
                 continue;
             }
 
@@ -159,6 +242,7 @@ public sealed partial class AiBorgSystem
             // различаются только этой строкой.
             _sawmill.Info($"{ToPrettyString(borg)} дошёл: {what}"
                           + (missed is { } far ? $" (не дошёл {far:F1} тайла: подходы заняты)" : ""));
+            TraceBorgMove(borg, "stop", $"goal={what.Replace(' ', '_')} missed={(missed is { } g ? g.ToString("F1") : "0")}");
         }
     }
 
@@ -216,7 +300,7 @@ public sealed partial class AiBorgSystem
             return;
         }
 
-        if ((now - last.Where).Length() > 0.15f)
+        if ((now - last.Where).Length() > ProgressTiles)
         {
             _progress[borg] = (now, 0);
 
@@ -227,14 +311,17 @@ public sealed partial class AiBorgSystem
             return;
         }
 
+        // Точка отсчёта остаётся ПРЕЖНЕЙ, и это главная строка функции: с ней счётчик считает
+        // застой, без неё — сдвиг за один тик, который у идущего шасси ровно равен порогу.
         var stalls = last.Stalls + 1;
-        _progress[borg] = (now, stalls);
+        _progress[borg] = (last.Where, stalls);
 
         // Жмём периодически, а не однажды: шлюз закрывается сам, и одного нажатия на всю заминку
         // хватает не всегда — особенно когда робот подошёл к нему под углом.
         if (stalls % StallsBeforeDoor == 0 && TryPressClosedDoor(borg, 1.6f))
         {
             _sawmill.Debug($"{ToPrettyString(borg)} упёрся и нажал на дверь");
+            TraceBorgMove(borg, "door", $"goal={what.Replace(' ', '_')} stalls={stalls}");
             return;
         }
 
@@ -269,6 +356,7 @@ public sealed partial class AiBorgSystem
             $"NOPATH дороги нет: {what}. Путь перекрыт, и обойти не вышло.", _host.RoundTime()));
 
         _sawmill.Info($"{ToPrettyString(borg)} не смог пройти к «{what}»");
+        TraceBorgMove(borg, "nopath", $"goal={what.Replace(' ', '_')}");
     }
 
     /// <summary>

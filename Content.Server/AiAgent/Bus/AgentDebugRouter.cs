@@ -41,9 +41,9 @@ public sealed class AgentDebugRouter
 
     private readonly AgentEventBus _bus;
     private readonly AgentDirectory _agents;
-    private readonly Func<MemoryStore> _memory;
-    private readonly Func<SkillStore> _skills;
-    private readonly Func<PlayerNoteStore> _notes;
+    /// <summary>Файловая система ядра. Может быть <c>null</c> до первой сессии.</summary>
+    private readonly Func<Vfs.Vfs?> _vfs;
+
     private readonly Func<int> _round;
 
     private readonly Func<string, string, string, MemoryResult> _changeMemory;
@@ -54,9 +54,7 @@ public sealed class AgentDebugRouter
         AgentEventBus bus,
         string token,
         AgentDirectory agents,
-        Func<MemoryStore> memory,
-        Func<SkillStore> skills,
-        Func<PlayerNoteStore> notes,
+        Func<Vfs.Vfs?> vfs,
         Func<int> round,
         Func<string, string, string, MemoryResult> changeMemory,
         Func<string, string?, string?, string?, string?, SkillResult> changeSkill)
@@ -64,9 +62,7 @@ public sealed class AgentDebugRouter
         _bus = bus;
         _token = token;
         _agents = agents;
-        _memory = memory;
-        _skills = skills;
-        _notes = notes;
+        _vfs = vfs;
         _round = round;
         _changeMemory = changeMemory;
         _changeSkill = changeSkill;
@@ -147,7 +143,7 @@ public sealed class AgentDebugRouter
         });
 
     private AgentDebugResponse State() =>
-        AgentDebugResponse.Ok(AgentDebugState.CaptureGlobal(_bus, _agents, _memory(), _skills(), _notes(), _round()));
+        AgentDebugResponse.Ok(AgentDebugState.CaptureGlobal(_bus, _agents, _vfs(), _round()));
 
     /// <summary>
     /// Снимок одного агента.

@@ -17,7 +17,7 @@ const agent = useAgent()
 const TABS = [
   { id: 'conversation', title: 'Разговор' },
   { id: 'memory', title: 'Память' },
-  { id: 'skills', title: 'Скиллы' },
+  { id: 'skills', title: 'Записи' },
   { id: 'notes', title: 'Люди' },
   { id: 'prompt', title: 'Промпт' },
   { id: 'stats', title: 'Статистика' },

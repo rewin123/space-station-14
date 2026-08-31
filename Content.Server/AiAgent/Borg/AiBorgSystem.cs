@@ -55,6 +55,7 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         InitializeMovement();
         InitializeSight();
+        InitializeReplication();
     }
 
     private void OnRunLevelChanged(GameRunLevelChangedEvent ev)
@@ -78,6 +79,8 @@ public sealed partial class AiBorgSystem : EntitySystem
         // Хост сам освобождает сессии; наше дело — не оставить за собой разумов-сирот.
         foreach (var uid in _claimed.Keys.ToList())
             ReleaseBody(uid, "перезапуск раунда");
+
+        ForgetTakenTiles();
     }
 
     /// <summary>
@@ -153,6 +156,10 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         _claimed[borg] = comp;
 
+        // Тело поехало — значит начнёт входить в чужие зоны видимости. См. AiBorgSystem.Replication.cs.
+        HideSubtree(borg);
+        HoldInPvs(borg);
+
         var active = TryComp<BorgChassisComponent>(borg, out var chassis) && chassis.Active;
         _sawmill.Info(
             $"агент {comp.AgentId} занял {ToPrettyString(borg)}; шасси активно: {active}");
@@ -178,6 +185,8 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         StopSteering(borg);
         ForgetSight(borg);
+        ShowSubtree(borg);
+        ReleaseFromPvs(borg);
         _host.Release(borg, why);
         ReleaseMind(comp);
 
@@ -281,16 +290,23 @@ public sealed partial class AiBorgSystem : EntitySystem
         // промпт пересобирается ещё и на компакции.
         var scripted = _cfg.GetCVar(AiCVars.ScriptMode);
 
+        // Своя файловая система у каждого робота. Справочник в ней общий с ядром одним
+        // экземпляром, а записи, заметки о людях и память — свои: раньше борг таскал в префиксе
+        // двадцать килобайт библиотеки Станционного ИИ, включая досье на экипаж, которые ему
+        // нечем применить.
+        var vfs = _host.BuildVfs(comp.AgentId);
+
         return new AgentBody
         {
             Owner = borg,
             Id = comp.AgentId,
             Name = comp.AgentName,
             SoulFile = comp.SoulFile,
+            Vfs = vfs,
             Eye = () => borg,
             Alive = () => Exists(borg) && !TerminatingOrDeleted(borg) && !_mobState.IsDead(borg),
             ScriptMode = scripted,
-            BuildPrompt = () => BuildBorgPrompt(borg, comp, scripted),
+            BuildPrompt = () => BuildBorgPrompt(borg, comp, scripted, vfs),
             SelfLine = s => BorgSelfLine(s, borg),
             BeforeObservation = s => PushSightDelta(s, borg),
             RegisterTools = (s, r) => RegisterBorgTools(s, r, comp),

@@ -6,8 +6,8 @@ using Content.Server.AiAgent.Tools;
 using Content.Shared.IdentityManagement;
 using Content.Shared.ActionBlocker;
 using Content.Shared.CombatMode;
+using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Interaction;
-using Robust.Shared.IoC;
 using Content.Shared.Weapons.Melee;
 using Content.Shared.Weapons.Ranged.Components;
 using Content.Shared.Weapons.Ranged.Systems;
@@ -35,6 +35,10 @@ public sealed partial class AiBorgSystem
     [Dependency] private SharedCombatModeSystem _combat = default!;
     [Dependency] private ActionBlockerSystem _blocker = default!;
     [Dependency] private SharedGunSystem _gun = default!;
+    [Dependency] private ItemSlotsSystem _itemSlots = default!;
+
+    /// <summary>Слот встроенного лазера на боевом шасси. Имя совпадает с YAML <c>gun_slot</c>.</summary>
+    private const string BuiltInGunSlot = "gun_slot";
 
     /// <summary>
     /// Дальше этого не стреляем.
@@ -173,6 +177,33 @@ public sealed partial class AiBorgSystem
         return false;
     }
 
+    /// <summary>
+    /// Ствол: сначала руки, потом сам корпус, потом запертый слот шасси.
+    /// </summary>
+    /// <remarks>
+    /// <c>TryGetGun</c> смотрит только руку и само тело. Встроенный лазер лежит в
+    /// <c>gun_slot</c> — отдельная сущность, чтобы <c>BatteryAmmoProvider</c> Dirty'ил её,
+    /// а не корень шасси. Без этого шага боевой робот честно отвечал бы «нечем стрелять».
+    /// </remarks>
+    private bool TryGetBorgGun(EntityUid borg, out Entity<GunComponent> gun)
+    {
+        if (_gun.TryGetGun(borg, out gun))
+            return true;
+
+        var stored = _itemSlots.GetItemOrNull(borg, BuiltInGunSlot);
+        if (stored is { } uid && TryComp<GunComponent>(uid, out var gunComp))
+        {
+            gun = (uid, gunComp);
+            return true;
+        }
+
+        gun = default;
+        return false;
+    }
+
+    private bool IsBuiltInGun(EntityUid borg, EntityUid gun) =>
+        _itemSlots.GetItemOrNull(borg, BuiltInGunSlot) == gun;
+
     private Task<ToolResult> ShootAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
         var borg = s.Brain;
@@ -184,13 +215,10 @@ public sealed partial class AiBorgSystem
 
             var name = Identity.Name(target, EntityManager);
 
-            // Сначала выбрать руку со стволом, потом спрашивать. TryGetGun смотрит только в
-            // активную руку — на модуле с клинком и стволом ответ зависел бы от того, какая рука
-            // выбрана, а не от того, вооружён робот или нет.
-            if (!TryWieldFromHands<GunComponent>(borg, out _) || !_gun.TryGetGun(borg, out var gun))
+            if (!TryGetBorgGun(borg, out var gun))
             {
                 return ToolResult.Fail(ToolError.Refused,
-                    "нечем стрелять: в руках нет огнестрельного оружия. Смени модуль инструментом module");
+                    "нечем стрелять: нет ни встроенного ствола, ни оружия в руках");
             }
 
             var here = _xform.GetMapCoordinates(borg);
@@ -229,7 +257,7 @@ public sealed partial class AiBorgSystem
             return ToolResult.Effected(name, new Dictionary<string, object?>
             {
                 ["выстрелил"] = name,
-                ["чем"] = Identity.Name(gun.Owner, EntityManager),
+                ["чем"] = IsBuiltInGun(borg, gun.Owner) ? "встроенным лазером" : Identity.Name(gun.Owner, EntityManager),
                 ["дистанция"] = $"{gap:F1}",
             });
         }, ct);
