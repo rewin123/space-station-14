@@ -62,4 +62,10 @@ public sealed partial class AiBorgSystem
 
         return (VisibleFrom(borg).Count, candidates.Count);
     }
+
+    /// <summary>
+    /// Положить УДАР в очередь так же, как после настоящего замаха — вход для стенда.
+    /// </summary>
+    public void ReportHitForTest(EntityUid borg, EntityUid who, EntityUid used = default) =>
+        ReportHit(borg, who, used);
 }
