@@ -10,7 +10,7 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Секретный пул «Аксиомы»: четыре режима, и каждый действительно достижим.
+/// Секретный пул «Аксиомы»: его состав, и то, что каждый режим в нём действительно достижим.
 ///
 /// <para>
 /// Проверяются ДАННЫЕ, а не рулетка. Сама рулетка апстримовая
@@ -32,11 +32,18 @@ public sealed class SecretPoolTests
 {
     private const string Pool = "SecretAksioma";
 
-    /// <summary>Режимы, ради которых сервер существует: они обязаны выпадать при любом онлайне.</summary>
+    /// <summary>Режимы ИИ форка — и те, что в пуле, и те, что запускаются вручную.</summary>
     private static readonly string[] AiPresets = { "AiPeaceful", "RogueAiHidden", "RogueAiOpen" };
 
+    /// <summary>
+    /// Состав пула на 02.09.2026: предатель и мирный ИИ.
+    /// </summary>
+    /// <remarks>
+    /// Список сверяется целиком, а не «содержит»: молча выпавший из пула режим и молча
+    /// добавленный — одинаково незаметны в игре и одинаково меняют вечер.
+    /// </remarks>
     [Test]
-    public async Task Pool_HoldsFourReachablePresets()
+    public async Task Pool_HoldsTwoReachablePresets()
     {
         await using var w = await AiStation.Create();
         var protoMan = w.Pair.Server.ResolveDependency<IPrototypeManager>();
@@ -44,7 +51,7 @@ public sealed class SecretPoolTests
 
         var weights = await w.Read(() => protoMan.Index<WeightedRandomPrototype>(Pool).Weights);
 
-        Assert.That(weights.Keys, Is.EquivalentTo(new[] { "Traitor", "AiPeaceful", "RogueAiHidden", "RogueAiOpen" }),
+        Assert.That(weights.Keys, Is.EquivalentTo(new[] { "Traitor", "AiPeaceful" }),
             "состав пула изменился — если это намеренно, поправьте и тест, и комментарий в secret_weights_aksioma.yml");
 
         Assert.Multiple(() =>
@@ -81,17 +88,47 @@ public sealed class SecretPoolTests
 
         Assert.Multiple(() =>
         {
-            foreach (var id in AiPresets)
-            {
-                Assert.That(minimums[id], Is.Zero,
-                    $"«{id}» требует {minimums[id]} готовых игроков — на пустом и почти пустом сервере " +
-                    "режим ИИ выпадать перестанет, а в журнале об этом не будет ни строки");
-            }
+            Assert.That(minimums["AiPeaceful"], Is.Zero,
+                $"«AiPeaceful» требует {minimums["AiPeaceful"]} готовых игроков. Это единственный режим пула " +
+                "без порога, и с порогом пул на пустом сервере не выберет ничего");
 
             // Предатель — единственный, кому порог положен: в одиночку он не играется. Проверяется
             // не «ровно 2», а «больше нуля»: точное число — балансное решение и меняется.
             Assert.That(minimums["Traitor"], Is.GreaterThan(0),
                 "у предателя пропал порог по игрокам — он начнёт выпадать на пустом сервере");
+        });
+    }
+
+    /// <summary>
+    /// Режимы, выведенные из пула, остаются запускаемыми вручную.
+    /// </summary>
+    /// <remarks>
+    /// 02.09.2026 злые режимы убрали из ротации, а не из форка: `forcepreset RogueAiOpen` обязан
+    /// работать, и вернуть их в пул должно быть правкой одной строки, а не восстановлением
+    /// удалённых прототипов. Без этого теста «убрать из пула» и «удалить» через месяц станут
+    /// одним и тем же — пресет, который никогда не выпадает, никто не проверяет.
+    /// </remarks>
+    [Test]
+    public async Task PresetsOutOfThePool_AreStillLaunchable()
+    {
+        await using var w = await AiStation.Create();
+        var protoMan = w.Pair.Server.ResolveDependency<IPrototypeManager>();
+
+        await w.Read(() =>
+        {
+            foreach (var id in AiPresets)
+            {
+                Assert.That(protoMan.HasIndex<GamePresetPrototype>(id), Is.True,
+                    $"пресет «{id}» исчез — вручную его уже не запустить");
+
+                foreach (var rule in protoMan.Index<GamePresetPrototype>(id).Rules)
+                {
+                    Assert.That(protoMan.HasIndex<EntityPrototype>(rule.Id), Is.True,
+                        $"«{id}»: правило «{rule.Id}» не найдено");
+                }
+            }
+
+            return 0;
         });
     }
 

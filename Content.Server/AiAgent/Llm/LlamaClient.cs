@@ -60,15 +60,31 @@ public sealed class LlamaClient : ILlmClient, IDisposable
         _sampling = sampling;
         _sawmill = sawmill;
 
-        // Прокси задаётся по профилю, и «никакого прокси» — не значение по умолчанию, а требование.
-        //
-        // Эта машина экспортирует HTTP_PROXY=http://127.0.0.1:10809 и
-        // ALL_PROXY=socks5h://127.0.0.1:10808 глобально, и запрос на loopback, ушедший в прокси,
-        // просто зависает. Полагаться на NO_PROXY нельзя: HttpClient.DefaultProxy читается из
-        // окружения один раз при старте процесса, а семантика подстановочных знаков в NO_PROXY
-        // отличается между рантаймами. Поэтому локальные профили ходят с выключенным прокси
-        // принудительно, а облачные — с явно указанным SOCKS, и ни один из двух случаев не зависит
-        // от того, что оказалось в окружении сервиса.
+        _http = CreateHttp(endpoint, endpoint.Timeout);
+    }
+
+    /// <summary>
+    /// HTTP-клиент под один профиль: прокси, таймаут, ключ.
+    ///
+    /// <para>
+    /// Публичный и статический, потому что у этой сборки два потребителя: сам клиент и проверка
+    /// эндпоинта (<see cref="LlmProbe"/>). Проверка обязана ходить в провод ТОЧНО так же, как
+    /// боевой ход, — иначе она проверяет не то, что играет: «у меня curl работает, а сервер
+    /// молчит» почти всегда именно про прокси.
+    /// </para>
+    /// <para>
+    /// Прокси задаётся по профилю, и «никакого прокси» — не значение по умолчанию, а требование.
+    /// Эта машина экспортирует HTTP_PROXY=http://127.0.0.1:10809 и
+    /// ALL_PROXY=socks5h://127.0.0.1:10808 глобально, и запрос на loopback, ушедший в прокси,
+    /// просто зависает. Полагаться на NO_PROXY нельзя: HttpClient.DefaultProxy читается из
+    /// окружения один раз при старте процесса, а семантика подстановочных знаков в NO_PROXY
+    /// отличается между рантаймами. Поэтому локальные профили ходят с выключенным прокси
+    /// принудительно, а облачные — с явно указанным SOCKS, и ни один из двух случаев не зависит
+    /// от того, что оказалось в окружении сервиса.
+    /// </para>
+    /// </summary>
+    public static HttpClient CreateHttp(LlmEndpoint endpoint, TimeSpan timeout)
+    {
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
@@ -88,10 +104,12 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             handler.UseProxy = false;
         }
 
-        _http = new HttpClient(handler) { Timeout = endpoint.Timeout };
+        var http = new HttpClient(handler) { Timeout = timeout };
 
         if (!string.IsNullOrWhiteSpace(endpoint.ApiKey))
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+
+        return http;
     }
 
     public async Task<LlmResponse> ChatAsync(

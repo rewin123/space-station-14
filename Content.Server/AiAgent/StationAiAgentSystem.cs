@@ -127,6 +127,16 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         _sawmill = _logManager.GetSawmill("ai");
 
+        // Накладка — ПЕРВЫМ делом, до всего остального.
+        //
+        // Она переписывает прототипы, а ниже по этому же методу и по всей системе прототипы уже
+        // читаются. Прочитать значение из Resources/, а потом подменить его в ai_data/ — значит
+        // получить сервер, который наполовину работает по накладке, наполовину нет, и разницу
+        // между половинами задаёт порядок строк в Initialize. Такую поломку невозможно ни
+        // увидеть, ни объяснить.
+        if (_cfg.GetCVar(AiCVars.ConfigOverlay))
+            LoadOverlay(live: false);
+
         // Constructed here, on the main thread, so it learns which thread that is.
         _world = new WorldBus(_taskManager, _sawmill, _cfg.GetCVar(AiCVars.MainThreadBudgetMs));
 

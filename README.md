@@ -92,6 +92,11 @@ llm_chain = "deepseek,awq"
 - [`Content.Server/AiAgent/README.md`](Content.Server/AiAgent/README.md) — передача смены целиком:
   раскладка путей, управление, конфиги, грабли. Почти две тысячи строк, и это первое, что стоит
   читать.
+- [`docs/reconfig.md`](docs/reconfig.md) — как поменять провайдера модели, режим или секретный пул
+  **без пересборки**: накладка `ai_data/config.d/`, команды `aiagent config`, `aiagent llm probe`,
+  `aiagent mode`, и ловушки, которые стоили вечеров.
+- [`Tools/examples/llamacpp/`](Tools/examples/llamacpp/) — свой сервер на llama.cpp за полчаса:
+  запуск модели, профиль провайдера, свой режим, проверка. Каждый флаг и каждое поле с разбором.
 - [`docs/upstream-patches.md`](docs/upstream-patches.md) — каждая правка чужого кода: что, зачем,
   чем воспроизводится, как снять.
 - [`docs/problems.md`](docs/problems.md) — разборы поломок, которые дорого дались.

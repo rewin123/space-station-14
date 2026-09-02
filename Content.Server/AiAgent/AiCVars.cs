@@ -477,6 +477,25 @@ public sealed class AiCVars
     public static readonly CVarDef<string> DataDir =
         CVarDef.Create("ai.data_dir", "", CVar.SERVERONLY);
 
+    /// <summary>
+    /// Читать ли накладку прототипов из <c>&lt;ai.data_dir&gt;/config.d/*.yml</c>.
+    ///
+    /// <para>
+    /// Включено, потому что пустой или отсутствующий каталог — это ровно то же поведение, что до
+    /// накладки: сборка работает на прототипах из <c>Resources/</c>. Разбор идёт по файлам, и
+    /// сломанный файл не отменяет остальные (<see cref="Content.Server.AiAgent.Config.AiConfigOverlay"/>).
+    /// </para>
+    /// <para>
+    /// Выключать это стоит ровно в одном случае: когда сервер ведёт себя не так, как написано в
+    /// <c>Resources/</c>, и надо ОТЛИЧИТЬ правку накладки от правки кода. <c>false</c> плюс
+    /// перезапуск возвращают сборку к тому, что лежит в репозитории, не трогая файлы в
+    /// <c>ai_data/</c>. Живьём переключать бесполезно — прототипы уже загружены; для живой
+    /// перезагрузки есть <c>aiagent config reload</c>.
+    /// </para>
+    /// </summary>
+    public static readonly CVarDef<bool> ConfigOverlay =
+        CVarDef.Create("ai.config_overlay", true, CVar.SERVERONLY);
+
     // ------------------------------------------------- резервное питание без инженеров
     //
     // Здесь же, по той же причине, что и ai.station_name ниже: форк владеет ровно одним классом

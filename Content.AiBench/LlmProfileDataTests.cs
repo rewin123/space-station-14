@@ -26,8 +26,18 @@ public sealed class LlmProfileDataTests
         await using var w = await AiStation.Create();
         var protoMan = w.Pair.Server.ResolveDependency<IPrototypeManager>();
 
+        // Профили стенда отсеиваются, и это не косметика.
+        //
+        // ConfigOverlayTests заводит профили через накладку ai_data/config.d/, то есть настоящим
+        // IPrototypeManager.LoadString, а серверы в этом прогоне переиспользуются пулом. Профиль,
+        // заведённый там, доживает до этого теста — и заведён он СПЕЦИАЛЬНО сломанным
+        // (compactHigh больше ctxLimit: именно это расхождение проверка эндпоинта обязана поймать).
+        // Здесь проверяются данные форка из Resources/, а не декорации соседнего теста; префикс
+        // bench- зарезервирован за ними.
         var profiles = await w.Read(() =>
-            protoMan.EnumeratePrototypes<AiLlmProfilePrototype>().ToList());
+            protoMan.EnumeratePrototypes<AiLlmProfilePrototype>()
+                .Where(p => !p.ID.StartsWith("bench-", System.StringComparison.Ordinal))
+                .ToList());
 
         Assert.That(profiles, Is.Not.Empty, "ни одного профиля модели не загрузилось");
 

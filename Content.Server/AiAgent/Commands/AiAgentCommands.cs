@@ -17,7 +17,8 @@ public sealed class AiAgentCommand : IConsoleCommand
 {
     public string Command => "aiagent";
     public string Description => "Управление LLM-агентом Station AI.";
-    public string Help => "aiagent status | cost | llm [use <профиль>|revive <профиль>] | claim [uid] | " +
+    public string Help => "aiagent status | cost | config [reload] | mode [пресет] | " +
+                          "llm [use <профиль>|revive <профиль>|probe [профиль…]] | claim [uid] | " +
                           "release | inject <канал> <текст> | tool <имя> [json] | curate | skills | " +
                           "timers | debug | dryrun on|off";
 
@@ -66,6 +67,14 @@ public sealed class AiAgentCommand : IConsoleCommand
 
             case "llm":
                 Llm(shell, system, cfg, args);
+                break;
+
+            case "config":
+                Config(shell, system, args);
+                break;
+
+            case "mode":
+                Mode(shell, system, args);
                 break;
 
             case "inject":
@@ -225,6 +234,12 @@ public sealed class AiAgentCommand : IConsoleCommand
     {
         var verb = args.Length > 1 ? args[1].ToLowerInvariant() : "show";
 
+        if (verb == "probe")
+        {
+            Probe(shell, system, args);
+            return;
+        }
+
         if (verb is "use" or "revive")
         {
             if (args.Length < 3)
@@ -266,6 +281,150 @@ public sealed class AiAgentCommand : IConsoleCommand
 
         shell.WriteLine(router.Describe());
     }
+
+    /// <summary>
+    /// Сходить к профилям по-настоящему и сверить заявленное в прототипе с тем, что провайдер делает.
+    /// </summary>
+    /// <remarks>
+    /// Без аргументов проверяется та цепочка, по которой пошёл бы агент прямо сейчас: своя у
+    /// режима, иначе <c>ai.llm_chain</c>. Это важнее полного перебора — обычный вопрос звучит не
+    /// «исправны ли все профили», а «почему молчит тот, который играет».
+    /// </remarks>
+    private static void Probe(IConsoleShell shell, StationAiAgentSystem system, string[] args)
+    {
+        var ids = args.Length > 2
+            ? args.Skip(2).ToList()
+            : system.ActiveChain().ToList();
+
+        if (ids.Count == 0)
+        {
+            // Цепочка пуста — значит сервер работает по одиночному ai.endpoint, и проверять
+            // прототипы бессмысленно. Перечислить их всё же полезнее, чем промолчать.
+            var all = system.Profiles().Select(p => p.ID).ToList();
+            shell.WriteLine($"цепочка не задана. Известные профили: {string.Join(", ", all)}");
+            shell.WriteLine("aiagent llm probe <профиль…>");
+            return;
+        }
+
+        shell.WriteLine($"проверяю: {string.Join(", ", ids)}");
+        shell.WriteLine("это НАСТОЯЩИЕ запросы — у платных профилей они стоят токенов, у подписки берут долю окна.");
+
+        if (!system.StartProbe(ids, shell.WriteLine))
+            shell.WriteError("проверка уже идёт — дождитесь строки «проверка закончена».");
+    }
+
+    /// <summary>
+    /// Накладка прототипов из <c>ai_data/config.d/</c>: что прочитано и что переопределено.
+    /// </summary>
+    private static void Config(IConsoleShell shell, StationAiAgentSystem system, string[] args)
+    {
+        var verb = args.Length > 1 ? args[1].ToLowerInvariant() : "show";
+
+        if (verb == "reload")
+        {
+            system.LoadOverlay(live: true);
+        }
+        else if (verb != "show")
+        {
+            shell.WriteError("aiagent config [reload]");
+            return;
+        }
+
+        if (system.Overlay is not { } report)
+        {
+            shell.WriteLine("накладка не читалась: ai.config_overlay = false. " +
+                            "`aiagent config reload` прочитает её независимо от рубильника.");
+            return;
+        }
+
+        shell.WriteLine($"каталог: {report.Dir}");
+
+        if (!report.DirExists)
+        {
+            shell.WriteLine("каталога нет — сервер работает на прототипах из Resources/. " +
+                            "Пример содержимого: Tools/examples/llamacpp/");
+            return;
+        }
+
+        if (report.Files.Count == 0)
+        {
+            shell.WriteLine("каталог пуст (ищутся файлы *.yml)");
+            return;
+        }
+
+        foreach (var file in report.Files.OrderBy(f => f.Name, StringComparer.Ordinal))
+        {
+            shell.WriteLine($"  {file.Name} — {file.Bytes} Б, изменён {file.WrittenUtc:yyyy-MM-dd HH:mm} UTC");
+
+            if (file.Error != null)
+            {
+                shell.WriteError($"    НЕ РАЗОБРАН: {file.Error}");
+                continue;
+            }
+
+            if (file.Prototypes.Count == 0)
+            {
+                // Разобрался, но ничего не изменил. Почти всегда это опечатка в `type:` —
+                // неизвестный тип прототипа пропускается, а не роняет разбор.
+                shell.WriteLine("    ничего не переопределил — проверьте поле type:");
+                continue;
+            }
+
+            foreach (var proto in file.Prototypes)
+                shell.WriteLine($"    {proto}");
+        }
+
+        shell.WriteLine($"итого: файлов {report.Ok}, с ошибкой {report.Failed}, прототипов {report.Changed}");
+        shell.WriteLine("правила раунда подхватятся СЛЕДУЮЩИМ раундом; профили модели — после `aiagent release`.");
+    }
+
+    /// <summary>
+    /// Во что разрешились режимы ИИ — с учётом накладки, а не по тому, что лежит в YAML репозитория.
+    /// </summary>
+    private static void Mode(IConsoleShell shell, StationAiAgentSystem system, string[] args)
+    {
+        var filter = args.Length > 1 ? args[1] : null;
+        var modes = system.Modes();
+
+        if (filter != null)
+            modes = modes.Where(m => m.Preset.Equals(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (modes.Count == 0)
+        {
+            shell.WriteLine(filter == null
+                ? "ни одного пресета с правилом RogueAiRule не найдено"
+                : $"у пресета «{filter}» правила RogueAiRule нет");
+            return;
+        }
+
+        foreach (var mode in modes)
+        {
+            shell.WriteLine($"{mode.Preset} ({mode.Rule})");
+            shell.WriteLine($"  законы: {mode.Lawset} | личность: {mode.SoulFile}");
+            shell.WriteLine($"  цепочка: {mode.Chain}");
+            shell.WriteLine($"  объявляет о себе: {(mode.Announces ? "да" : "нет")} | " +
+                            $"смерть ИИ кончает раунд: {(mode.EndsRoundOnAiDeath ? "да" : "нет")}");
+            shell.WriteLine($"  доступ: двери {Yn(mode.GrantDoors)}, консоли {Yn(mode.GrantConsoles)}, " +
+                            $"турели {Yn(mode.GrantTurrets)}");
+            shell.WriteLine(mode.Borgs.Count == 0
+                ? "  киборгов нет"
+                : $"  киборги ({mode.Borgs.Count}): {string.Join(", ", mode.Borgs)} " +
+                  $"→ маяки {string.Join(", ", mode.Beacons)}");
+        }
+
+        // Раунд идёт своим правилом, и оно НЕ обязано совпадать с прототипом: живое правило
+        // получило поля в момент старта раунда, а накладку могли перечитать после.
+        var soul = system.StationSoulFile();
+        var chain = system.StationLlmChain();
+
+        if (!string.IsNullOrWhiteSpace(soul) || !string.IsNullOrWhiteSpace(chain))
+        {
+            shell.WriteLine($"в этом раунде: личность {soul}, цепочка " +
+                            $"{(string.IsNullOrWhiteSpace(chain) ? "(общая ai.llm_chain)" : chain)}");
+        }
+    }
+
+    private static string Yn(bool value) => value ? "да" : "нет";
 
     /// <summary>
     /// Чем агент занял главный поток и во что обошёлся кадр.
