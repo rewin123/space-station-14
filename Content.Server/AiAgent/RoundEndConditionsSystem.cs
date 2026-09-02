@@ -139,7 +139,10 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
         if (!_cfg.GetCVar(AiCVars.EndRoundOnAiDeath))
             return;
 
-        if (_rogue.ActiveRule == null)
+        // Правило есть не только у злых режимов: мирный (AiPeacefulRule) пользуется тем же
+        // компонентом ради киборга и личности, но раунд его смертью не кончается — иначе любой,
+        // кто добрался до ядра, получал бы кнопку «конец смены».
+        if (_rogue.ActiveRule is not { EndsRoundOnAiDeath: true })
             return;
 
         if (_ticker.RunLevel != GameRunLevel.InRound)

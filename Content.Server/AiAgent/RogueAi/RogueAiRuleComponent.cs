@@ -62,6 +62,19 @@ public sealed partial class RogueAiRuleComponent : Component
     [DataField]
     public bool GrantConsoles = true;
 
+    /// <summary>
+    /// Заканчивать ли раунд смертью станционного ИИ.
+    ///
+    /// <para>
+    /// Для режимов злого ИИ — да: смысл смены в противостоянии с ним, и после его гибели играть
+    /// уже не во что. Для мирного режима — НЕТ: там ИИ такой же член экипажа, как остальные, и
+    /// завершать смену его смертью означало бы дать любому желающему кнопку «конец раунда».
+    /// Проверяется в <c>RoundEndConditionsSystem.OnStationAiDied</c>.
+    /// </para>
+    /// </summary>
+    [DataField]
+    public bool EndsRoundOnAiDeath = true;
+
     /// <summary>Турели и их панели управления.</summary>
     [DataField]
     public bool GrantTurrets = true;
