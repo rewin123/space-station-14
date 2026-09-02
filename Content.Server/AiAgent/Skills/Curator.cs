@@ -44,12 +44,6 @@ public sealed class Curator
     /// </summary>
     public int LastWrites { get; private set; }
 
-    /// <summary>Имена инструментов, успешный вызов которых считается записью.</summary>
-    private static readonly HashSet<string> Writers = new(StringComparer.Ordinal)
-    {
-        "write_file", "edit_file",
-    };
-
     public Curator(ILlmClient llm, ISawmill sawmill)
     {
         _llm = llm;
@@ -72,6 +66,12 @@ public sealed class Curator
     {
         Runs++;
         LastWrites = 0;
+
+        // Снимок счётчика записей ДО разбора. Раньше записи считались по именам вызовов на
+        // проводе — write_file и edit_file, — но в режиме скриптов этих имён на проводе нет вовсе:
+        // там четыре имени, и всё остальное живёт функциями Lua. Счётчик стоит ниже обеих дорог,
+        // поэтому считает и то и другое.
+        var writesBefore = vfs.Writes;
 
         // A copy: the review question and its answers must never contaminate the game history.
         var messages = conv.Build();
@@ -128,12 +128,10 @@ public sealed class Curator
                 // curator that decided to call announce simply announced, mid-round.
                 var inv = await dispatcher.InvokeAsync(call, DispatchGate.NoGameActions, ct).ConfigureAwait(false);
                 messages.Add(ChatMessageDto.Tool(call.Id, inv.Result.ToJson()));
-
-                if (inv.Result.Ok && Writers.Contains(call.Function.Name))
-                    LastWrites++;
             }
         }
 
+        LastWrites = vfs.Writes - writesBefore;
         LastVerdict = verdict;
         _sawmill.Info($"куратор #{Runs}: записей {LastWrites}, вердикт {Truncate(verdict, 300)}");
         return verdict;

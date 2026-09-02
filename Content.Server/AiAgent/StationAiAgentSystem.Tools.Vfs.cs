@@ -249,6 +249,10 @@ public sealed partial class StationAiAgentSystem
         if (!result.Ok)
             return ToolResult.Fail(ToolError.BadArgs, result.Message, alternatives: result.Hints);
 
+        // Ниже обеих дорог: и вызов с провода, и функция Lua приходят сюда. Именно по этому
+        // счётчику куратор понимает, что разбор что-то записал.
+        s.Body.Vfs.NoteWrite();
+
         _sawmill.Info($"[LLM] {s.Body.Id}: записан {path}");
 
         return ToolResult.Success(new Dictionary<string, object?>
@@ -273,6 +277,8 @@ public sealed partial class StationAiAgentSystem
 
         if (!result.Ok)
             return ToolResult.Fail(ToolError.BadArgs, result.Message, alternatives: result.Hints);
+
+        s.Body.Vfs.NoteWrite();
 
         _sawmill.Info($"[LLM] {s.Body.Id}: правка {path}");
 
