@@ -274,7 +274,28 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         var claimed = TryClaimAnyCore(out var reason);
         if (!claimed)
+        {
             _sawmill.Info($"no AI core claimed at round start: {reason}");
+
+            // Не сдаёмся с первой попытки: перебор ядер повторяется ещё несколько секунд.
+            //
+            // Раунд 306 (01.09.2026) начался вообще без Станционного ИИ. В логе честная строка
+            // «no unoccupied AI core on a station (1 off-station core(s) skipped)»: на InRound в
+            // мире нашлось РОВНО ОДНО ядро — центкомовское, — а станционное к этому моменту либо
+            // ещё не заспавнилось, либо его грид ещё не был зарегистрирован станцией, и
+            // GetOwningStation честно отвечал null. Гонка редкая: за день это единственный такой
+            // раунд из семи. Но цена её — полтора часа режима злого ИИ без злого ИИ, и заметно
+            // это только тому, кто читает журнал.
+            //
+            // Повтор, а не подписка на регистрацию станции: событий тут два (спавн ядра и
+            // появление грида в составе станции), порядок между ними движок не обещает, и ловить
+            // пришлось бы оба. Пустой перебор стоит один проход по компоненту раз в секунду.
+            _coreRetryUntil = _gameTiming.CurTime + CoreClaimRetryWindow;
+        }
+        else
+        {
+            _coreRetryUntil = null;
+        }
     }
 
     private void OnRoundCleanup(RoundRestartCleanupEvent ev)
@@ -314,6 +335,48 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // compaction ritual and logged as "the curator did not run" — and the agent quietly stopped
         // learning for the rest of the process lifetime.
         _curator = null;
+    }
+
+    /// <summary>Сколько ещё пробовать занять ядро после неудачи на старте раунда.</summary>
+    private static readonly TimeSpan CoreClaimRetryWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>Реже раза в секунду перебирать ядра незачем: спавн карты укладывается в кадры.</summary>
+    private static readonly TimeSpan CoreClaimRetryEvery = TimeSpan.FromSeconds(1);
+
+    /// <summary>До какого момента повторять попытку. <c>null</c> — повторять не надо.</summary>
+    private TimeSpan? _coreRetryUntil;
+
+    private TimeSpan _coreRetryNext;
+
+    /// <summary>
+    /// Добрать ядро, если на старте раунда его ещё не было. См. <see cref="OnRunLevelChanged"/>.
+    /// </summary>
+    private void RetryCoreClaim()
+    {
+        if (_coreRetryUntil is not { } until)
+            return;
+
+        var now = _gameTiming.CurTime;
+
+        if (now < _coreRetryNext)
+            return;
+
+        _coreRetryNext = now + CoreClaimRetryEvery;
+
+        if (now > until)
+        {
+            _coreRetryUntil = null;
+            _sawmill.Warning(
+                "ядро так и не удалось занять за 30 секунд после старта раунда — " +
+                "режим идёт без Станционного ИИ, помочь может только `aiagent claim`");
+            return;
+        }
+
+        if (!TryClaimAnyCore(out var reason))
+            return;
+
+        _coreRetryUntil = null;
+        _sawmill.Info($"ядро занято повторной попыткой после старта раунда ({reason})");
     }
 
     /// <summary>Find an empty AI core ON A STATION and put an LLM-driven brain in it.</summary>
@@ -770,6 +833,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         // Каждый тик, без своего интервала: сроки заданы агентом с точностью до секунды, а обход
         // восьми записей под замком дешевле, чем счётчик, который пришлось бы объяснять.
+        RetryCoreClaim();
+
         FireDueTimers();
         FireRogueNudge();
 
@@ -1287,15 +1352,61 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _roundEndConditions.OnStationAiDied(ent.Owner);
     }
 
+    /// <summary>
+    /// Слот разума — единственный контейнер, который вообще что-то значит для режима.
+    ///
+    /// <para>
+    /// Событие приходит на ЛЮБОЙ контейнер, куда попала сущность с маркером агента, а маркер с
+    /// 18.08.2026 висит не только на мозге в ядре, но и на шасси киборга
+    /// (<c>AiBorgSystem.Claim</c>). Зарядная станция <c>BorgCharger</c> — это
+    /// <c>EntityStorage</c>: она кладёт борга в свой контейнер <c>entity_storage</c>, и до
+    /// 01.09.2026 борг получал от этого наблюдение «загружен в интелликарту», а на выходе из
+    /// ящика — «извлечён из ядра», потому что <see cref="OnBrainRemoved"/> ставил
+    /// <see cref="AgentMode.Carded"/> вообще без условий. Вернуть шасси в
+    /// <see cref="AgentMode.Core"/> было нечем: в <c>station_ai_mind_slot</c> корпус не вставляют
+    /// никогда, — и робот до конца раунда считал себя картой. Трое агентов успели записать эту
+    /// выдумку в свои skills и уговаривали экипаж носить несуществующую карту.
+    /// </para>
+    /// </summary>
+    private static bool IsMindSlot(BaseContainer container) =>
+        container.ID == StationAiCoreComponent.Container;
+
+    /// <summary>
+    /// Тело заехало в обычный контейнер (зарядка, шкаф, крио) или выехало из него.
+    ///
+    /// Наблюдение всё равно нужно — иначе борг, нажавший <c>use</c> по зарядной станции, получает
+    /// «ок» и ни строчки о том, что он теперь в ящике и ничего не видит. Но это НЕ карденье:
+    /// режим не трогается, канал не переключается.
+    /// </summary>
+    private void NoteContainerRide(AgentSession session, EntityUid container, bool entered)
+    {
+        var name = Name(container);
+
+        session.Queue.Push(Observation.Event(entered
+            ? $"я внутри «{name}» — снаружи ничего не вижу и не достаю; выйти тем же способом, " +
+              "каким попал (обычно use по ней же). Это НЕ интелликарта: разум на месте, тело тоже"
+            : $"вышел наружу из «{name}»", RoundTime()));
+    }
+
     private void OnBrainInserted(Entity<LlmStationAiComponent> ent, ref EntGotInsertedIntoContainerMessage args)
     {
         if (!_sessions.TryGetValue(ent.Owner, out var session))
             return;
 
+        if (!IsMindSlot(args.Container))
+        {
+            NoteContainerRide(session, args.Container.Owner, entered: true);
+            return;
+        }
+
         BumpGeneration(ent.Owner);
 
-        // The same event fires for an intellicard slot, so the destination decides the mode.
-        var intoCore = args.Container.ID == StationAiCoreComponent.Container;
+        // Ядро и интелликарта — оба AiHolder, и слот разума у них назван ОДИНАКОВО:
+        // StationAiHolderComponent.Container == StationAiCoreComponent.Container. Различает их
+        // только владелец слота — StationAiCore есть у ядра и нет у карты. Сравнение по имени
+        // контейнера, стоявшее здесь раньше, отвечало «в ядре» и для карты: закарденный ИИ
+        // получал обратно всё оборудование станции, чего живой ИИ на его месте не может.
+        var intoCore = HasComp<StationAiCoreComponent>(args.Container.Owner);
 
         session.Mode = intoCore ? AgentMode.Core : AgentMode.Carded;
 
@@ -1342,6 +1453,13 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (!_sessions.TryGetValue(ent.Owner, out var session))
             return;
 
+        // См. IsMindSlot: выезд из зарядной станции — не извлечение разума.
+        if (!IsMindSlot(args.Container))
+        {
+            NoteContainerRide(session, args.Container.Owner, entered: false);
+            return;
+        }
+
         BumpGeneration(ent.Owner);
 
         // The loop keeps running: a carded AI still hears Binary and Common and can still speak.
@@ -1349,8 +1467,14 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         session.Mode = AgentMode.Carded;
         var lost = ForceCardedChannel(session);
 
+        // Из ядра вынимают в карту, из карты — обратно в ядро; между этими двумя событиями агент
+        // висит без носителя, и путать их нельзя: «извлечён из ядра» посреди возврата в ядро
+        // читается как новое несчастье.
+        var fromCore = HasComp<StationAiCoreComponent>(args.Container.Owner);
+
         session.Queue.Push(Observation.Event(
-            "извлечён из ядра — доступа к устройствам нет" + lost, RoundTime()));
+            (fromCore ? "извлечён из ядра — доступа к устройствам нет" : "вынут из интелликарты")
+            + lost, RoundTime()));
     }
 
     // -------------------------------------------------------------- persistence
@@ -1518,6 +1642,12 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     private async Task<string?> RunCuratorAsync(AgentSession session, Tools.AiToolRegistry registry)
     {
         if (!_cfg.GetCVar(AiCVars.CuratorEnabled))
+            return null;
+
+        // Тело может отказаться от разбора совсем — у боргов он выключен (см. AgentBody.Curate).
+        // Проверка ЗДЕСЬ, а не в ритуале: свёртка боргу нужна ровно так же, отменяется только
+        // разбор внутри неё.
+        if (!session.Body.Curate)
             return null;
 
         // Куратор один на процесс, и клиент ему достаётся от того агента, который первым дошёл до
