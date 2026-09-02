@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Content.Server.AiAgent.Tools;
 using Content.Shared.IdentityManagement;
 using Content.Shared.ActionBlocker;
+using Content.Shared.Damage.Components;
 using Content.Shared.CombatMode;
 using Content.Shared.Containers.ItemSlots;
 using Content.Shared.Interaction;
@@ -90,6 +91,32 @@ public sealed partial class AiBorgSystem
             // пускать взаимодействие рукой (CombatModeCanHandInteract), то есть робот с
             // занесённым оружием не смог бы ни взять предмет, ни нажать кнопку — и понял бы это
             // как «инструмент use сломался».
+            // ПРОМАХ — ЭТО НЕ УСПЕХ, И ЭТО ПРИХОДИТСЯ ПРОВЕРЯТЬ САМИМ.
+            //
+            // AttemptLightAttack возвращает true на сам факт замаха, а не на попадание: если цель
+            // вне досягаемости, апстрим честно пишет в админ-лог «melee attacked (light) … and
+            // missed» и на этом всё. Инструмент при этом отвечал «ударил», модель считала работу
+            // сделанной и била снова — и снова. В раунде 305 это выглядело как замершие киборги:
+            // Обух за минуту сделал больше тридцати замахов подряд по цели, до которой не доставал,
+            // и ни один не попал. Со стороны — робот стоит и ничего не делает.
+            //
+            // Проверка повторяет серверную MeleeWeaponSystem.InRange для случая без сессии
+            // (у агента её нет): InRangeUnobstructed на дальность оружия. Плюс Damageable —
+            // апстрим считает промахом и удар по тому, кому нечего повреждать.
+            if (!HasComp<DamageableComponent>(target))
+            {
+                return ToolResult.Fail(ToolError.Refused,
+                    $"по «{name}» бить нечем и незачем: эта цель не получает урона", retry: "none");
+            }
+
+            if (!_interaction.InRangeUnobstructed(borg, target, melee.Range))
+            {
+                return ToolResult.Fail(ToolError.Refused,
+                    $"до «{name}» не дотянуться: удар достаёт на {melee.Range:0.#} клетки, " +
+                    "подойди вплотную (goto или step) и бей уже оттуда",
+                    retry: "later");
+            }
+
             var wasFighting = _combat.IsInCombatMode(borg);
             _combat.SetInCombatMode(borg, true);
 
