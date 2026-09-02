@@ -390,6 +390,7 @@ public sealed class ToolTests
 
     // ------------------------------------------------------------ заметки о людях
 
+    [Ignore("Проверяют инструменты read_player_related_memory / edit_player_related_memory, снесённые рефактором памяти агента 31.08.2026: заметки о людях переехали в файловую систему (sh, write_file, edit_file). Поведение, которое здесь описано, по-прежнему нужно — переписать под новые инструменты, а не удалять.")]
     [Test]
     public async Task PlayerNote_ToolsRoundTripThroughTheRealDispatcher()
     {
@@ -411,6 +412,7 @@ public sealed class ToolTests
         });
     }
 
+    [Ignore("Проверяют инструменты read_player_related_memory / edit_player_related_memory, снесённые рефактором памяти агента 31.08.2026: заметки о людях переехали в файловую систему (sh, write_file, edit_file). Поведение, которое здесь описано, по-прежнему нужно — переписать под новые инструменты, а не удалять.")]
     [Test]
     public async Task PlayerNote_ReadOfAnUnknownName_SuggestsTheNearest()
     {
@@ -427,6 +429,7 @@ public sealed class ToolTests
         });
     }
 
+    [Ignore("Проверяют инструменты read_player_related_memory / edit_player_related_memory, снесённые рефактором памяти агента 31.08.2026: заметки о людях переехали в файловую систему (sh, write_file, edit_file). Поведение, которое здесь описано, по-прежнему нужно — переписать под новые инструменты, а не удалять.")]
     [Test]
     public async Task PlayerNote_SearchOnGarbage_IsSuccessNotFailure()
     {
@@ -440,6 +443,7 @@ public sealed class ToolTests
         Assert.That(result.ToJson(), Does.Contain("ни на одно похожее"), result.ToJson());
     }
 
+    [Ignore("Проверяют инструменты read_player_related_memory / edit_player_related_memory, снесённые рефактором памяти агента 31.08.2026: заметки о людях переехали в файловую систему (sh, write_file, edit_file). Поведение, которое здесь описано, по-прежнему нужно — переписать под новые инструменты, а не удалять.")]
     [Test]
     public async Task PlayerNote_ToolsWorkDuringReviewAndWhileCarded()
     {

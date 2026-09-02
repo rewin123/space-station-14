@@ -217,6 +217,12 @@ public sealed class SkillMemoryTests
                     a.GetProperty("desc").GetString() ?? "",
                     a.GetProperty("content").GetString() ?? "");
 
+                // Подставной обработчик обязан делать то же, что настоящий: счётчик записей
+                // живёт в обработчике инструмента, а не в монтировании (см. Vfs.NoteWrite).
+                // Без этой строки разбор отчитается нулём записей при записанном файле.
+                if (r.Ok)
+                    vfs.NoteWrite();
+
                 return Task.FromResult(r.Ok ? ToolResult.Success() : ToolResult.Fail(ToolError.BadArgs, r.Message));
             },
         });

@@ -361,7 +361,7 @@ public sealed class RogueAiTests
     /// </para>
     /// </remarks>
     [Test]
-    public async Task OpenMode_RaisesThreeSupportBorgs()
+    public async Task OpenMode_RaisesEverySupportBorgFromTheRule()
     {
         await using var w = await AiStation.Create();
         var server = w.Pair.Server;
@@ -396,9 +396,16 @@ public sealed class RogueAiTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(wanted, Is.EqualTo(3), "в прототипе открытого режима не три киборга");
-            Assert.That(ids, Has.Count.EqualTo(3), $"поднято не три робота: {string.Join(", ", ids)}");
-            Assert.That(ids.Distinct(global::System.StringComparer.OrdinalIgnoreCase).Count(), Is.EqualTo(3),
+            // Сверяется со СПИСКОМ правила, а не с печатным числом. Состав отряда — решение
+            // YAML: 31.08 их было трое, 01.09 стало семеро, и тест, знающий число наизусть,
+            // краснеет от каждого такого решения, ничего при этом не проверяя.
+            Assert.That(wanted, Is.GreaterThan(0), "открытому режиму не прописано ни одного киборга");
+
+            Assert.That(ids, Has.Count.EqualTo(wanted),
+                $"поднято {ids.Count} роботов из {wanted}: {string.Join(", ", ids)}");
+
+            Assert.That(ids.Distinct(global::System.StringComparer.OrdinalIgnoreCase).Count(),
+                Is.EqualTo(wanted),
                 $"идентификаторы совпали: {string.Join(", ", ids)} — каталоги памяти теперь общие");
         });
     }
@@ -412,7 +419,7 @@ public sealed class RogueAiTests
     /// в YAML, а пустой список легко «починить» копипастой из соседнего правила.
     /// </remarks>
     [Test]
-    public async Task HiddenMode_RaisesNoBorgs()
+    public async Task HiddenMode_RaisesAtMostOneNonCombatBorg()
     {
         await using var w = await AiStation.Create();
         var server = w.Pair.Server;
@@ -420,7 +427,17 @@ public sealed class RogueAiTests
         var count = await w.Read(() =>
         {
             var (rogue, rule) = StartRule(server, HiddenRule);
-            Assert.That(rule.SupportBorgs, Is.Empty, "скрытому режиму прописали киборгов поддержки");
+
+            // 01.09.2026 решение изменилось: у скрытого режима стало РОВНО ОДНО тело, и проверять
+            // теперь надо не «ноль», а то, ради чего ноль стоял, — что маскировка цела. Пустой
+            // список этого больше не гарантирует, зато гарантирует отсутствие боевых корпусов:
+            // инженерный борг у робототехники — штатная картина любой смены, а шесть «Клинов» без
+            // обозначений производителя это не «почти нормально», это объявление.
+            Assert.That(rule.SupportBorgs, Has.Count.LessThanOrEqualTo(1),
+                "скрытому режиму прописали отряд, а не одиночное тело");
+
+            Assert.That(rule.SupportBorgs.Select(b => b.Id), Has.None.Contains("Combat"),
+                "скрытому режиму прописали БОЕВОЙ корпус — маскировка сорвана на первой минуте");
 
             rogue.SpawnSupportBorgs(rule);
 
@@ -432,7 +449,8 @@ public sealed class RogueAiTests
             return n;
         });
 
-        Assert.That(count, Is.Zero, "скрытый режим поставил роботов");
+        Assert.That(count, Is.LessThanOrEqualTo(1),
+            "скрытый режим поставил отряд вместо одиночного тела");
     }
 
     /// <summary>
@@ -525,7 +543,12 @@ public sealed class RogueAiTests
                     live++;
             }
 
-            Assert.That(live, Is.EqualTo(3), "роботы не поднялись — проверять нечего");
+            // Столько, сколько прописано правилу, а не печатное число: состав отряда — решение
+            // YAML, и тест не должен ломаться от того, что владелец добавил седьмой корпус.
+            // Если сюда пришло меньше, значит потолок ai.max_agents не вмещает ни отряд, ни ядро,
+            // и это поломка умолчания, а не теста.
+            Assert.That(live, Is.EqualTo(rule.SupportBorgs.Count),
+                "роботы не поднялись — проверять нечего");
 
             return host.TryClaimAnyCore(out var why) ? "" : why;
         });

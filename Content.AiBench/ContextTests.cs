@@ -373,7 +373,7 @@ public sealed class ContextTests
         // layout stopped somebody moving the announcement below the curator — which is exactly the
         // bug an earlier commit had to fix.
         Assert.That(CompactionSteps.Ritual.Select(s => s.Name),
-            Is.EqualTo(new[] { "feasibility", "announce", "curator", "summary", "fold", "prefix", "commit" }));
+            Is.EqualTo(new[] { "feasibility", "announce", "curator", "summary", "fold", "report", "prefix", "commit" }));
     }
 
     [Test]

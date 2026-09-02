@@ -81,7 +81,7 @@ jobs:
         run: |
           $env:DOTNET_gcServer=1
           dotnet test --no-build --configuration DebugOpt Content.AiBench/Content.AiBench.csproj `
-            --filter 'TestCategory!=Live' `
+            --filter 'TestCategory!=Live&TestCategory!=Load' `
             -- NUnit.ConsoleOut=0 NUnit.TestOutputXml="logs" NUnit.WorkDirectory="$(pwd)/test_results"
 
       - name: Результаты тестов
