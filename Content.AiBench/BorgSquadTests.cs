@@ -61,7 +61,11 @@ public sealed class BorgSquadTests
         {
             var system = w.Pair.Server.System<AiBorgSystem>();
 
-            for (var i = 0; i < 4; i++)
+            // ТРИ, а не шесть: на стенде уже занято ядро, а общий потолок ai.max_agents по
+            // умолчанию равен четырём — четвёртый борг честно получает отказ в StartSession.
+            // Поднимать потолок ради теста незачем: связь «номер каталога → имя из пула»
+            // проверяется на трёх ровно так же, как на шести.
+            for (var i = 0; i < 3; i++)
             {
                 Assert.That(system.TrySpawnBorg(null, out var borg, out var placed, CombatProto), Is.True,
                     $"робот {i}: не удалось поставить — {placed}");
@@ -208,37 +212,42 @@ public sealed class BorgSquadTests
 
         await w.Pair.Server.WaitRunTicks(5);
 
-        // Мишень ставится ЗАВЕДОМО дальше клинка, но в пределах обзора: вопрос теста в том, что
-        // отвечает инструмент на недосягаемую цель, а не в том, видит ли её робот.
-        var at = await w.Read(() =>
-            w.Ent.System<Robust.Shared.GameObjects.SharedTransformSystem>().GetWorldPosition(borg));
+        // Мишень ставится НА ТУ ЖЕ КЛЕТКУ, а отодвигается уже после того, как робот её увидел.
+        //
+        // Первая версия спавнила её сразу в четырёх тайлах и была красной по двум причинам сразу:
+        // смещение считалось в мировых координатах и попадало не туда, куда ожидалось, а сама
+        // мишень к моменту удара успевала исчезнуть — инструмент отвечал «объекта больше нет», и
+        // тест проверял не то, что хотел. Клетка робота — единственное место, про которое на
+        // настоящей карте известно, что там пол; два моба на одной клетке законны.
+        var xform = w.Pair.Server.System<Robust.Shared.GameObjects.SharedTransformSystem>();
+        var at = await w.Read(() => xform.GetWorldPosition(borg));
 
-        var victim = await w.SpawnCrew("Далёкий", at + new Vector2(4f, 0f));
+        var victim = await w.SpawnCrew("Далёкий", at);
 
         await w.Pair.Server.WaitRunTicks(5);
 
         var damage = w.Pair.Server.System<DamageableSystem>();
-        var before = await w.Read(() => damage.GetTotalDamage(victim));
 
         var seen = await w.InvokeOn(borg, "look");
         var handle = HandleOf(seen.EffectJson(), "crew-");
 
         Assert.That(handle, Is.Not.Null, $"мишень не попала в обзор: {seen.EffectJson()}");
 
-        // Десять попыток, как в Hit_ActuallyHurts, и по той же причине: первый удар после
-        // установки модуля упирается в перезарядку (ResetOnHandSelected), и её отказ — не тот,
-        // который проверяется здесь. Нужен устоявшийся ответ.
-        ToolResult hit = null!;
+        // Отодвигаем РОБОТА, а не мишень.
+        //
+        // Двигать мишень пробовали — не работает: перенесённый моб к следующему вызову
+        // инструмента переставал разрешаться по хендлу («объекта больше нет»), и тест снова
+        // проверял не то. Робот же в стенде живёт гарантированно: его держит сессия агента.
+        // Для проверки это равнозначно — вопрос в расстоянии между двумя точками.
+        await w.Post(() => xform.SetWorldPosition(borg, at + new Vector2(8f, 0f)));
+        await w.Pair.Server.WaitRunTicks(5);
 
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            hit = await w.InvokeOn(borg, "hit", $"{{\"target\":\"{handle}\"}}");
+        var before = await w.Read(() => damage.GetTotalDamage(victim));
 
-            if (!hit.Ok && hit.Detail is { } d && d.Contains("не дотянуться", StringComparison.Ordinal))
-                break;
-
-            await w.Pair.Server.WaitRunTicks(10);
-        }
+        // Одного вызова достаточно, и это часть проверки. Отказ по дальности стоит ПЕРЕД замахом,
+        // то есть перед перезарядкой: если бы он стоял после, первый ответ был бы «рука ещё не
+        // отведена» и настоящую причину модель узнала бы только со второй попытки.
+        var hit = await w.InvokeOn(borg, "hit", $"{{\"target\":\"{handle}\"}}");
 
         await w.Pair.Server.WaitRunTicks(5);
 
@@ -260,13 +269,25 @@ public sealed class BorgSquadTests
         });
     }
 
-    /// <summary>Первый хендл заданного вида из выдачи <c>look</c>.</summary>
+    /// <summary>
+    /// Первый хендл заданного вида из выдачи <c>look</c> — именно ХЕНДЛ, а не строка целиком.
+    /// </summary>
+    /// <remarks>
+    /// Обрезка по первому пробелу обязательна, и на ней тест уже спотыкался. Строка обзора
+    /// выглядит как <c>crew-1 | Далёкий | Alive | Δ(0,0) (-2,-17)</c>, инструменты принимают из
+    /// неё только первое слово, а на всю строку отвечают <c>stale_handle</c> — «объекта больше
+    /// нет». Отличить это от настоящего исчезновения цели по тексту ответа невозможно, поэтому
+    /// сообщение и увело в сторону: искали, кто удаляет моба, а никто его не удалял.
+    /// </remarks>
     private static string? HandleOf(string lookJson, string kind)
     {
         foreach (var row in lookJson.Split('"'))
         {
-            if (row.StartsWith(kind, StringComparison.Ordinal))
-                return row;
+            if (!row.StartsWith(kind, StringComparison.Ordinal))
+                continue;
+
+            var end = row.IndexOfAny(new[] { ' ', '|' });
+            return end < 0 ? row : row[..end].Trim();
         }
 
         return null;
