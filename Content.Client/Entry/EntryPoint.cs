@@ -132,6 +132,7 @@ namespace Content.Client.Entry
             _prototypeManager.RegisterIgnore("codewordGenerator");
             _prototypeManager.RegisterIgnore("codewordFaction");
 
+            // FORK PATCH К2 (docs/upstream-patches.md).
             // Виды прототипов нашего форка, объявленные только на сервере (AiLlmProfilePrototype,
             // AiBackupPowerPrototype). Без этих двух строк клиент из лаунчера теряет половину
             // каталога _AiAgent, и вот почему.

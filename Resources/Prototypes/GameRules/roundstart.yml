@@ -180,6 +180,7 @@
   id: Traitor
   components:
   - type: GameRule
+    # FORK PATCH К5 (docs/upstream-patches.md).
     # Апстримовые 5 на этом сервере означали «предателей не бывает никогда»: онлайн 0-4,
     # SecretRuleSystem отсеивал Traitor до броска кубика, и все раунды 11-16 августа шли
     # как Survival — без единого антага. 2 готовых игрока при PlayerRatio 10 и Range.Min 1
@@ -355,6 +356,7 @@
   components:
   - type: GameRule
     minPlayers: 5
+    # FORK PATCH К6 (docs/upstream-patches.md).
     # ДОБАВЛЕНО 2026-08-16. Без этой строки правило наследует умолчание true
     # (GameRuleComponent.cs:31) и при нехватке игроков не отключается само, а
     # отменяет ВЕСЬ пресет. На онлайне 4 это ломало старт раунда целиком:

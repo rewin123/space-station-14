@@ -12,7 +12,7 @@ namespace Content.Shared.Eye
         Subfloor = 1 << 2, // Pipes, disposal chutes, cables etc. while hidden under tiles. Can be revealed with a t-ray.
         Admin = 1 << 3, // Reserved for admins in stealth mode and admin tools.
 
-        // FORK: то, что клиент всё равно не рисует — внутренности мобов, содержимое закрытых
+        // FORK PATCH К1 (docs/upstream-patches.md). То, что клиент всё равно не рисует — внутренности мобов, содержимое закрытых
         // непрозрачных контейнеров, поддерево занятого агентом шасси.
         //
         // Бита нет ни у одного глаза (EyeComponent.DefaultVisibilityMask == Normal) и его не
