@@ -1,0 +1,94 @@
+# Сборка форка и его собственный стенд.
+#
+# Отдельным файлом, а не правкой апстримовых workflow: те переносятся на каждом мерже, и правка
+# внутри них стала бы шестым пунктом в docs/upstream-patches.md. Этот файл апстриму неизвестен и
+# конфликтовать ему не с чем.
+#
+# Категория Live исключена намеренно. Эти тесты ходят в настоящую модель, и в CI им делать нечего
+# по двум причинам сразу: ключей в CI быть не должно, а сеть до провайдера — это внешний фактор,
+# от которого зелёная сборка зависеть не может. Гонять их — руками: Tools/aibench --live.
+
+name: Форк — сборка и стенд
+
+on:
+  push:
+    branches: [ ai ]
+  pull_request:
+    types: [ opened, reopened, synchronize, ready_for_review ]
+    branches: [ ai ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Забрать репозиторий
+        uses: actions/checkout@v7
+
+      - name: Подмодули
+        run: git submodule update --init --recursive
+
+      - name: Обновить движок
+        uses: space-wizards/submodule-dependency@v0.1.5
+
+      - name: Подмодули движка
+        run: |
+          cd RobustToolbox/
+          git submodule update --init --recursive
+
+      - name: .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Зависимости
+        run: dotnet restore
+
+      - name: Сборка
+        run: dotnet build --configuration DebugOpt --no-restore /m
+
+      # Проверка правила форка идёт ДО тестов: изменённый апстримовый файл без записи в
+      # docs/upstream-patches.md — это не стилистика, а будущий неразрешимый конфликт мержа.
+      - name: Правки апстрима учтены
+        run: |
+          git remote add upstream https://github.com/space-wizards/space-station-14 || true
+          git fetch --no-tags --depth=200 upstream master
+          BASE=$(git merge-base HEAD upstream/master)
+
+          CHANGED=$(git diff --name-only --diff-filter=M "$BASE" HEAD \
+            | grep -vE '^(Content\.Server/AiAgent/|Content\.AiBench/|Resources/Prototypes/_AiAgent/|Resources/Locale/[a-z-]+/_AiAgent/|Tools/|docs/|Content\.OracleTrace/|skill_start/|RobustToolbox|\.gitignore|README\.md|NOTICE|\.github/)' || true)
+
+          FAILED=0
+          for f in $CHANGED; do
+            if ! grep -q "FORK PATCH" "$f"; then
+              echo "::error file=$f::изменён файл апстрима без метки FORK PATCH — опишите правку в docs/upstream-patches.md"
+              FAILED=1
+            else
+              echo "  ок: $f"
+            fi
+          done
+          exit $FAILED
+
+      - name: Стенд агента (без обращений к модели)
+        shell: pwsh
+        run: |
+          $env:DOTNET_gcServer=1
+          dotnet test --no-build --configuration DebugOpt Content.AiBench/Content.AiBench.csproj `
+            --filter 'TestCategory!=Live' `
+            -- NUnit.ConsoleOut=0 NUnit.TestOutputXml="logs" NUnit.WorkDirectory="$(pwd)/test_results"
+
+      - name: Результаты тестов
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aibench-results
+          path: test_results/*
+          retention-days: 7
+          compression-level: 9
