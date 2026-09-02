@@ -56,6 +56,7 @@ public sealed partial class AiBorgSystem : EntitySystem
         InitializeMovement();
         InitializeSight();
         InitializeReplication();
+        InitializeHits();
     }
 
     private void OnRunLevelChanged(GameRunLevelChangedEvent ev)
@@ -122,6 +123,8 @@ public sealed partial class AiBorgSystem : EntitySystem
         if (!TryAssignAgentId(comp, out reason))
             return false;
 
+        ApplyAgentName(comp);
+
         // Разум — условие активации, а не украшение. См. remarks.
         if (!_mind.TryGetMind(borg, out var existing, out _))
         {
@@ -185,6 +188,7 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         StopSteering(borg);
         ForgetSight(borg);
+        ForgetHits(borg);
         ShowSubtree(borg);
         ReleaseFromPvs(borg);
         _host.Release(borg, why);
@@ -256,6 +260,39 @@ public sealed partial class AiBorgSystem : EntitySystem
         return false;
     }
 
+    /// <summary>
+    /// Выбрать имя по номеру тела: <c>combat-3</c> получает третье имя из
+    /// <see cref="AiBorgComponent.AgentNames"/>.
+    ///
+    /// <para>
+    /// Номер берётся из уже выданного идентификатора, а не из отдельного счётчика, — иначе два
+    /// источника нумерации разошлись бы на первом же освободившемся теле, и робот с каталогом
+    /// <c>combat-3</c> отзывался бы на чужое имя.
+    /// </para>
+    /// <para>
+    /// Имён меньше, чем тел, — берём с конца списка по кругу и дописываем номер: шесть «Клинов»
+    /// это поломка, а «Клин-2» — всего лишь некрасиво. Список пуст — остаётся то, что стоит в
+    /// прототипе, то есть прежнее поведение.
+    /// </para>
+    /// </summary>
+    private void ApplyAgentName(AiBorgComponent comp)
+    {
+        if (comp.AgentNames.Count == 0)
+            return;
+
+        var dash = comp.AgentId.LastIndexOf('-');
+
+        if (dash < 0 || !int.TryParse(comp.AgentId.AsSpan(dash + 1), out var n) || n < 1)
+            return;
+
+        var index = (n - 1) % comp.AgentNames.Count;
+        var lap = (n - 1) / comp.AgentNames.Count;
+
+        var name = comp.AgentNames[index];
+
+        comp.AgentName = lap == 0 ? name : $"{name}-{lap + 1}";
+    }
+
     /// <summary>Идентификаторы, которые уже кем-то заняты: живыми сессиями и заклеймленными телами.</summary>
     private HashSet<string> TakenAgentIds()
     {
@@ -313,6 +350,11 @@ public sealed partial class AiBorgSystem : EntitySystem
             Announce = null,
             Speak = _host.SpeakUntooledAsync,
             ChannelsFor = _ => comp.Channels,
+
+            // Разбор отрезка боргу выключен (решение владельца 01.09.2026): он стоил до минуты
+            // молчания на каждую свёртку, а свёрток у четырёх агентов много. Подробнее — в
+            // AgentBody.Curate.
+            Curate = false,
             LlmChain = string.IsNullOrWhiteSpace(comp.LlmChain) ? null : comp.LlmChain,
         };
     }
