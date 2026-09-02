@@ -129,6 +129,14 @@ public sealed class LlamaClient : ILlmClient, IDisposable
             ReasoningEffort = LlmDialectRules.AllowsReasoningEffort(dialect)
                 ? ReasoningEffortRequest.Build(_sampling.ThinkingEffort)
                 : null,
+
+            // Qwen3 на vLLM думает по умолчанию. reasoning_effort: off поле не шлёт —
+            // этого мало, шаблон всё равно откроет <think>. Явный enable_thinking:false
+            // гасит его. Чужим OpenAI-профилям (grok, codex) это поле не уходит:
+            // у них усилие не off, и WhenWritingNull выкидывает null целиком.
+            ChatTemplateKwargs = LlmDialectRules.AllowsReasoningEffort(dialect)
+                ? ChatTemplateKwargsRequest.Build(_sampling.ThinkingEffort)
+                : null,
         };
 
         var body = JsonSerializer.Serialize(request, LlmJson.Options);
@@ -470,6 +478,19 @@ public static class ReasoningEffortRequest
         // умолчательный, что заведомо лучше отказа на каждом ходу из-за опечатки в CVar.
         _ => null,
     };
+}
+
+/// <summary>
+/// <c>chat_template_kwargs.enable_thinking</c> для vLLM. Поле уходит только когда размышление
+/// надо выключить: иначе шаблон Qwen3 открывает &lt;think&gt; сам, и пустой reasoning_effort
+/// этого не отменяет.
+/// </summary>
+public static class ChatTemplateKwargsRequest
+{
+    public static ChatTemplateKwargsDto? Build(string effort) =>
+        effort.Trim().ToLowerInvariant() is "off" or "disabled" or "none"
+            ? new ChatTemplateKwargsDto { EnableThinking = false }
+            : null;
 }
 
 public sealed record LlmSampling(

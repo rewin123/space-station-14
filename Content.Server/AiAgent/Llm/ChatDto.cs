@@ -215,6 +215,21 @@ public sealed class ChatRequestDto
     /// </summary>
     [JsonPropertyName("reasoning_effort")]
     public string? ReasoningEffort { get; set; }
+
+    /// <summary>
+    /// Шаблон чата vLLM / Qwen: <c>enable_thinking: false</c> гасит размышление на модели,
+    /// у которой оно включено по умолчанию. Null — поле не уходит, байты чужих профилей
+    /// не меняются.
+    /// </summary>
+    [JsonPropertyName("chat_template_kwargs")]
+    public ChatTemplateKwargsDto? ChatTemplateKwargs { get; set; }
+}
+
+/// <summary>Аргументы шаблона чата, которые понимает vLLM с Qwen3.</summary>
+public sealed class ChatTemplateKwargsDto
+{
+    [JsonPropertyName("enable_thinking")]
+    public bool EnableThinking { get; set; }
 }
 
 /// <summary>
