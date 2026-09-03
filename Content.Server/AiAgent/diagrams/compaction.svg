@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="250" viewBox="0 0 960 250" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6e7781"/></marker><marker id="tailhead" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 10 0 L 0 5 L 10 10 z" fill="#6e7781"/></marker></defs>
+<rect width="960" height="250" rx="14" fill="#ffffff"/>
+<rect x="30" y="30" width="215" height="60" rx="8" fill="#ffffff" stroke="#cf222e" stroke-width="1.6"/>
+<rect x="30" y="30" width="5" height="60" rx="2.5" fill="#cf222e"/>
+<text x="137.5" y="56.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">1  feasibility</text>
+<text x="137.5" y="72.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">body has more than one message</text>
+<rect x="260" y="30" width="215" height="60" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="367.5" y="56.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">2  announce</text>
+<text x="367.5" y="72.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">announced in game first</text>
+<rect x="490" y="30" width="215" height="60" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="597.5" y="56.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">3  curator</text>
+<text x="597.5" y="72.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">self-review on a chain copy</text>
+<rect x="720" y="30" width="215" height="60" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="827.5" y="56.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">4  summary</text>
+<text x="827.5" y="72.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">asked with the same tools</text>
+<rect x="30" y="130" width="215" height="60" rx="8" fill="#ffffff" stroke="#cf222e" stroke-width="1.6"/>
+<rect x="30" y="130" width="5" height="60" rx="2.5" fill="#cf222e"/>
+<text x="137.5" y="156.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">5  fold</text>
+<text x="137.5" y="172.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">summary + last N journal lines</text>
+<rect x="260" y="130" width="215" height="60" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="367.5" y="156.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">6  report</text>
+<text x="367.5" y="172.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">curator verdict into the body</text>
+<rect x="490" y="130" width="215" height="60" rx="8" fill="#ffffff" stroke="#cf222e" stroke-width="1.6"/>
+<rect x="490" y="130" width="5" height="60" rx="2.5" fill="#cf222e"/>
+<text x="597.5" y="156.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">7  prefix</text>
+<text x="597.5" y="172.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">reload VFS, rebuild zone 0</text>
+<rect x="720" y="130" width="215" height="60" rx="8" fill="#ffffff" stroke="#cf222e" stroke-width="1.6"/>
+<rect x="720" y="130" width="5" height="60" rx="2.5" fill="#cf222e"/>
+<text x="827.5" y="156.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">8  commit</text>
+<text x="827.5" y="172.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">counters, log line</text>
+<path d="M 245.0 60.0 L 260.0 60.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 245.0 160.0 L 260.0 160.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 475.0 60.0 L 490.0 60.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 475.0 160.0 L 490.0 160.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 705.0 60.0 L 720.0 60.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 705.0 160.0 L 720.0 160.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 827.5 90.0 L 827.5 110.0 L 137.5 110.0 L 137.5 130.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="30" y="215.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">Red bar: a fatal step — failure aborts the ritual and zone 0 is rolled back byte for byte. Other steps are logged and skipped. Runs at a turn boundary only.</text>
+</svg>

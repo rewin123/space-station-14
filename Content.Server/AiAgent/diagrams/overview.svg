@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="760" viewBox="0 0 960 760" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif">
+<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6e7781"/></marker><marker id="tailhead" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 10 0 L 0 5 L 10 10 z" fill="#6e7781"/></marker></defs>
+<rect width="960" height="760" rx="14" fill="#ffffff"/>
+<rect x="20" y="20" width="670" height="100" rx="12" fill="#f1f3f5" stroke="#d0d7de" stroke-width="1"/>
+<text x="34" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#57606a" letter-spacing="0.4">GAME WORLD<tspan dx="12" font-size="12" font-weight="400" fill="#59636e" letter-spacing="0">RobustToolbox + Content.Server, unmodified</tspan></text>
+<rect x="35" y="45" width="170" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="120.0" y="69.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Entities &amp; events</text>
+<text x="120.0" y="85.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">doors · APCs · radio · mobs</text>
+<rect x="215" y="45" width="175" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="302.5" y="69.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">StationAiVisionSystem</text>
+<text x="302.5" y="85.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">the camera view</text>
+<rect x="405" y="45" width="150" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="480.0" y="69.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">NavMapComponent</text>
+<text x="480.0" y="85.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">the borg&#x27;s route map</text>
+<rect x="20" y="135" width="670" height="140" rx="12" fill="#eaf2fb" stroke="#d0d7de" stroke-width="1"/>
+<text x="34" y="157" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#0969da" letter-spacing="0.4">THE SEAM<tspan dx="12" font-size="12" font-weight="400" fill="#59636e" letter-spacing="0">the only code that touches both sides</tspan></text>
+<rect x="35" y="160" width="280" height="56" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="1.6"/>
+<rect x="35" y="160" width="5" height="56" rx="2.5" fill="#0969da"/>
+<text x="175.0" y="184.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">StationAiAgentSystem</text>
+<text x="175.0" y="200.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">lifecycle · perception · tools · vision</text>
+<rect x="330" y="160" width="185" height="56" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="1.6"/>
+<rect x="330" y="160" width="5" height="56" rx="2.5" fill="#0969da"/>
+<text x="422.5" y="184.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">AiBorgSystem</text>
+<text x="422.5" y="200.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">legs · eyes · hands · route</text>
+<rect x="530" y="160" width="145" height="56" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="1.6"/>
+<rect x="530" y="160" width="5" height="56" rx="2.5" fill="#0969da"/>
+<text x="602.5" y="184.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Mode systems</text>
+<text x="602.5" y="200.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">rogue · power · end</text>
+<rect x="35" y="225" width="215" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="142.5" y="241.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Witness</text>
+<text x="142.5" y="257.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">game events → OBSERVED</text>
+<rect x="265" y="225" width="300" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="415.0" y="241.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">DeviceGate</text>
+<text x="415.0" y="257.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">whitelist → wire → power → visible → access</text>
+<path d="M 120.0 101.0 L 120.0 160.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="128.0" y="124.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">game events</text>
+<text x="128.0" y="124.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">game events</text>
+<path d="M 302.5 101.0 L 302.5 160.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="310.5" y="124.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">tiles</text>
+<text x="310.5" y="124.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">tiles</text>
+<path d="M 480.0 101.0 L 480.0 160.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="488.0" y="124.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">bitmap</text>
+<text x="488.0" y="124.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">bitmap</text>
+<path d="M 602.5 160.0 L 602.5 120.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="610.5" y="134.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">spawns · grants</text>
+<text x="610.5" y="134.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">spawns · grants</text>
+<path d="M 315.0 188.0 L 330.0 188.0" fill="none" stroke="#6e7781" stroke-width="1.6"/>
+<path d="M 75.0 216.0 L 142.5 225.0" fill="none" stroke="#6e7781" stroke-width="1.6"/>
+<rect x="20" y="290" width="480" height="70" rx="12" fill="#fbf3e6" stroke="#d0d7de" stroke-width="1"/>
+<text x="34" y="312" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#bc4c00" letter-spacing="0.4">WORLD BUS<tspan dx="12" font-size="12" font-weight="400" fill="#59636e" letter-spacing="0">Threading/</tspan></text>
+<rect x="35" y="312" width="450" height="40" rx="8" fill="#ffffff" stroke="#bc4c00" stroke-width="1.6"/>
+<rect x="35" y="312" width="5" height="40" rx="2.5" fill="#bc4c00"/>
+<text x="260.0" y="328.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">WorldBus</text>
+<text x="260.0" y="344.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">urgent + normal lanes · per-frame budget · generation check</text>
+<path d="M 260.0 312.0 L 260.0 275.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="272.0" y="287.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">Pump() inside Update, one slice per frame budget</text>
+<text x="272.0" y="287.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">Pump() inside Update, one slice per frame budget</text>
+<rect x="20" y="375" width="670" height="200" rx="12" fill="#eaf6ec" stroke="#d0d7de" stroke-width="1"/>
+<text x="34" y="397" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1a7f37" letter-spacing="0.4">AGENT CORE<tspan dx="12" font-size="12" font-weight="400" fill="#59636e" letter-spacing="0">world-independent</tspan></text>
+<rect x="35" y="400" width="150" height="70" rx="8" fill="#ffffff" stroke="#1a7f37" stroke-width="1.6"/>
+<rect x="35" y="400" width="5" height="70" rx="2.5" fill="#1a7f37"/>
+<text x="110.0" y="423.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Tools</text>
+<text x="110.0" y="439.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">AiToolRegistry</text>
+<text x="110.0" y="455.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">ToolDispatcher</text>
+<rect x="200" y="400" width="150" height="70" rx="8" fill="#ffffff" stroke="#1a7f37" stroke-width="1.6"/>
+<rect x="200" y="400" width="5" height="70" rx="2.5" fill="#1a7f37"/>
+<text x="275.0" y="423.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">TurnRunner</text>
+<text x="275.0" y="439.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">request → classify</text>
+<text x="275.0" y="455.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">dispatch → settle</text>
+<rect x="365" y="400" width="150" height="70" rx="8" fill="#ffffff" stroke="#1a7f37" stroke-width="1.6"/>
+<rect x="365" y="400" width="5" height="70" rx="2.5" fill="#1a7f37"/>
+<text x="440.0" y="423.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">AgentSession</text>
+<text x="440.0" y="439.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">wake · turn · persist</text>
+<text x="440.0" y="455.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">backoff · degraded</text>
+<rect x="530" y="400" width="145" height="70" rx="8" fill="#ffffff" stroke="#1a7f37" stroke-width="1.6"/>
+<rect x="530" y="400" width="5" height="70" rx="2.5" fill="#1a7f37"/>
+<text x="602.5" y="423.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">ObservationQueue</text>
+<text x="602.5" y="439.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">+ TimerStore</text>
+<text x="602.5" y="455.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">caps per kind</text>
+<rect x="35" y="485" width="150" height="70" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="110.0" y="508.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">AgentBody</text>
+<text x="110.0" y="524.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">the body seam:</text>
+<text x="110.0" y="540.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">eye · speak · tools · vfs</text>
+<rect x="200" y="485" width="150" height="70" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="275.0" y="508.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">ConversationState</text>
+<text x="275.0" y="524.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">zone 0 · zone 1 · zone 2</text>
+<text x="275.0" y="540.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">frozen prefix hash</text>
+<rect x="365" y="485" width="150" height="70" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="440.0" y="508.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Compactor · Curator</text>
+<text x="440.0" y="524.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">8-step ritual</text>
+<text x="440.0" y="540.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">self-review</text>
+<rect x="530" y="485" width="145" height="70" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="602.5" y="508.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Vfs · Lua scripts</text>
+<text x="602.5" y="524.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">/wiki_ru /skills</text>
+<text x="602.5" y="540.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">/players /memory.md</text>
+<path d="M 110.0 400.0 L 145.0 352.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="139.5" y="370.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">tool handlers marshal jobs</text>
+<text x="139.5" y="370.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">tool handlers marshal jobs</text>
+<path d="M 602.5 275.0 L 602.5 400.0" fill="none" stroke="#6e7781" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#head)"/>
+<text x="612.5" y="306.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">Observation</text>
+<text x="612.5" y="306.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">Observation</text>
+<text x="612.5" y="355" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11" fill="#59636e">pushed from the main thread,</text>
+<text x="612.5" y="370" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11" fill="#59636e">no bus in between</text>
+<path d="M 530.0 435.0 L 515.0 435.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="522.5" y="395.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">wakes</text>
+<text x="522.5" y="395.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">wakes</text>
+<path d="M 365.0 435.0 L 350.0 435.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 200.0 435.0 L 185.0 435.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 275.0 470.0 L 275.0 485.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="283.0" y="471.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">messages</text>
+<text x="283.0" y="471.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">messages</text>
+<path d="M 440.0 470.0 L 440.0 485.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="448.0" y="471.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">at a turn boundary</text>
+<text x="448.0" y="471.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">at a turn boundary</text>
+<path d="M 515.0 520.0 L 530.0 520.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="522.5" y="514.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">writes</text>
+<text x="522.5" y="514.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">writes</text>
+<path d="M 110.0 470.0 L 110.0 485.0" fill="none" stroke="#6e7781" stroke-width="1.6" stroke-dasharray="6 4"/>
+<path d="M 365.0 520.0 L 350.0 520.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<rect x="20" y="590" width="670" height="75" rx="12" fill="#f3eefa" stroke="#d0d7de" stroke-width="1"/>
+<text x="34" y="612" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#8250df" letter-spacing="0.4">LLM LAYER<tspan dx="12" font-size="12" font-weight="400" fill="#59636e" letter-spacing="0">Llm/</tspan></text>
+<rect x="35" y="615" width="260" height="40" rx="8" fill="#ffffff" stroke="#8250df" stroke-width="1.6"/>
+<rect x="35" y="615" width="5" height="40" rx="2.5" fill="#8250df"/>
+<text x="165.0" y="631.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">RoutingLlmClient</text>
+<text x="165.0" y="647.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">chain · sticky · fallback · quota</text>
+<rect x="310" y="615" width="180" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="400.0" y="631.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">LlamaClient</text>
+<text x="400.0" y="647.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">OpenAI-compatible · dialects</text>
+<rect x="505" y="615" width="170" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="590.0" y="631.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">LlmQuotaState</text>
+<text x="590.0" y="647.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">ai_data/llm_state.json</text>
+<path d="M 275.0 555.0 L 240.0 615.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="269.5" y="579.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">ChatAsync(messages, tools)</text>
+<text x="269.5" y="579.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">ChatAsync(messages, tools)</text>
+<path d="M 295.0 635.0 L 310.0 635.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 490.0 635.0 L 505.0 635.0" fill="none" stroke="#6e7781" stroke-width="1.6" stroke-dasharray="6 4"/>
+<rect x="35" y="690" width="640" height="44" rx="8" fill="#faf7ff" stroke="#8250df" stroke-width="1.6"/>
+<rect x="35" y="690" width="5" height="44" rx="2.5" fill="#8250df"/>
+<text x="355.0" y="708.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Model providers</text>
+<text x="355.0" y="724.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">DeepSeek · OpenRouter · llama.cpp · vLLM · Grok bridge</text>
+<path d="M 400.0 655.0 L 400.0 690.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="408.0" y="666.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">HTTP</text>
+<text x="408.0" y="666.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">HTTP</text>
+<rect x="710" y="20" width="230" height="250" rx="12" fill="#e6f5f5" stroke="#d0d7de" stroke-width="1"/>
+<text x="724" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1b7c83" letter-spacing="0.4">OBSERVABILITY</text>
+<rect x="725" y="45" width="200" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="825.0" y="61.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">AgentEventBus</text>
+<text x="825.0" y="77.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">ring buffer · (instance, seq)</text>
+<rect x="725" y="100" width="200" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="825.0" y="116.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">AgentDebugServer</text>
+<text x="825.0" y="132.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">/state /session /events</text>
+<rect x="725" y="155" width="200" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="825.0" y="171.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Tools/aidebug</text>
+<text x="825.0" y="187.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">Vue debugger</text>
+<rect x="725" y="210" width="200" height="40" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="825.0" y="226.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Server console</text>
+<text x="825.0" y="242.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">aiagent · aiborg</text>
+<path d="M 825.0 85.0 L 825.0 100.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 825.0 140.0 L 825.0 155.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 690.0 395.0 L 703.0 395.0 L 703.0 65.0 L 725.0 65.0" fill="none" stroke="#6e7781" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#head)"/>
+<text x="711.0" y="256.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">events</text>
+<text x="711.0" y="256.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">events</text>
+<path d="M 725.0 230.0 L 692.0 230.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="708.5" y="224.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">commands</text>
+<text x="708.5" y="224.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">commands</text>
+<rect x="710" y="375" width="230" height="200" rx="12" fill="#fbf3e6" stroke="#d0d7de" stroke-width="1"/>
+<text x="724" y="397" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#bc4c00" letter-spacing="0.4">DATA<tspan dx="12" font-size="12" font-weight="400" fill="#59636e" letter-spacing="0">ai_data/, git-ignored</tspan></text>
+<rect x="725" y="400" width="200" height="150" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="825.0" y="431.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">ai_data/</text>
+<text x="825.0" y="447.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">SOUL.md · CURATOR.md</text>
+<text x="825.0" y="463.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">wiki_ru/ shared, read-only</text>
+<text x="825.0" y="479.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">agents/&lt;id&gt;/: skills, people,</text>
+<text x="825.0" y="495.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">memory, sessions, logs</text>
+<text x="825.0" y="511.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">config.d/*.yml overlay</text>
+<text x="825.0" y="527.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">*.key · llm_state.json</text>
+<path d="M 675.0 520.0 L 700.0 520.0 L 700.0 475.0 L 725.0 475.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)" marker-start="url(#tailhead)"/>
+<text x="710" y="600" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11" fill="#59636e">solid arrow — call or action</text>
+<text x="710" y="616" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11" fill="#59636e">dashed arrow — observation or event</text>
+<text x="710" y="632" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11" fill="#59636e">coloured bar — a layer&#x27;s key class</text>
+</svg>

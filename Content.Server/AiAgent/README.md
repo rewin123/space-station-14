@@ -89,101 +89,7 @@ bottom, and the agent core in between never touches the entity world directly. E
 crossing from the core into the world goes through the world bus; everything crossing from the
 world into the core is an `Observation`.
 
-```mermaid
-flowchart TB
-    subgraph L1["Layer 1 — Game world (RobustToolbox + Content.Server, unmodified)"]
-        direction LR
-        ECS["Entities, systems, events<br/>doors · APCs · consoles · radio · chat · mobs"]
-        VISION["StationAiVisionSystem<br/>camera view"]
-        NAV["NavMapComponent<br/>PathfindingSystem"]
-    end
-
-    subgraph SEAM["Layer 1 — The seam (the only code that touches both sides)"]
-        direction LR
-        SAS["StationAiAgentSystem<br/>lifecycle · perception subscriptions · station tools"]
-        BORG["AiBorgSystem<br/>legs · eyes · hands · route"]
-        WIT["Witness<br/>event stream → OBSERVED"]
-        GATE["DeviceGate / CheckGate<br/>playable → whitelist → wire → power → visible → access"]
-        MODES["RogueAiRuleSystem · BackupPowerSystem<br/>RoundEndConditions · StationNameOverride"]
-    end
-
-    subgraph L2["Layer 2 — World bus (Threading/)"]
-        BUS["WorldBus<br/>urgent + normal lanes · frame budget · promotion<br/>generation check before every slice"]
-    end
-
-    subgraph L3["Layer 3 — Agent core (world-independent)"]
-        direction LR
-        SESSION["AgentSession<br/>wake · turn · persist · backoff"]
-        TURN["TurnRunner<br/>request → classify → dispatch → settle"]
-        OBS["ObservationQueue<br/>+ TimerStore"]
-        TOOLS["AiToolRegistry<br/>ToolDispatcher"]
-        CONV["ConversationState<br/>zone 0 · zone 1 · zone 2"]
-        COMP["Compactor<br/>8-step ritual"]
-        CUR["Curator<br/>self-review"]
-        VFS["Vfs<br/>/wiki_ru /wiki_en /skills<br/>/players /memory.md /curator.md"]
-        LUA["Script mode<br/>LuaHost · ScriptProcess"]
-        BODY["AgentBody<br/>the seam object"]
-    end
-
-    subgraph L4["Layer 4 — LLM layer (Llm/)"]
-        direction LR
-        ROUTER["RoutingLlmClient<br/>chain · sticky · fallback · quota"]
-        CLIENT["LlamaClient<br/>OpenAI-compatible · dialects"]
-        QUOTA["LlmQuotaState<br/>llm_state.json"]
-    end
-
-    subgraph L5["Layer 5 — Data (ai_data/, git-ignored)"]
-        DATA["SOUL.md · CURATOR.md · wiki_ru/<br/>agents/&lt;id&gt;/ skills · people · memory · sessions · logs<br/>config.d/*.yml · *.key"]
-    end
-
-    subgraph L6["Layer 6 — Observability"]
-        direction LR
-        EVBUS["AgentEventBus<br/>ring buffer"]
-        HTTP["AgentDebugServer<br/>/state /session /events /command"]
-        UI["Tools/aidebug<br/>Vue debugger"]
-        CMD["Console: aiagent · aiborg"]
-    end
-
-    PROV["Model providers<br/>DeepSeek · OpenRouter · llama.cpp · vLLM · Grok bridge"]
-
-    ECS -- "events" --> SAS
-    ECS -- "events" --> WIT
-    VISION --> SAS
-    NAV --> BORG
-    MODES --> ECS
-    SAS -- "RaiseLocalEvent(Actor = brain)" --> ECS
-    BORG -- "InputMover · Interaction" --> ECS
-    SAS --> GATE
-    SAS -. "Observation" .-> OBS
-    WIT -. "Observation" .-> OBS
-    BORG -. "Observation" .-> OBS
-    SAS -- "builds" --> BODY
-    BORG -- "builds" --> BODY
-    BODY --> SESSION
-    TOOLS -- "handler marshals via" --> BUS
-    BUS -- "Pump() inside Update" --> SEAM
-    OBS -- "wakes" --> SESSION
-    SESSION --> TURN
-    TURN --> TOOLS
-    TURN --> CONV
-    SESSION --> COMP
-    COMP --> CUR
-    CUR --> VFS
-    TOOLS --> VFS
-    TOOLS --> LUA
-    LUA --> TOOLS
-    TURN --> ROUTER
-    COMP --> ROUTER
-    ROUTER --> CLIENT
-    ROUTER --> QUOTA
-    CLIENT --> PROV
-    VFS <--> DATA
-    SESSION -- "snapshot" --> DATA
-    CONV -. "events" .-> EVBUS
-    VFS -. "events" .-> EVBUS
-    EVBUS --> HTTP --> UI
-    CMD --> SAS
-```
+![The whole picture: game world, the seam, the world bus, the agent core, the LLM layer, data and observability](diagrams/overview.svg)
 
 The rest of this section walks the layers one at a time.
 
@@ -200,22 +106,7 @@ is released and the LLM client is rebuilt. Releasing never waits for the loop to
 inside `TickUpdate` was a measured two-second server stall, so the session drains in the
 background.
 
-```mermaid
-sequenceDiagram
-    participant GT as GameTicker
-    participant SAS as StationAiAgentSystem
-    participant S as AgentSession
-    GT->>SAS: StationPostInitEvent
-    SAS->>SAS: close the StationAi job slot
-    GT->>SAS: RunLevel = InRound
-    SAS->>SAS: TryClaimAnyCore() — station core, not CentComm
-    SAS->>SAS: spawn StationAiBrain, apply mode laws
-    SAS->>S: StartSession(BuildStationBody(brain))
-    S->>S: freeze prefix, restore snapshot if hash+round match
-    S-->>S: loop runs on the thread pool
-    GT->>SAS: RoundRestartCleanupEvent
-    SAS->>S: Release("round restart") — cancel, do not wait
-```
+![Session lifecycle: claim the core at InRound, start the session, release on round restart](diagrams/lifecycle.svg)
 
 **Perception inputs.** Each becomes an `Observation` pushed onto the session's queue from the
 main thread:
@@ -268,28 +159,7 @@ Agent threads never touch entities. Every tool handler marshals its body through
 `WorldBus.RunAsync`, and `StationAiAgentSystem.Update` drains the bus inside the tick with a
 per-frame budget (`ai.frame_budget_ms`, default 3 ms, about 9 % of a 30 Hz frame).
 
-```mermaid
-flowchart LR
-    subgraph AT["Agent thread"]
-        H["tool handler"] -->|"RunAsync(job, priority)"| Q
-    end
-    subgraph Q["WorldBus queues"]
-        U["urgent<br/>say · radio · announce · move_camera<br/>device_* · timers · observation drain<br/>borg: goto · step · use · pickup · drop · hit"]
-        N["normal<br/>look · inspect · map · crew_status …"]
-        R["resume<br/>unfinished chunked jobs"]
-    end
-    subgraph MT["Main thread — Update() inside TickUpdate"]
-        P["Pump()<br/>deadline = now + frame budget"]
-        P --> T1["1. unfinished urgent"]
-        T1 --> T2["2. unfinished normal"]
-        T2 --> T3["3. aged normal (promotion, ai.world_promote_ms)"]
-        T3 --> T4["4. urgent"]
-        T4 --> T5["5. normal"]
-    end
-    Q --> P
-    T5 -->|"generation check → StaleGenerationException"| X["run one slice<br/>SteppedJob.Step(budget)"]
-    X -->|"TCS.SetResult<br/>RunContinuationsAsynchronously"| H
-```
+![World bus: agent threads queue jobs, the main thread pumps them under a per-frame budget](diagrams/worldbus.svg)
 
 Three properties are load-bearing:
 
@@ -315,23 +185,7 @@ thread pool. It wakes on a `SemaphoreSlim(0, 1)`: any observation arriving relea
 burst of chatter starts exactly one turn. The wait is a ceiling, not a period: `ai.tick_seconds`
 (5 s) normally, `ai.tick_seconds_idle` (25 s) after three idle turns.
 
-```mermaid
-flowchart TD
-    W["wait on Woken (≤ tick)"] --> F{"force?<br/>idle ≥ 6 · operator inbox · last turn hit budget"}
-    F --> B["BuildObservation(force) — on the main thread via the bus<br/>drain queue · SELF line · law change · body.BeforeObservation"]
-    B -->|"null: nothing to say, paused, disabled"| I["idleStreak++"] --> W
-    B -->|"text"| U["Conv.AppendUser(text + operator message)"]
-    U --> T["TurnRunner.RunAsync"]
-    T --> C{"compact?<br/>promptTokens ≥ High and no open tool calls"}
-    C -->|yes| K["Compactor ritual (mode = Review)"]
-    C -->|no| R{"aiagent curate requested?"}
-    K --> P
-    R -->|yes| CU["Curator review"] --> P
-    R -->|no| P["reset failures · SaveSnapshot()"]
-    P --> W
-    T -.->|"exception"| E["ConsecutiveFailures++ · backoff 1s·2ⁿ ≤ 30s<br/>≥ 10 → degraded: retry every 60 s, never dies"]
-    E --> W
-```
+![The agent loop: wait, build an observation, run a turn, maybe compact, persist](diagrams/loop.svg)
 
 Only the session's own cancellation exits the loop. `HttpClient.Timeout` throws a
 `TaskCanceledException`, which inherits from `OperationCanceledException`; catching the base type
@@ -342,21 +196,7 @@ round with a log line that read like a normal shutdown.
 
 `TurnRunner` is a small state machine over `TurnContext`:
 
-```mermaid
-stateDiagram-v2
-    [*] --> Request
-    Request --> Classify: LLM response
-    Classify --> Dispatch: tool calls
-    Classify --> Prose: text only
-    Dispatch --> Steer: every call through ToolDispatcher
-    Steer --> Request: NEW_EVENTS appended if the queue filled meanwhile
-    Steer --> Close: noop (EndsTurn) or step budget exhausted
-    Prose --> Nudge: promised an action but did none / addressed but silent
-    Nudge --> Request
-    Prose --> Settle: nothing owed
-    Settle --> Close: deliver untooled text via body.Speak, or suppress a repeat
-    Close --> [*]
-```
+![One turn: request, classify, dispatch or prose, steer, settle, close](diagrams/turn.svg)
 
 - A turn runs up to `ai.max_tool_calls_per_turn` (90) tool calls; each is one model round trip
   because `parallel_tool_calls` is off.
@@ -410,20 +250,7 @@ The provider's prefix cache is the module's economics. A shift with eight agents
 dollars on DeepSeek at 99 % cache hits and several times more without. So `ConversationState`
 is built around one rule: **every prompt is a strict continuation of the previous one.**
 
-```mermaid
-flowchart LR
-    subgraph Z0["Zone 0 — frozen between compactions · PrefixHash"]
-        S["system prompt<br/>perception format · SELF fields · speech rules · error codes<br/>+ script-mode text · SOUL.md · memory snapshot · VFS root"]
-        TJ["tool schemas<br/>sorted by name, canonical JSON"]
-    end
-    subgraph Z1["Zone 1 — append-only body"]
-        M["user · assistant · tool messages<br/>cuts only at a user message with no open tool call"]
-    end
-    subgraph Z2["Zone 2 — volatile tail"]
-        V["at most one user message, consumed by the turn that sends it"]
-    end
-    Z0 --> Z1 --> Z2
-```
+![The three context zones: frozen prefix, append-only body, volatile tail](diagrams/zones.svg)
 
 `Context/CacheMetrics.cs` watches the prefix: a hash change outside a compaction, or cache reuse
 under 90 % of the reusable ceiling two turns running, is logged as an error. Providers that do
@@ -439,16 +266,7 @@ Triggered at a turn boundary when the last prompt reached the profile's `compact
 `ai.compact_high`, 90 000) and no tool call is open. There is no low-water mark; one fold that
 left 162k tokens against a 45k threshold and never re-armed removed it.
 
-```mermaid
-flowchart LR
-    A["1 feasibility<br/>body has > 1 message"] --> B["2 announce<br/>'clearing memory buffers' in game"]
-    B --> C["3 curator<br/>self-review on a copy"]
-    C --> D["4 summary<br/>same tools array, so the prompt does not diverge"]
-    D --> E["5 fold<br/>summary + last N journal lines"]
-    E --> F["6 report<br/>curator verdict merged into the body"]
-    F --> G["7 prefix<br/>reload VFS, rebuild zone 0"]
-    G --> H["8 commit<br/>counters, log"]
-```
+![The eight-step compaction ritual](diagrams/compaction.svg)
 
 Steps 1, 5, 7 and 8 are fatal; the rest are logged and skipped. If the ritual does not commit,
 zone 0 is rolled back byte-for-byte and the cache watchdog is told to expect a miss.
@@ -491,17 +309,7 @@ a Lua program and the wire carries only `script`, `bp_get_output`, `bp_stop` and
 either/or per body (`ai.script_mode`, `AgentBody.ScriptMode`), decided once when the body is
 built.
 
-```mermaid
-flowchart LR
-    M["model: script{code}"] --> L["ScriptLint<br/>unknown function → script_syntax before anything runs"]
-    L --> H["LuaHost (MoonSharp)<br/>HardSandbox + pcall + metatables<br/>no io/os/require/load<br/>coroutine, 20k-instruction slices"]
-    H --> RT["ScriptRuntime<br/>every registry tool = a Lua function<br/>goto_wait → go, use_wait → use"]
-    RT --> D["ToolDispatcher — same gate, same errors"]
-    D --> BUS["WorldBus"]
-    H --> P["ScriptProcess on a dedicated thread<br/>print buffer with cursor · call cap · wall-clock cap"]
-    P -->|"finishes within ai.script_foreground_ms"| M
-    P -->|"otherwise"| O["Observation: СКРИПТ #N … — wakes the loop"]
-```
+![Script mode: lint, sandboxed Lua host, runtime, dispatcher; foreground and background processes](diagrams/script.svg)
 
 A refusal is a Lua exception, so straight-line code reads top to bottom and tolerance is
 ordinary `pcall`. `help{tool='use'}` reads the registry directly, because in script mode the
@@ -528,18 +336,7 @@ field". Proxy is per profile (`None` for loopback, `Socks` for the internet), be
 
 `RoutingLlmClient` wraps a chain of profiles (`ai.llm_chain`, e.g. `deepseek-pro,deepseek,awq`):
 
-```mermaid
-stateDiagram-v2
-    [*] --> Head
-    Head --> Sticky: first success
-    Sticky --> Sticky: success (stays — every switch is a full prefill)
-    Sticky --> Next: retryable failure (timeout, 5xx, network) → short cooldown
-    Sticky --> Quota: 429 → sleep until Retry-After or ai.llm_quota_cooldown_seconds
-    Sticky --> Dead: 401 / 403 / invalid_grant → until `aiagent llm revive`
-    Sticky --> Incompatible: 400 / 404 / 422 → ERROR with body, cooldown
-    Next --> Sticky
-    Sticky --> Head: every ai.llm_recheck_seconds, walk from the top
-```
+![Provider chain states: head, sticky, next, quota sleep, dead, incompatible](diagrams/providers.svg)
 
 What does **not** cause a switch: a response truncated by `max_tokens` or malformed JSON in the
 arguments. Those reproduce identically on the next provider.
@@ -668,16 +465,7 @@ cannot cross a station), and `AiBorgSystem.Walk.cs` writes the direction into
 collisions, speed and bumping doors open stay upstream. A door that does not open after repeated
 presses is marked impassable for the route and the next path goes around it.
 
-```mermaid
-flowchart LR
-    G["goto target"] --> PF["BorgPathfinder<br/>A* on NavMap chunks, 4-neighbour"]
-    PF --> LEG["cut into legs"]
-    LEG --> WALK["Walk.cs each tick<br/>direction → CurTickSprintMovement"]
-    WALK --> DOOR{"blocked by a door?"}
-    DOOR -->|"press it (ahead, not nearest); periodically"| WALK
-    DOOR -->|"still shut"| BLK["mark tile impassable, replan (budget 10, reset on progress)"] --> PF
-    WALK --> ARR["ARRIVED / NOPATH as an observation"]
-```
+![Cyborg movement: pathfinder, legs, per-tick walking, door handling, replanning](diagrams/borg.svg)
 
 The borg's eyes produce three layers of world difference: the `OBSERVED` event stream, `look`
 on demand, and a per-turn field-of-view delta (`appeared / disappeared / changed`) that stays
@@ -738,6 +526,7 @@ Content.Server/AiAgent/
   Config/AiConfigOverlay.cs  ai_data/config.d loader
   Commands/                  aiagent, aibench
   BackupPowerSystem.cs · RoundEndConditionsSystem.cs · StationNameOverrideSystem.cs
+  diagrams/                  the SVG diagrams in this README, generated by Tools/diagrams/gen.py
 
 Resources/Prototypes/_AiAgent/
   llm_profiles.yml           provider profiles (order lives in ai.llm_chain)
@@ -753,6 +542,7 @@ Tools/aidebug/               the debugger UI
 Tools/examples/llamacpp/     a complete local-model setup
 Tools/grokbridge/            OpenAI-compatible bridge for a Grok subscription
 Tools/vfs/, Tools/wiki/      library migration and wiki extraction scripts
+Tools/diagrams/              generator for the diagrams above (python3 Tools/diagrams/gen.py)
 skill_start/, wiki_skills/   the versioned reference library
 docs/                        reconfig.md, problems.md, upstream-patches.md, journal-ru.md
 ```
