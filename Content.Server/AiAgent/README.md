@@ -1,1974 +1,1046 @@
-# AiAgent — роль Station AI, которую играет LLM
+# AiAgent — an LLM plays the Station AI
 
-Форк SS14, в котором роль Station AI ведёт языковая модель (DeepSeek `deepseek-v4-flash`,
-хостед). Весь код форка живёт здесь, в `Content.Server/AiAgent/`; апстримовые файлы не
-правятся, чтобы `git rebase upstream/master` оставался дешёвым.
+`Content.Server/AiAgent/` is the whole of this fork's code: a language model plays the Station AI
+role in [Space Station 14](https://github.com/space-wizards/space-station-14), and optionally a
+squad of cyborgs. The model sees the station through its cameras, hears the radio and the speech
+near its core, operates doors, airlocks and consoles through the same permission checks a human
+player goes through, keeps its own notes and memory between shifts, and can turn against the crew
+when the round's game mode says so.
 
-Полный план: `~/.claude/plans/precious-jingling-forest.md`.
+The fork adds new files only. Upstream files are not edited, so `git rebase upstream/master`
+stays cheap; every exception is listed in [`docs/upstream-patches.md`](../../docs/upstream-patches.md).
+
+> **Before you host this publicly.** Everything the agent hears leaves your server and goes to
+> whichever model provider you configure: radio chatter, speech near the AI core and near the
+> cyborgs, announcements. Account names, IPs and Steam IDs are not sent; character names are,
+> because any player standing nearby sees them too. Tell your players before they connect. See
+> [Privacy](#privacy).
 
 ---
 
-# ЧАСТЬ 1. Эксплуатация
+## Contents
 
-Всё в этой части — про боевой сервер `[RU] Аксиома — станцией управляет нейросеть`.
-Он **работает прямо сейчас** и переживает перезагрузку машины.
+- [Why](#why)
+- [What is in the box](#what-is-in-the-box)
+- [Architecture](#architecture)
+  - [The whole picture](#the-whole-picture)
+  - [Layer 1 — the game world and the seam](#layer-1--the-game-world-and-the-seam)
+  - [Layer 2 — the world bus](#layer-2--the-world-bus)
+  - [Layer 3 — the agent core](#layer-3--the-agent-core)
+  - [Layer 4 — the LLM layer](#layer-4--the-llm-layer)
+  - [Layer 5 — the agent's data](#layer-5--the-agents-data)
+  - [Layer 6 — observability](#layer-6--observability)
+  - [Bodies: the station core and the cyborg](#bodies-the-station-core-and-the-cyborg)
+  - [Game modes](#game-modes)
+- [Source layout](#source-layout)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [Operating a live server](#operating-a-live-server)
+- [Testing](#testing)
+- [Design rules](#design-rules)
+- [Known limitations](#known-limitations)
+- [Further reading](#further-reading)
+- [Privacy](#privacy)
+- [License](#license)
 
-## Состояние на 2026-08-07
+---
+
+## Why
+
+Station AI is the one role in SS14 that is played almost entirely through text and remote
+controls: you listen, you look through cameras, you open doors, you talk. That makes it the one
+role a language model can play without pretending to have a body. The goal of this module is to
+make that role *good*: an AI that answers the radio, remembers who asked for what, notices
+things happening in front of its cameras, keeps its laws, and, in the rogue game modes, becomes
+a real antagonist with real constraints.
+
+Three constraints shaped everything below:
+
+1. **Parity with a human player.** The agent may not do anything a human Station AI could not:
+   no teleporting, no omniscience, no channels it does not have. Every action goes through the
+   same visibility, power, wire and access checks as a click.
+2. **No upstream edits.** New `EntitySystem`s, new prototypes, new console commands, one build
+   props file. Nothing else.
+3. **The game tick is sacred.** The agent runs on its own threads and buys main-thread time in
+   budgeted slices. A slow model must never look like a lagging server.
+
+## What is in the box
 
 | | |
 |---|---|
-| Сервер | под SS14.Watchdog, юнит `ss14-aksioma.service` (пользовательский, `Linger=yes`) |
-| Снаружи | `vnaa.ru:1212`, проброс есть, DNS смотрит сюда, проверено |
-| Хаб | **включён** 2026-08-07, сервер в публичном листинге |
-| Вайтлист | **снят** 2026-08-07, сервер открыт для всех |
-| Админ | `rewin123` в таблице `admin`, ранг `Host`, все 23 флага |
-| ИИ | Аксиома, занимает ядро сама при старте раунда |
-| Станция | «Аксиома» на всех картах ротации |
-| Бэкапы | `ss14-backup.timer`, ежедневно 05:30 UTC, 14 копий в `ss14-watchdog/backups/` |
-| Онлайн | `ss14-sample.timer`, замер раз в минуту в `ss14-watchdog/metrics/players.csv` |
-| Отладчик | `https://aidebug.vnaa.ru` (basic-auth `rewin`) |
-
-## Имя одно на троих
-
-Сервер, станция и ИИ называются **«Аксиома»** — все трое. Так решено владельцем сервера
-2026-08-07; до этого сервер и ИИ звались «Аврора», а станция уже была «Аксиомой».
-
-Кодом это нигде не различается и сломать ничего не может: `AgentName` только присваивается
-сущности (`StationAiAgentSystem.cs`) и ни с чем не сравнивается, имя станции ставит отдельная
-система на другой сущности. Цена — смысловая: в эфире «Аксиома» значит и место, и собеседника.
-Разрешается это в промпте, а не в коде — в `SOUL.md` есть абзац о том, как агенту разбирать
-обращение по смыслу и переспрашивать, когда непонятно.
-
-Переименование добавило в таблицу `server` новую строку (`aksioma`, id 2). Прежние 42 раунда
-и 79406 записей `admin_log` остались под `aurora` (id 1) — не потеряны, но история разрезана:
-запросы за раунды до 2026-08-07 надо делать по старому имени.
-
-## Где что живёт
-
-```
-/home/rewin/ss14-watchdog/
-  app/                    опубликованный вотчдог (перезаписывается сборкой, НЕ править)
-  appsettings.yml         конфиг вотчдога. Читается ОТСЮДА, не из app/
-  api.token               токен API вотчдога, chmod 600
-  README.md               раскладка и команды
-  instances/aksioma/
-    bin -> /home/rewin/projects/ss14_ai/bin/Content.Server   символьная ссылка
-    config.toml           РАБОЧИЙ конфиг сервера. Здесь ключ модели и токен шины. chmod 600
-    data/preferences.db   вайтлист, админы, баны, преференции
-
-/home/rewin/projects/ss14_ai/
-  Content.Server/AiAgent/          весь код форка
-  Tools/server_config.public.toml  ИСТОЧНИК ИСТИНЫ конфига (без секретов), в git
-  Tools/aidebug/                   Vue-страница отладчика
-  ai_data/                         память, скиллы, сессии, логи, ключ. В git НЕ попадает
-  bin/Content.Server/              сборка. server_config.toml здесь боевым сервером НЕ читается
-```
-
-## Управление
-
-```bash
-systemctl --user status ss14-aksioma
-systemctl --user restart ss14-aksioma
-journalctl --user -u ss14-aksioma -f
-```
-
-Выкатить новую версию кода:
-
-```bash
-export DOTNET_ROOT="$HOME/.dotnet"; export PATH="$DOTNET_ROOT:$PATH"
-cd /home/rewin/projects/ss14_ai
-dotnet build Content.Server/Content.Server.csproj
-systemctl --user restart ss14-aksioma
-```
-
-`bin` в инстансе — символьная ссылка на каталог сборки, поэтому копировать ничего не нужно.
-
-## Резервные копии базы
-
-`preferences.db` — единственное, что нельзя пересобрать: вайтлист, админы, баны, преференции
-и профили игроков. Копии снимает `ss14-backup.timer` ежедневно в 05:30 UTC.
-
-```bash
-systemctl --user list-timers ss14-backup.timer   # когда следующая
-systemctl --user start ss14-backup.service       # снять копию прямо сейчас
-journalctl --user -u ss14-backup.service -n 20   # что получилось
-ls -la /home/rewin/ss14-watchdog/backups/        # 14 последних, gzip, ~4 МБ каждая
-```
-
-**Сервер останавливать не нужно.** Скрипт `ss14-watchdog/backup-preferences.py` использует
-онлайн-бэкап SQLite (`Connection.backup`), а не `cp`: тот проходит через движок и видит WAL,
-поэтому свежий вайтлист и только что выданный бан попадают в копию. Это ровно та грабля №4
-ниже, только обойдённая, а не обойдённая стороной.
-
-Копия проверяется `PRAGMA integrity_check` до того, как ротация вытеснит предыдущую: битый
-бэкап на месте хорошего хуже, чем отсутствие бэкапов. `Persistent=true` в таймере значит,
-что пропущенный из-за выключенной машины запуск состоится при старте, а не через сутки.
-
-Восстановление:
-
-```bash
-systemctl --user stop ss14-aksioma
-cd /home/rewin/ss14-watchdog/instances/aksioma/data
-mv preferences.db preferences.db.broken
-gunzip -c /home/rewin/ss14-watchdog/backups/preferences-<метка>.db.gz > preferences.db
-systemctl --user start ss14-aksioma
-```
-
-Копии лежат на том же диске, что и оригинал: от отказа диска это не защищает, только от
-порчи базы и ошибочного удаления. Вынести их на другой носитель — незакрытая задача.
-
-## График онлайна
-
-`ss14-sample.timer` раз в минуту дёргает `/status` и дописывает строку в
-`ss14-watchdog/metrics/players.csv`. Отдельный сборщик нужен потому, что **база пишет
-события, а не состояние**: `connection_log` знает, кто и когда подключился, но не знает,
-когда отключился, — одновременный онлайн из него не восстанавливается никак.
-
-```bash
-python3 /home/rewin/ss14-watchdog/render-players.py        # за сутки
-python3 /home/rewin/ss14-watchdog/render-players.py 168    # за неделю
-# -> ss14-watchdog/metrics/players.html, самодостаточный, открывается локально
-```
-
-Страница показывает пик, текущий и средний онлайн, время с людьми и число замеров, когда
-сервер не отвечал. Линия **ступенчатая**, а не сглаженная: между замерами онлайн держится,
-а не перетекает, и сглаживание рисовало бы полтора игрока в четыре утра. Простои рвут
-линию и отмечаются серой полосой — соединять через них значило бы утверждать, что онлайн
-держался, пока сервер лежал.
-
-Пропущенный замер пишется строкой с пустым `players`, а не пропуском строки: пропуск
-неотличим от «сборщик не работал», и дыра из-за упавшего сервера выглядела бы как дыра
-из-за упавшего таймера. Поэтому у таймера `Persistent=false` — досылать замеры задним
-числом значило бы выдумывать данные.
-
-**Автообновления нет и не должно быть.** В `appsettings.yml` не задан `UpdateType`: это даёт
-`_updateProvider = null`, а все четыре обращения к провайдеру в `ServerInstance` закрыты
-проверкой на null — кода обновления не существует. Строже документированного `"Dummy"`,
-который всегда рапортует «обновление есть» и крутит счётчик ревизий. Сервер здесь — сборка
-форка, и обновление означало бы стереть её апстримом.
-
-## Конфиг: два файла и правило
-
-* **Рабочий** — `/home/rewin/ss14-watchdog/instances/aksioma/config.toml`. Вотчдог передаёт
-  его через `--config-file`. Только он и читается боевым сервером.
-* **Источник истины** — `Tools/server_config.public.toml`, в git, без секретов.
-
-**Копировать источник поверх рабочего нельзя.** В рабочем лежат `ai.api_key` и
-`ai.debug_token`, которых в git нет и не будет. `cp` поверх — тихая потеря обоих, после
-которой сервер поднимется, а ИИ молча не заработает. Переносить построчно.
-
-`bin/Content.Server/server_config.toml` — наследие ручного запуска, боевым сервером не
-читается. Правка туда уходит в никуда.
-
-### Третье место: накладка `ai_data/config.d/*.yml` (02.09.2026)
-
-Правило «два файла» описывает РУБИЛЬНИКИ. У всего, что имеет поля — профилей провайдеров,
-правил режимов, пресетов, секретного пула, — есть третье место, и это не исключение из правила, а
-его вторая половина: **кто отвечает — в `config.toml`, как он устроен — в YAML.**
-
-Обычный прототипный YAML, тот же, что в `Resources/Prototypes/_AiAgent/`, но лежащий в
-`ai_data/`. Три отличия от `Resources/`, и каждое несущее: каталог в `.gitignore` (правка под своё
-железо не станет коммитом, конфликтующим с обновлением форка), он **не раздаётся игрокам**
-(`ContentMagicAczProvider` отдаёт всю `Resources/` каждому подключившемуся), и он перечитывается
-командой `aiagent config reload`, а не пересборкой с киком всех.
-
-Главная ловушка: запись с существующим `id` **замещает прототип целиком**, а не сливается с ним по
-полям. Правка «поменять один адрес» молча уносит диалект, таймаут и всё остальное.
-
-Три команды, ради которых это заведено:
-
-```
-aiagent config          # какие файлы прочитаны, что каждый переопределил, что не разобралось
-aiagent llm probe       # НАСТОЯЩИЙ поход к провайдеру: ловит пять поломок, которые молчат
-aiagent mode            # во что разрешились режимы — с учётом накладки
-```
-
-`probe` заведён потому, что настройка эндпоинта ломается тихо. `timeoutSeconds`, не меньший
-`ai.llm_total_timeout`, означает, что фаллбек не пробуется вовсе, — и увидеть это можно было
-только в тот вечер, когда голова цепочки ляжет (01.09.2026, четыре минуты молчания ИИ).
-
-Полный разбор — [`docs/reconfig.md`](../../docs/reconfig.md), пример на своём железе —
-[`Tools/examples/llamacpp/`](../../Tools/examples/llamacpp/).
-
-## Секреты — где, а не какие
-
-| Что | Где |
-|---|---|
-| Ключ DeepSeek | `ai_data/deepseek.key` (600) и `ai.api_key` в рабочем config.toml |
-| Токен отладочной шины | `ai_data/debug.token` (600) и `ai.debug_token` там же |
-| Basic-auth отладчика | `/home/rewin/aidebug-serve/basic-auth.txt` (600) |
-| Токен API вотчдога | `/home/rewin/ss14-watchdog/api.token` (600) |
-| Ключи профилей моделей | `ai_data/<профиль>.key` (600), имя файла — в `keyFile` прототипа |
-| Сессия подписки Grok | `ai_data/grok.session.json` (600) — владеет наш мост, см. правило ниже |
-| Ключ доступа к мосту Grok | `ai_data/grok_bridge.key` (600), имя — в `keyFile` профилей `grok`/`grok46` |
-| OAuth подписки Codex | `~/.cli-proxy-api/` — владел бы CLIProxyAPI, но он не установлен |
-
-В git не попадает ничего из этого — проверяется `git grep`.
-
-**Про ключ DeepSeek: ротировать не нужно, и это осознанное решение владельца.** Счёт под ним
-держится на сумме, которой хватает на раунды SS14 и не хватает, чтобы утрата была ощутимой, —
-именно на случай публикации. Прежняя пометка «засвечен в переписке, следует ротировать»
-описывала аварию там, где была заложенная страховка; снята 20.08.2026. Остальные секреты из
-таблицы этим свойством НЕ обладают.
-
-**В `Resources/` секретов быть не может.** `Content.Server/Acz/ContentMagicAczProvider.cs`
-раздаёт всю папку каждому подключившемуся игроку. Поэтому
-`Resources/Prototypes/_AiAgent/llm_profiles.yml` содержит только имя файла с ключом, а не
-значение — ключ, положенный туда, уехал бы к первому же зашедшему.
-
-### Правило единственного владельца OAuth-кредов
-
-**У refresh-токена подписки может быть ровно один владелец.** Токен одноразовый и ротируется на
-стороне вендора: второй потребитель, обновивший его, отзывает первого. Это не теория — на этой
-машине в `~/.hermes/auth.json` до сих пор лежит `refresh_token_reused` / `relogin_required: true`
-от 2026-08-07 с текстом «Codex refresh token was already consumed by another client (e.g. Codex CLI
-or VS Code extension)».
-
-Потребителей у нас три: `codex` в терминале, hermes-gateway и теперь игровой сервер. Для ChatGPT
-задумывалось, что токеном владеет **только CLIProxyAPI**, а все трое ходят через него — профиль
-`codex` на `127.0.0.1:8317`. **Этого моста на машине нет** (каталога `~/.cli-proxy-api/` не
-существует, порт не слушает никто), так что звено `codex` в цепочке сегодня — гарантированный
-отказ и переход к следующему профилю.
-
-С Grok решение другое, и оно снимает саму необходимость договариваться о владельце. У подписки
-xAI есть **активация устройством** (`urn:ietf:params:oauth:grant-type:device_code` объявлен в
-`https://auth.x.ai/.well-known/openid-configuration`), поэтому игровой сервер проходит **свой
-собственный вход** и получает **свой** refresh-токен в `ai_data/grok.session.json`. Терминальный
-`grok` с его `~/.grok/auth.json` и мост обновляют разные токены — отозвать друг друга они не
-могут в принципе.
-
-Мост — свой, `Tools/grokbridge`, порт **8318**; разбор целиком в `Tools/grokbridge/README.md`.
-Он нужен не ради удобства: подписка отвечает по `https://cli-chat-proxy.grok.com/v1`, выбирает
-модель **заголовком** `x-grok-model-override`, а не полем `model`, и отдаёт только поток —
-ни первого, ни второго, ни третьего `LlamaClient` не умеет. 8318, а не 8317, чтобы два моста
-разошлись без конфликта, если ChatGPT-мост однажды поднимут.
-
-Немецкий выход (`xray-de`, SOCKS `127.0.0.1:10808`) для chatgpt несёт сам мост — дроп-ином
-systemd, как уже сделано для hermes. Для x.ai он **не нужен**: и `auth.x.ai`, и
-`cli-chat-proxy.grok.com` отвечают с этой машины напрямую, а лишний хоп — лишняя причина, по
-которой вход однажды повиснет без объяснений. Игровой сервер прокси не наследует: у него он задаётся по
-профилю (`proxy: Socks` для DeepSeek, `None` для loopback и локальной модели), потому что
-`HTTP_PROXY` из окружения подвешивает запросы на loopback.
-
-## Запуск состоялся 2026-08-07
-
-Хаб включён, вайтлист снят, сервер в публичном листинге (`ss14://vnaa.ru:1212`, проверено
-запросом к самому хабу, а не только по нашему логу). Ступенчатый запуск из плана — 10
-приглашённых, замеры, 20, потом 50 — **пропущен решением владельца**: цель была за сутки
-увидеть живой спрос и живые поломки.
-
-Отсюда следует, чего ждать. Этап 3 не сделан, то есть нагрузку встречает неотрепетированный
-тик: квадратичный `look` (**починен 16.08**, см. «Квадратичный `look`» ниже), автосейв в главном
-потоке, `Nearest()` Левенштейном по десяткам тысяч записей. На двадцати с лишним игроках
-деградация — ожидаемый исход, а не сюрприз.
-
-Что смотреть после суток — база пишет это сама, отдельного сборщика не нужно:
-
-```bash
-# сколько людей заходило и кого развернуло
-sqlite: SELECT user_name, COUNT(*), MAX(time) FROM connection_log GROUP BY user_name;
-sqlite: SELECT user_name, denied FROM connection_log WHERE denied IS NOT NULL;
-# кто реально играл, по раундам
-sqlite: SELECT round_id, COUNT(*) FROM player_round GROUP BY round_id;
-```
-
-`connection_log.denied` — важнее прочего: там окажутся отказы, которых мы не ждали.
-Пикового одновременного онлайна база не хранит — его пишет `ss14-sample.timer`, см. раздел
-«График онлайна» выше.
-
-## Что осталось
-
-1. **Ротировать ключ DeepSeek.** Был засвечен в переписке. Публичный сервер этого не
-   ухудшает, но и не отменяет.
-2. **Инвайт Discord протухает 2026-09-05.** Проверено запросом к API (через прокси, см.
-   грабля №3): инвайт живой, сервер называется «SS14 - Станция Аксиома». Но срок у него есть,
-   а протухший инвайт = «не смогли связаться» = делистинг в обход страйков. Нужен Never /
-   No limit — переставить до сентября.
-3. **`discord.ahelp_webhook` пуст.** Жалоба игрока, когда админа нет онлайн, не доходит ни до
-   кого. На сервере с вайтлистом это ничего не стоило, на публичном — стоит.
-4. **Этап 3 — производительность.** Квадратичный `look` — **сделано 16.08**, таймаут модели,
-   убивавший петлю, и базовые измерения — **сделано 17.08**; оба раздела ниже. Осталось (план
-   расписан отдельно, этапы 1–5): налог `Witness` на каждое событие станции, отсечка
-   `ai.look_limit` до построения строк, `GetViewArea` вместо поштучного обхода тайлов, шина с
-   бюджетом на кадр, дробление `look`, автосейв с главного потока, `Nearest()` Левенштейном.
-   Сеть (`net.sendbuffersize`) поднята 17.08 — это не про ИИ, но про те же рывки.
-5. **Бэкапы лежат на том же диске**, что и база. От порчи базы защищают, от отказа диска нет.
-
-## Ограничения проекта
-
-* **Ни одного изменённого файла апстрима.** Единственное исключение — строка `ai_data/` в
-  корневом `.gitignore`. Новые файлы добавлять можно, чужие править нельзя.
-* **Русский** — промпты, речь агента, комментарии в русскоязычных артефактах.
-* **Строгий паритет с живым игроком.** Агент не должен уметь того, чего не может человек на
-  этой роли: ни телепортов, ни всезнания, ни каналов, которых у него нет.
-  Единственное сознательное послабление на сегодня — стены не учитываются в строках `OBSERVED`
-  (см. «Зрение как поток»): в пределах восьми тайлов от глаза агент заметит то, что человек увидел
-  бы как стену. Плата за цену проверки, снимается `ai.observe_occlusion true`.
+| **Agent core** | A turn loop driven by observations, a tool registry with a fixed error vocabulary, a three-zone conversation that keeps the provider's prefix cache warm, context compaction with a self-review step |
+| **Bodies** | The immobile Station AI core and a walking cyborg; the same loop drives both through a small `AgentBody` seam |
+| **Perception** | Radio, nearby speech, announcements, alerts, law changes, arrivals, timers, and a stream of witnessed events (`OBSERVED …`) from the camera view |
+| **Agent filesystem** | A read-only game wiki, a writable skill tree, per-person notes and a memory file, exposed through `sh`, `write_file`, `edit_file` |
+| **Script mode** | Optional: the model writes a sandboxed Lua program per turn instead of one tool call per round trip |
+| **Providers** | A chain of model profiles with sticky fallback, quota tracking, dialect-aware wire format; DeepSeek, OpenRouter, llama.cpp, vLLM, Grok through a bridge |
+| **Game modes** | Peaceful AI, hidden rogue AI, open rogue AI with a cyborg squad; backup power for shifts without engineers |
+| **Observability** | An HTTP event bus with a Vue debugger, per-operation main-thread cost, tick-time histograms, console commands to probe every layer |
+| **Test bench** | `Content.AiBench`: ~60 test files that boot a real server and assert on world state, with a scripted stand-in for the model |
 
 ---
 
-# ЧАСТЬ 2. Разработка
+## Architecture
 
-## Почему всё в Content.Server
+### The whole picture
 
-`Content.Server` **не** проверяется песочницей (`ServerOptions.Sandboxing = false`, а
-`Content.IntegrationTests/Tests/Utility/SandboxTest.cs` чекает только `Content.Client` и
-`Content.Shared`). Значит `System.Net.Http` и `Task.Run` здесь разрешены.
+Read the diagram top to bottom: the game world sits at the top, the model provider at the
+bottom, and the agent core in between never touches the entity world directly. Everything
+crossing from the core into the world goes through the world bus; everything crossing from the
+world into the core is an `Observation`.
 
-**Следствие: ни строчки агента в `Content.Shared`** — там песочница включена и сборка упадёт.
+```mermaid
+flowchart TB
+    subgraph L1["Layer 1 — Game world (RobustToolbox + Content.Server, unmodified)"]
+        direction LR
+        ECS["Entities, systems, events<br/>doors · APCs · consoles · radio · chat · mobs"]
+        VISION["StationAiVisionSystem<br/>camera view"]
+        NAV["NavMapComponent<br/>PathfindingSystem"]
+    end
 
-Отдельный csproj тоже не подходит: обнаружение `EntitySystem` и `[CVarDefs]` идёт рефлексией
-только по ассемблям, которые `ModLoader` загрузил как content-модули.
+    subgraph SEAM["Layer 1 — The seam (the only code that touches both sides)"]
+        direction LR
+        SAS["StationAiAgentSystem<br/>lifecycle · perception subscriptions · station tools"]
+        BORG["AiBorgSystem<br/>legs · eyes · hands · route"]
+        WIT["Witness<br/>event stream → OBSERVED"]
+        GATE["DeviceGate / CheckGate<br/>playable → whitelist → wire → power → visible → access"]
+        MODES["RogueAiRuleSystem · BackupPowerSystem<br/>RoundEndConditions · StationNameOverride"]
+    end
 
-## Точки расширения без правки апстрима
+    subgraph L2["Layer 2 — World bus (Threading/)"]
+        BUS["WorldBus<br/>urgent + normal lanes · frame budget · promotion<br/>generation check before every slice"]
+    end
 
-Известные проблемы — починенные, открытые и отвергнутые — собраны в
-**[`docs/problems.md`](../../docs/problems.md)**: один список, чтобы находка не пропадала между
-сессиями и чтобы отвергнутую версию не проверяли повторно.
+    subgraph L3["Layer 3 — Agent core (world-independent)"]
+        direction LR
+        SESSION["AgentSession<br/>wake · turn · persist · backoff"]
+        TURN["TurnRunner<br/>request → classify → dispatch → settle"]
+        OBS["ObservationQueue<br/>+ TimerStore"]
+        TOOLS["AiToolRegistry<br/>ToolDispatcher"]
+        CONV["ConversationState<br/>zone 0 · zone 1 · zone 2"]
+        COMP["Compactor<br/>8-step ritual"]
+        CUR["Curator<br/>self-review"]
+        VFS["Vfs<br/>/wiki_ru /wiki_en /skills<br/>/players /memory.md /curator.md"]
+        LUA["Script mode<br/>LuaHost · ScriptProcess"]
+        BODY["AgentBody<br/>the seam object"]
+    end
 
-Правки движка всё же есть — двенадцать файлов в `RobustToolbox/`, все по одной болезни (петля
-ресинков PVS): восемь правок и две диагностики. Каждая учтена в
-**[`docs/upstream-patches.md`](../../docs/upstream-patches.md)** с воспроизведением, замером и
-оценкой риска: документ написан так, чтобы из него получался PR апстримом. В коде они помечены
-`FORK PATCH` — `cd RobustToolbox && git grep -n "FORK PATCH"`. Изменённый файл движка без записи в
-том документе — забытая правка; список сверяется командой `cd RobustToolbox && git status --short`.
+    subgraph L4["Layer 4 — LLM layer (Llm/)"]
+        direction LR
+        ROUTER["RoutingLlmClient<br/>chain · sticky · fallback · quota"]
+        CLIENT["LlamaClient<br/>OpenAI-compatible · dialects"]
+        QUOTA["LlmQuotaState<br/>llm_state.json"]
+    end
 
-**Лечение обязано быть серверным.** ACZ раздаёт игрокам только контент
-(`DefaultMagicAczProvider` зовёт `WriteContentAssemblies` и `WriteClientResources`), а сам движок
-лаунчер берёт со своего CDN по полю `engine_version`. То есть `Content.Client.dll` наш, а
-`Robust.Client.dll` — ванильный, и клиентские правки движка до игроков не доезжают. Разбор и
-доказательство — в том же документе, раздел «Почему лечение обязано быть серверным».
+    subgraph L5["Layer 5 — Data (ai_data/, git-ignored)"]
+        DATA["SOUL.md · CURATOR.md · wiki_ru/<br/>agents/&lt;id&gt;/ skills · people · memory · sessions · logs<br/>config.d/*.yml · *.key"]
+    end
 
-**Стенд для сетевых болезней.** `Tools/laglink.py` — ретранслятор UDP с задержкой: клиент ходит
-через него, а его CSV заменяет собой съём трафика (root в песочнице нет, `tc` и `tcpdump`
-недоступны, а `net.fakelagmin` живёт под `#if DEBUG`). Сводит клиентский и серверный журналы
-`Tools/pvs_client_report.py`. **Собирать только в Release:** без `EXCEPTION_TOLERANCE` клиент на
-`MissingMetadataException` не просит полное состояние, то есть воспроизводится не та болезнь.
+    subgraph L6["Layer 6 — Observability"]
+        direction LR
+        EVBUS["AgentEventBus<br/>ring buffer"]
+        HTTP["AgentDebugServer<br/>/state /session /events /command"]
+        UI["Tools/aidebug<br/>Vue debugger"]
+        CMD["Console: aiagent · aiborg"]
+    end
 
+    PROV["Model providers<br/>DeepSeek · OpenRouter · llama.cpp · vLLM · Grok bridge"]
 
-| Что | Механизм |
-|---|---|
-| Игровая логика | новые `EntitySystem` — `IReflectionManager` находит их сам |
-| Конфиг | свой класс с `[CVarDefs]` (`CCVars.cs` прямо предписывает форкам этот путь) |
-| Прототипы | новые YAML в `Resources/Prototypes/_AiAgent/` |
-| Команды устройствам | `RaiseLocalEvent(target, (object)msg, true)` с `msg.Actor = brainUid` |
-| Консольные команды | классы `IConsoleCommand`, регистрируются рефлексией |
+    ECS -- "events" --> SAS
+    ECS -- "events" --> WIT
+    VISION --> SAS
+    NAV --> BORG
+    MODES --> ECS
+    SAS -- "RaiseLocalEvent(Actor = brain)" --> ECS
+    BORG -- "InputMover · Interaction" --> ECS
+    SAS --> GATE
+    SAS -. "Observation" .-> OBS
+    WIT -. "Observation" .-> OBS
+    BORG -. "Observation" .-> OBS
+    SAS -- "builds" --> BODY
+    BORG -- "builds" --> BODY
+    BODY --> SESSION
+    TOOLS -- "handler marshals via" --> BUS
+    BUS -- "Pump() inside Update" --> SEAM
+    OBS -- "wakes" --> SESSION
+    SESSION --> TURN
+    TURN --> TOOLS
+    TURN --> CONV
+    SESSION --> COMP
+    COMP --> CUR
+    CUR --> VFS
+    TOOLS --> VFS
+    TOOLS --> LUA
+    LUA --> TOOLS
+    TURN --> ROUTER
+    COMP --> ROUTER
+    ROUTER --> CLIENT
+    ROUTER --> QUOTA
+    CLIENT --> PROV
+    VFS <--> DATA
+    SESSION -- "snapshot" --> DATA
+    CONV -. "events" .-> EVBUS
+    VFS -. "events" .-> EVBUS
+    EVBUS --> HTTP --> UI
+    CMD --> SAS
+```
 
-## Квадратичный `look` (починен 2026-08-16)
+The rest of this section walks the layers one at a time.
 
-Инструмент `look` удерживал главный поток до двух секунд. Числа из журнала боя за сутки
-14–15.08: **111 вызовов и 111 перерасходов** пятимиллисекундного бюджета, медиана 98 мс,
-максимум **1908 мс**. При тикрейте 30 худший вызов съедал пятьдесят семь тиков подряд — игроки
-видели это как «сервер завис». Ни один другой инструмент проблем не давал: `map` 13 мс,
-`move_camera` 12, `inspect` 7.
+### Layer 1 — the game world and the seam
 
-**Где была цена.** Обзор строится в два шага: апстримовый `StationAiVisionSystem.GetView` даёт
-видимые *тайлы*, дальше их надо превратить в *сущности*. Второй шаг делался вызовом
-`EntityLookupSystem.GetLocalEntitiesIntersecting(grid, IEnumerable<Vector2i>)`, который обещает в
-комментарии «Faster than doing each tile individually» и буквально делает каждый тайл отдельно.
-На **каждом** тайле он вдобавок зовёт `AddContained` — а тот заново обходит весь уже накопленный
-набор, спрашивает у каждого элемента `ContainerManagerComponent` и рекурсивно добавляет
-содержимое всех контейнеров, со свежим списком на каждый тайл. При T тайлах и наборе в E
-сущностей это O(T·E) и O(T) аллокаций внутри тика.
+`StationAiAgentSystem` is, by its own header comment, the only class that touches both the
+entity world and the agent. `Llm/`, `Context/`, `Perception/`, `Turn/`, `Handles/`,
+`Threading/`, `Skills/`, `Vfs/` and `Tools/` never name `IEntityManager`.
 
-Хуже того, флаги по умолчанию включают `Contained`, то есть внутрь набора втягивалась начинка
-каждого рюкзака и шкафа — раздувая E, — и тут же выбрасывалась проверкой `IsOnScreen`. **Мы
-платили квадратом за то, что не попадало в ответ ни разу.**
+**Lifecycle.** When a round reaches `InRound`, the system looks for a Station AI core on a
+station grid, skipping CentComm's core, and spawns (or reuses) a `StationAiBrain` inside it. The
+brain gets an `LlmStationAiComponent` marker and a session starts. On round restart every session
+is released and the LLM client is rebuilt. Releasing never waits for the loop to finish: waiting
+inside `TickUpdate` was a measured two-second server stall, so the session drains in the
+background.
 
-**Что сделано** (`StationAiAgentSystem.Vision.cs`, `GatherByBounds`): один обход дерева по общей
-рамке видимых тайлов с флагами `Uncontained | Approximate`, дальше отсев каждого кандидата по
-принадлежности видимому тайлу. Плюс мелочи в `LookAsync`: `KindOf` считается один раз вместо
-трёх, фильтр по `kind` применяется до построчной работы, а не после.
+```mermaid
+sequenceDiagram
+    participant GT as GameTicker
+    participant SAS as StationAiAgentSystem
+    participant S as AgentSession
+    GT->>SAS: StationPostInitEvent
+    SAS->>SAS: close the StationAi job slot
+    GT->>SAS: RunLevel = InRound
+    SAS->>SAS: TryClaimAnyCore() — station core, not CentComm
+    SAS->>SAS: spawn StationAiBrain, apply mode laws
+    SAS->>S: StartSession(BuildStationBody(brain))
+    S->>S: freeze prefix, restore snapshot if hash+round match
+    S-->>S: loop runs on the thread pool
+    GT->>SAS: RoundRestartCleanupEvent
+    SAS->>S: Release("round restart") — cancel, do not wait
+```
 
-**Замеры на стенде** (`AiStation`, карта Box, оба пути в одном кадре):
+**Perception inputs.** Each becomes an `Observation` pushed onto the session's queue from the
+main thread:
 
-| expand | было | стало | во сколько раз |
-|---|---|---|---|
-| 0 | 109 мс | 30 мс | ×3.7 |
-| 1 | 274 мс | 27 мс | ×10 |
-| 2 | 723 мс | 35 мс | ×21 |
-| 3 | **1325 мс** | **44 мс** | **×30** |
+| Input | Source | Gate |
+|---|---|---|
+| Radio | `RadioReceiveEvent` on the marker component | own transmissions dropped |
+| Speech | `EntitySpokeEvent` | distance from the **core** (a Station AI has no camera microphones), `ai.hear_range`, not already heard on radio |
+| Announcements | `StationAnnouncementEvent` (raised from upstream chat on all dispatch paths, patch К3) | own station, not self |
+| Alerts | `AlertLevelChangedEvent` | own station |
+| Laws | polled before each observation | change since last turn |
+| Arrivals, carding, death | `PlayerSpawnCompleteEvent`, container messages, `MobStateChangedEvent` | |
+| Timers | `TimerStore.TakeDue` in `Update` | round time |
+| Witnessed events | see below | distance from the eye |
 
-Медленный путь на стенде воспроизвёл боевую поломку почти точно (1325–1665 мс против 1908 в
-бою) — это и есть проверка, что чинили именно её.
-
-**Рубильник.** `cvar ai.look_fast false` возвращает старый путь из админ-консоли, без пересборки
-и без кика игроков. Медленный путь оставлен в дереве ещё и ради теста эквивалентности.
-
-**Две грабли, найденные тестом, а не глазами:**
-
-1. Первая версия теста дёргала пути по очереди через CVar — между замерами проходил тик, и на
-   радиусе в двадцать тайлов она сообщила о «потере» одной сущности из 2794. Потери не было:
-   кто-то перешёл границу видимости. Оба пути обязаны считаться в одном кадре, иначе тест ловит
-   чужие шаги вместо геометрии.
-2. Сетка станции **повёрнута** (видно по числу тайлов: 2877 вместо ожидаемых 1681). Запасная
-   ветка переводила рамку сущности в координаты сетки по двум противоположным углам — под
-   поворотом прямоугольник становится ромбом, и крайние точки уже не там. Терялась лампа,
-   лежащая на стыке тайлов. Углов должно быть четыре.
-
-**Что осталось.** После снятия квадрата доминирует сам `GetView`: 30–100 мс из общих 44–160 при
-`expand:3`. Апстрим честно пишет о нём «yes this is expensive. Yes it needs optimising» — он
-обходит 1156–3364 тайла, делая на каждый отдельный broadphase-запрос за окклюдерами. Чинится
-аддитивным `GetViewArea` **новым файлом** (`StationAiVisionSystem` объявлен `partial`), где та
-развёртка заменяется одним запросом по всей рамке. Не сделано: не горит, а ребейз-устойчивость
-такого файла стоит проверить отдельно.
-
-## Зрение как поток: строки `OBSERVED` (2026-08-16)
-
-До этого агент **не видел ничего**. Он слышал рацию, речь у ядра, объявления и тревогу, а мир для
-него был неподвижной картинкой, которую можно только опросить инструментом `look`.
-
-Дырой это делала не пропущенная драка, а невыполнимая просьба. «Когда я вставлю плазму в генератор
-аномалий — запусти его» упиралась в то, что узнать о вставленной плазме нечем: оставалось
-переспрашивать по рации «ну как, вставили?». Это и есть поведение, из-за которого с ИИ перестают
-разговаривать. Список «важных» событий такую просьбу не покрывает и не покроет — просьбы экипажа не
-ограничены дракой, — поэтому **семантики в наблюдении нет вовсе**: код доставляет событие с
-участниками и координатами, а понимать, что оно значит, — работа модели.
-
-**Строка.** Тег английский, как у остальных категорий, содержимое русское:
+**Witness** (`StationAiAgentSystem.Witness.cs`) subscribes to interaction, container,
+pulling, equip, mob-state, damage, gunshot and door-state events and turns each into one line:
 
 ```
 OBSERVED предметом | crew-7 Иван Петров | obj-412 лист плазмы | device-3 генератор аномалий | Δ(2,-1) (12,-34)
 ```
 
-Хендлы — те же самые, что выдаёт `look`, из того же `session.Handles`. Это требование, а не
-удобство: разойдись реестры, и одна вещь стала бы для агента двумя. Увидев `device-3`, агент
-вызывает по нему инструмент **немедленно**, без промежуточного обзора — ровно это и делает
-отложенную просьбу выполнимой. `Δ` отсчитана от глаза **в момент события** (агент мог увести камеру
-до своего хода), абсолютная пара скармливается `move_camera`.
+There is no semantic filter. The code delivers who, what, with what and where; deciding what it
+means is the model's job. The only gate is a square distance check from the eye
+(`ai.observe_range`); wall occlusion is optional (`ai.observe_occlusion`) because it costs
+hundreds of broadphase queries per event. Handles in these lines are the same ones `look` hands
+out, so the model can act on `device-3` immediately without a fresh sweep.
 
-**Что подписано** (`StationAiAgentSystem.Witness.cs`). Отбор механический, а не вкусовой.
-`RaiseLocalEvent(uid, ev)` по умолчанию поднимает событие БЕЗ широковещания, и подписаться на такое
-можно только через конкретный компонент — а направленная пара «компонент + событие» в RobustToolbox
-**глобально уникальна**: второй претендент получает `Duplicate Subscriptions` при старте сервера.
+**Vision.** `look` runs the upstream camera view (`StationAiVisionSystem.GetView`) as a
+sliced job (`Vision/SlicedView.cs`) that spans several frames, then gathers entities with one
+broadphase query over the visible bounding box (`GatherByBounds`). The old per-tile path was
+O(tiles × entities) and once held the main thread for 1.9 s; it is kept behind `ai.look_fast
+false` for the equivalence test.
 
-| Как подписано | Что |
-|---|---|
-| Широковещательно (пару не занимает) | `InteractHand`, `InteractUsing`, `RangedInteract`, `ActivateInWorld`, `EntInserted/RemovedFromContainer`, `PullStarted/Stopped`, `DidEquip/DidUnequip`, `MobStateChanged` |
-| Направленно (пара занята нами) | `(MobStateComponent, DamageChangedEvent)`, `(GunComponent, GunShotEvent)`, `(DoorComponent, DoorStateChangedEvent)` |
+**The action gate.** Every device tool walks the same chain a human click walks, in this
+order: playable → not carded → device has `StationAiWhitelist` → its wire is not cut → powered →
+visible from a camera → access allowed. `Tools/DeviceGate.cs` maps each link to a `ToolError`, a
+detail line and a retry hint, so the model learns *why* and whether moving the eye would help
+(it would not: visibility is computed from cameras near the target).
 
-`DamageChangedEvent` выбран как единственная точка на всю боль в игре: через
-`TryChangeDamage → ChangeDamage → DamageDealtEvent → InjurableComponent → OnEntityDamageChanged`
-проходят и мили, и пули, и хитскан, и огонь — шесть подписок на оружие заменяются одной.
+**Device control.** Actions are raised as the same messages a client would send, with
+`Actor = brain`: `StationAiBoltEvent`, `StationAiElectrifiedEvent`, APC breaker, air-alarm mode.
+`device_ui` reflects over a console's bound-UI state and its message types (`Tools/UiContract.cs`,
+`Tools/UiActionIndex.cs`), so any console the AI is whitelisted for is operable without a
+per-console driver.
 
-**Чего нет и почему.** `UseInHandEvent`, `DroppedEvent` и `LockToggledEvent` не подписаны: их
-широковещательная форма называет человека, но не называет предмет или замок — обработчик
-широковещательного события не получает сущность, на которой оно поднято. Строка «Иван что-то
-уронил» это половина наблюдения, а направленная подписка потратила бы глобально уникальную пару на
-действие, которое и так видно кликом. Взрыв, пожар на тайле и разгерметизацию движок не сообщает
-вовсе — об этом прямо сказано в промпте, чтобы агент не считал тишину доказательством.
+### Layer 2 — the world bus
 
-Направленные подписки вешаются через обёртку, ловящую `InvalidOperationException`: если апстрим
-когда-нибудь займёт пару, сервер поднимется без одной категории наблюдений и напишет об этом
-ошибкой в журнал, а не откажется стартовать. Отказ громкий, но не фатальный.
+Agent threads never touch entities. Every tool handler marshals its body through
+`WorldBus.RunAsync`, and `StationAiAgentSystem.Update` drains the bus inside the tick with a
+per-frame budget (`ai.frame_budget_ms`, default 3 ms, about 9 % of a 30 Hz frame).
 
-**Ворота — только расстояние от глаза** (`ai.observe_range`, по умолчанию 8.5 — полурамка
-`look {"expand":0}`, то же поле, что на экране у человека). Строгой проверки стен в горячем пути
-нет намеренно: `IsAccessible` разворачивает три сотни тайлов и делает broadphase-запрос на каждый, а
-здесь вызовов поток — это вернуло бы тик ровно туда, откуда его вытаскивали (см. раздел про
-квадратичный `look`). **Цена названа прямо: в пределах восьми тайлов агент заметит происходящее за
-стеной, тогда как человек на его месте увидел бы стену.** Включается `ai.observe_occlusion`; тогда
-добавляется третья ступень с мемо по тайлу на один тик и потолком проверок за тик.
+```mermaid
+flowchart LR
+    subgraph AT["Agent thread"]
+        H["tool handler"] -->|"RunAsync(job, priority)"| Q
+    end
+    subgraph Q["WorldBus queues"]
+        U["urgent<br/>say · radio · announce · move_camera<br/>device_* · timers · observation drain<br/>borg: goto · step · use · pickup · drop · hit"]
+        N["normal<br/>look · inspect · map · crew_status …"]
+        R["resume<br/>unfinished chunked jobs"]
+    end
+    subgraph MT["Main thread — Update() inside TickUpdate"]
+        P["Pump()<br/>deadline = now + frame budget"]
+        P --> T1["1. unfinished urgent"]
+        T1 --> T2["2. unfinished normal"]
+        T2 --> T3["3. aged normal (promotion, ai.world_promote_ms)"]
+        T3 --> T4["4. urgent"]
+        T4 --> T5["5. normal"]
+    end
+    Q --> P
+    T5 -->|"generation check → StaleGenerationException"| X["run one slice<br/>SteppedJob.Step(budget)"]
+    X -->|"TCS.SetResult<br/>RunContinuationsAsynchronously"| H
+```
 
-**Троттлинга нет по решению владельца:** десять ударов — десять строк. Контекст модели 256k, и
-объём строк сам по себе ограничителем не является. Чинить надо не объём, а **порядок вытеснения**:
-очередь наблюдений выбрасывает старейшее безотносительно вида, поэтому поток `OBSERVED` вытолкнул бы
-из неё обращение по рации — агент оглох бы ровно тогда, когда к нему обращаются чаще всего. Отсюда
-отдельный потолок на категорию (`ai.observe_buffer`, 400) поверх общего (`ai.obs_buffer`, поднят с
-200 до 600): подрезается старейшая `OBSERVED`, и только она.
+Three properties are load-bearing:
 
-**Замер объёма (стенд, до выкатки).** Появление одетого человека в кадре — самый дорогой из
-дешёвых случаев, снаряжение едет вложениями в контейнеры — стоит **28 строк**. Это порядок величины,
-на который стоит опираться: очередь в 600 строк держит два десятка таких событий, а контекст в 256k
-проглатывает их не поперхнувшись. Число стережёт тест
-`WitnessTests.OnePersonAppearing_CostsABoundedNumberOfLines` с потолком 200: он ловит не превышение
-вкуса, а подписку на что-нибудь, что срабатывает на каждое движение.
+- **One slice always runs** before the first deadline check. An overloaded server that never has
+  budget would otherwise freeze the agent forever, silently.
+- **Generation is re-checked on the main thread before every slice.** The AI can be carded
+  between two slices of one `look`; the job fails with `StaleGenerationException` and the tool
+  answers `dead` instead of acting on a body that no longer exists.
+- **Continuations run asynchronously.** `Complete()` is called from inside `TickUpdate`; an
+  inline continuation would drop a multi-second HTTP call into the middle of the system update.
 
-**Грабли, найденные по дороге.** К каждому ответу инструмента приклеивается окно «непрочитанного» —
-последние шесть строк очереди, чтобы агент не оглох посреди многошагового хода (`TurnRunner`,
-`PeekUnread(6)`). До наблюдений хвост очереди был репликами просто потому, что ничего другого в ней
-не лежало. С потоком `OBSERVED` окно превратилось бы в шесть чужих движений и вытолкнуло бы ровно ту
-реплику, ради которой заведено, — то есть фича сломала бы то, что должна была дополнить. Теперь
-`PeekUnread` берёт слова раньше увиденного, сохраняя исходный порядок строк.
+`ai.world_bus false` restores the pre-bus path (`ITaskManager.RunOnMainThread`, no budget).
+`Pump()` deliberately ignores the switch so already-queued work still drains. `aiagent cost`
+shows per-operation p50/p95/max/total and the queue counters; overflows, deferrals and worst wait
+should be zero on a healthy server.
 
-**Ручки, все живые из админ-консоли:**
+### Layer 3 — the agent core
 
-| CVar | По умолчанию | Что делает |
+#### The loop
+
+`AgentSession` owns the conversation, the observation queue and one background loop on the
+thread pool. It wakes on a `SemaphoreSlim(0, 1)`: any observation arriving releases it, and a
+burst of chatter starts exactly one turn. The wait is a ceiling, not a period: `ai.tick_seconds`
+(5 s) normally, `ai.tick_seconds_idle` (25 s) after three idle turns.
+
+```mermaid
+flowchart TD
+    W["wait on Woken (≤ tick)"] --> F{"force?<br/>idle ≥ 6 · operator inbox · last turn hit budget"}
+    F --> B["BuildObservation(force) — on the main thread via the bus<br/>drain queue · SELF line · law change · body.BeforeObservation"]
+    B -->|"null: nothing to say, paused, disabled"| I["idleStreak++"] --> W
+    B -->|"text"| U["Conv.AppendUser(text + operator message)"]
+    U --> T["TurnRunner.RunAsync"]
+    T --> C{"compact?<br/>promptTokens ≥ High and no open tool calls"}
+    C -->|yes| K["Compactor ritual (mode = Review)"]
+    C -->|no| R{"aiagent curate requested?"}
+    K --> P
+    R -->|yes| CU["Curator review"] --> P
+    R -->|no| P["reset failures · SaveSnapshot()"]
+    P --> W
+    T -.->|"exception"| E["ConsecutiveFailures++ · backoff 1s·2ⁿ ≤ 30s<br/>≥ 10 → degraded: retry every 60 s, never dies"]
+    E --> W
+```
+
+Only the session's own cancellation exits the loop. `HttpClient.Timeout` throws a
+`TaskCanceledException`, which inherits from `OperationCanceledException`; catching the base type
+without a `when (ct.IsCancellationRequested)` filter once silenced the agent for the rest of a
+round with a log line that read like a normal shutdown.
+
+#### One turn
+
+`TurnRunner` is a small state machine over `TurnContext`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Request
+    Request --> Classify: LLM response
+    Classify --> Dispatch: tool calls
+    Classify --> Prose: text only
+    Dispatch --> Steer: every call through ToolDispatcher
+    Steer --> Request: NEW_EVENTS appended if the queue filled meanwhile
+    Steer --> Close: noop (EndsTurn) or step budget exhausted
+    Prose --> Nudge: promised an action but did none / addressed but silent
+    Nudge --> Request
+    Prose --> Settle: nothing owed
+    Settle --> Close: deliver untooled text via body.Speak, or suppress a repeat
+    Close --> [*]
+```
+
+- A turn runs up to `ai.max_tool_calls_per_turn` (90) tool calls; each is one model round trip
+  because `parallel_tool_calls` is off.
+- After each batch of calls the queue is drained into a single `NEW_EVENTS` user message, so a
+  multi-step turn does not go deaf.
+- Exit reasons are explicit: `ModelStopped`, `Idled`, `BudgetExhausted`, `Cancelled`, `Failed`,
+  orthogonal to how speech was delivered. Every loop exit names its reason; the journal and the
+  bus disagreeing about why a turn ended was a real debugging cost once.
+- `noop` is the only tool that ends a turn; it works while carded and in review mode.
+
+#### Observations
+
+`ObservationQueue` is a linked list under one lock with two caps: `ai.obs_buffer` drops the
+oldest line of any kind, and `ai.observe_buffer` (400) trims only the oldest `OBSERVED` lines
+first, so a busy camera view cannot push a radio call out of the queue. Kinds, in the order they
+are rendered: `Radio, Speech, Announce, Alert, Laws, Event, Timer, Arrival, Note, Observed`.
+The formatted message is a `[T+H:MM:SS]` header, the lines, a `SELF` line with the same fields
+in the same order every time (mode, eye position, channel, timers, running scripts, and for a
+cyborg its charge), and `DROPPED n` if anything was lost.
+
+An `Observation` carries no `EntityUid`, for thread safety and for parity: a raw uid behind a
+voice is a metagame key a human player does not have.
+
+#### Entity handles
+
+`Handles/EntityHandleRegistry.cs` is per session. It mints `door-3`, `crew-7`, `apc-1` from a
+per-kind counter and only for entities the agent has actually perceived. Uids are never reused,
+so a pruned handle can only become `stale_handle`, never point at something else.
+
+#### Tools
+
+`AiTool` = name, description, a hand-written canonical JSON schema (a reflection-generated
+schema could reorder properties and invalidate the prefix cache), a handler, and four flags:
+`Wire` (visible to the model), `GameAction` (refused during review), `Speech`, `EndsTurn`.
+
+`ToolDispatcher.InvokeAsync` is the single door for the loop, the curator, Lua scripts, the
+console and the tests: resolve → gate → parse → run. Unknown names come back with
+Levenshtein-nearest alternatives; a timeout is reported with `retry: none` because the delegate
+may still execute later and bolting a door twice is worse than not retrying.
+
+`ToolResult` is one envelope everywhere: `ok`, `error` from a fixed vocabulary
+(`bad_args, stale_handle, not_visible, not_controllable, no_access, unpowered, wire_cut, carded,
+dead, timeout, review_mode, turn_budget, refused, script_syntax, script_error, script_budget,
+no_process, internal, unknown_tool`), `detail`, `retry` (`later | other_target | none`),
+`alternatives`, and `effect`: the world state read back **after** the mutation. A tool that says
+`ok` while the door stays shut is exactly the bug the bench exists to catch.
+
+#### Context: three zones and a frozen prefix
+
+The provider's prefix cache is the module's economics. A shift with eight agents costs about two
+dollars on DeepSeek at 99 % cache hits and several times more without. So `ConversationState`
+is built around one rule: **every prompt is a strict continuation of the previous one.**
+
+```mermaid
+flowchart LR
+    subgraph Z0["Zone 0 — frozen between compactions · PrefixHash"]
+        S["system prompt<br/>perception format · SELF fields · speech rules · error codes<br/>+ script-mode text · SOUL.md · memory snapshot · VFS root"]
+        TJ["tool schemas<br/>sorted by name, canonical JSON"]
+    end
+    subgraph Z1["Zone 1 — append-only body"]
+        M["user · assistant · tool messages<br/>cuts only at a user message with no open tool call"]
+    end
+    subgraph Z2["Zone 2 — volatile tail"]
+        V["at most one user message, consumed by the turn that sends it"]
+    end
+    Z0 --> Z1 --> Z2
+```
+
+`Context/CacheMetrics.cs` watches the prefix: a hash change outside a compaction, or cache reuse
+under 90 % of the reusable ceiling two turns running, is logged as an error. Providers that do
+not report cache usage (`reportsCache: false`) keep the watchdog quiet; a metric that shouts
+without a fault devalues the one instrument that catches a silent cache break.
+
+Laws are not in zone 0; they arrive as `LAWS` observations when they change. Player notes and a
+skills index are deliberately absent too: both would grow the frozen prefix on every write.
+
+#### Compaction
+
+Triggered at a turn boundary when the last prompt reached the profile's `compactHigh` (or
+`ai.compact_high`, 90 000) and no tool call is open. There is no low-water mark; one fold that
+left 162k tokens against a 45k threshold and never re-armed removed it.
+
+```mermaid
+flowchart LR
+    A["1 feasibility<br/>body has > 1 message"] --> B["2 announce<br/>'clearing memory buffers' in game"]
+    B --> C["3 curator<br/>self-review on a copy"]
+    C --> D["4 summary<br/>same tools array, so the prompt does not diverge"]
+    D --> E["5 fold<br/>summary + last N journal lines"]
+    E --> F["6 report<br/>curator verdict merged into the body"]
+    F --> G["7 prefix<br/>reload VFS, rebuild zone 0"]
+    G --> H["8 commit<br/>counters, log"]
+```
+
+Steps 1, 5, 7 and 8 are fatal; the rest are logged and skipped. If the ritual does not commit,
+zone 0 is rolled back byte-for-byte and the cache watchdog is told to expect a miss.
+
+#### Curator
+
+The curator is the agent reviewing its own shift. It is one extra turn on a **copy** of the live
+chain, with the **identical** tool array; game tools stay in the schema and refuse with
+`review_mode` at dispatch. Its prompt is `ai_data/CURATOR.md`, mounted read-only at
+`/curator.md` (an instruction the review could rewrite stops being an instruction). It writes
+`/memory.md`, `/players/<slug>` and `/skills/...` through the same `sh`/`write_file`/`edit_file`
+tools as the main loop. Its closing sentences come back into the conversation as `CURATOR …`
+only if it actually wrote something, measured as VFS writes rather than wire calls so script mode
+counts too.
+
+#### The agent filesystem
+
+| Mount | Access | Backed by |
 |---|---|---|
-| `ai.observe` | `true` | общий рубильник |
-| `ai.observe_range` | `8.5` | полурамка поля зрения |
-| `ai.observe_kinds` | пусто = все | список ярлыков через запятую, если что-то окажется шумом |
-| `ai.observe_occlusion` | `false` | учитывать стены, ценой сотен запросов на событие |
-| `ai.observe_buffer` | `400` | потолок `OBSERVED` в очереди |
+| `/wiki_ru` | read | shared `DocTree` over `ai_data/wiki_ru/` (one instance for all agents) |
+| `/wiki_en` | read | in-game Guidebook prototypes, raw markup; the English machine names players see on screens |
+| `/skills` | read/write | per-agent `DocTree` over `<agent>/skills/` |
+| `/players` | read/write | `PlayerNoteStore` over `<agent>/people/`, every entry stamped `[round N · date]` by the server |
+| `/memory.md` | read/write | `MemoryStore`, frozen snapshot in zone 0, 4 000-character cap |
+| `/curator.md` | read | `CURATOR.md` |
 
-**Что смотреть в бою:**
+Three tools: `sh` (`ls tree cat grep find mkdir rm mv pwd`, no pipes or redirects, output caps
+always announced), `write_file`, `edit_file`. Permissions belong to the mount and cannot be
+changed by the agent. The mount table renders into zone 0 as a constant block of about 700
+characters; the previous flat skills index was 16 000 characters and changed on every write.
 
-```bash
-journalctl --user -u ss14-aksioma --since "..." | grep -oP "OBSERVED \S+" | sort | uniq -c | sort -rn
-journalctl --user -u ss14-aksioma --since "..." | grep "наблюдение: пропущено"
+Mount order is part of the prefix hash, which is why `VfsBuilder` keeps it as a list and not a
+dictionary.
+
+#### Script mode
+
+In classic mode every elementary action costs a model round trip; a live cyborg log showed 1.03
+tool calls per request and 2.5 hours of model time for 37 turns. In script mode the model writes
+a Lua program and the wire carries only `script`, `bp_get_output`, `bp_stop` and `noop`. It is
+either/or per body (`ai.script_mode`, `AgentBody.ScriptMode`), decided once when the body is
+built.
+
+```mermaid
+flowchart LR
+    M["model: script{code}"] --> L["ScriptLint<br/>unknown function → script_syntax before anything runs"]
+    L --> H["LuaHost (MoonSharp)<br/>HardSandbox + pcall + metatables<br/>no io/os/require/load<br/>coroutine, 20k-instruction slices"]
+    H --> RT["ScriptRuntime<br/>every registry tool = a Lua function<br/>goto_wait → go, use_wait → use"]
+    RT --> D["ToolDispatcher — same gate, same errors"]
+    D --> BUS["WorldBus"]
+    H --> P["ScriptProcess on a dedicated thread<br/>print buffer with cursor · call cap · wall-clock cap"]
+    P -->|"finishes within ai.script_foreground_ms"| M
+    P -->|"otherwise"| O["Observation: СКРИПТ #N … — wakes the loop"]
 ```
 
-Первая команда покажет, какие ярлыки дают поток, а какие приносят пользу; `ai.observe_kinds`
-настраивается по этой таблице командой, без пересборки.
+A refusal is a Lua exception, so straight-line code reads top to bottom and tolerance is
+ordinary `pcall`. `help{tool='use'}` reads the registry directly, because in script mode the
+schemas are off the wire and a second, hand-written copy in the prompt would drift. Limits:
+`ai.script_max_processes` (2), `ai.script_max_seconds` (300, real seconds), `ai.script_max_calls`
+(400), `ai.script_max_steps` (5 M instructions), `ai.script_output_lines` (200).
 
-## Таймаут модели убивал агента до конца раунда (починен 2026-08-17)
+MoonSharp is the fork's one added package, declared in `Content.Server/Directory.Build.props`
+so that no upstream project file changes. Roslyn scripting was rejected: no way to stop a
+`while(true)`, no sandbox, and script assemblies never unload.
 
-`HttpClient.Timeout` бросает `TaskCanceledException`, а тот **наследует**
-`OperationCanceledException`. В петле стояло:
+### Layer 4 — the LLM layer
 
-```csharp
-catch (OperationCanceledException) { LastError = "cancelled"; break; }
+`ILlmClient` has two members: `ChatAsync(messages, tools)` and `GetContextSizeAsync()`. The
+bench substitutes a scripted client through `AiTestHooks.LlmFactory`.
+
+`LlamaClient` speaks OpenAI-compatible `chat/completions`, non-streaming, one tool call at a
+time. The **dialect** decides which fields go on the wire: `top_k`, `min_p`, `cache_prompt`,
+`id_slot` only for `LlamaCpp`; the `thinking` object only for `DeepSeek`; top-level
+`reasoning_effort` only for `OpenAiCompat`. Strict servers such as vLLM answer 400 to unknown
+fields, and "provider is down" must stay distinguishable from "provider did not like the fourth
+field". Proxy is per profile (`None` for loopback, `Socks` for the internet), because a global
+`HTTP_PROXY` hangs loopback requests until timeout.
+
+`RoutingLlmClient` wraps a chain of profiles (`ai.llm_chain`, e.g. `deepseek-pro,deepseek,awq`):
+
+```mermaid
+stateDiagram-v2
+    [*] --> Head
+    Head --> Sticky: first success
+    Sticky --> Sticky: success (stays — every switch is a full prefill)
+    Sticky --> Next: retryable failure (timeout, 5xx, network) → short cooldown
+    Sticky --> Quota: 429 → sleep until Retry-After or ai.llm_quota_cooldown_seconds
+    Sticky --> Dead: 401 / 403 / invalid_grant → until `aiagent llm revive`
+    Sticky --> Incompatible: 400 / 404 / 422 → ERROR with body, cooldown
+    Next --> Sticky
+    Sticky --> Head: every ai.llm_recheck_seconds, walk from the top
 ```
 
-— и один запрос, упёршийся в `ai.request_timeout` (180 с), выходил в этот `break` мимо всего
-разреженного режима, написанного ровно на такой случай. Агент замолкал до конца раунда.
+What does **not** cause a switch: a response truncated by `max_tokens` or malformed JSON in the
+arguments. Those reproduce identically on the next provider.
 
-**Почему это не находили глазами.** В журнале не оставалось ни одной ошибки: `LastError`
-становился `"cancelled"` — ровно то же, что при штатном закарживании или рестарте раунда. Строка
-`agent loop ended ... (reason: cancelled)` читается как «его выключили», а не как «он упал».
-В раунде 72 агент умер на одиннадцатом ходу именно так, и в игре это выглядело как «ИИ закардили».
+One client is built **per session**, so one agent's fallback does not drag another agent off its
+working provider. Quota state is shared and persisted in `ai_data/llm_state.json`: the client is
+rebuilt on every round restart, and a 429 cooldown that did not survive the restart would burn
+the remainder of a weekly pool on probes. `aiagent llm` shows the chain, sleepers and spend.
 
-**Насколько близко к краю было.** Замеренный максимум длительности хода в бою 16.08 — **163.0 с**
-при потолке 180. Семнадцать секунд запаса. Возврат мышления (`--reasoning-budget 1024`) поднял p90
-хода с 5.0 до 26.2 с, то есть сдвинул распределение к порогу, а не от него.
+The whole call has a budget, `ai.llm_total_timeout`, and each profile has `timeoutSeconds`. If a
+non-last profile's timeout is not smaller than the total budget, the fallback is never tried;
+`aiagent llm probe` checks this and four other silent misconfigurations with a real request.
 
-**Правка** — фильтр, отличающий нашу отмену от чужой:
+### Layer 5 — the agent's data
 
-```csharp
-catch (OperationCanceledException) when (ct.IsCancellationRequested) { ... break; }
+`ai_data/` lives next to the repository, is git-ignored, and holds everything that must survive
+an upstream rebase: personality, memory, keys. The core agent uses the root; every other body
+uses `ai_data/agents/<id>/`.
+
+```
+ai_data/
+  SOUL.md                    personality of the peaceful Station AI (hand-written, optional)
+  SOUL_ROGUE_HIDDEN.md       personalities per mode / per borg role; a per-agent copy overrides
+  SOUL_ROGUE_OPEN.md         the root one (RoleFile)
+  CURATOR.md                 the self-review prompt, {{КОРЕНЬ}} is replaced by the VFS root
+  wiki_ru/                   read-only reference library, one shared instance
+  memory/MEMORY.md           the core agent's memory
+  people/<slug>.md           the core agent's notes about characters
+  skills/                    what the core agent writes itself
+  sessions/<id>.json         conversation snapshot, written after every turn
+  logs/events-YYYY-MM-DD.jsonl
+  agents/<id>/               same layout for each cyborg (combat-1, engineer-1, …)
+  config.d/*.yml             prototype overlay, read alphabetically (see Configuration)
+  llm_state.json             per-profile quota, cooldown and spend
+  *.key                      provider keys; profiles name the file, never the value
 ```
 
-Всё остальное уходит в общий обработчик и ведёт себя как любая другая недоступность провайдера:
-`ConsecutiveFailures++`, экспоненциальный backoff, разреженный режим, самостоятельное
-возвращение. Тот же фильтр поставлен в `TurnRunner` (`RunAsync`): без него истёкший таймаут
-писался в журнал как `TurnExit.Cancelled`, тогда как петля в ту же секунду сообщала об отказе, и
-разбирать потом два взаимоисключающих объяснения одного события было нечем.
+The reference library is versioned in the repository as `skill_start/` (hand-written) and
+`wiki_skills/` (extracted from the in-game Guidebook and linted); `Tools/vfs/migrate.py` lays a
+flat copy out into the `wiki_ru/` tree. See [Getting started](#getting-started).
 
-Остальные шесть мест, ловящих `OperationCanceledException` (`Compactor`, `ToolDispatcher`,
-`AgentEventBus`, разведка `n_ctx`, ревью), пробрасывают её дальше — их править не пришлось.
+Secrets can never live in `Resources/`: `ContentMagicAczProvider` serves that whole folder to
+every connecting client. This is why `llm_profiles.yml` contains `keyFile: deepseek.key` and
+not a key.
 
-## Чем мерить просадку тика
+### Layer 6 — observability
 
-**Не считайте `MainLoop: Cannot keep up!` инцидентами.** Он троттлится до одного раза в
-15 секунд (`RobustToolbox/Robust.Shared/Timing/GameLoop.cs:178`). В журнале за 16.08 их 203 за
-одиннадцать часов, и 50 промежутков из 59 — ровно по пятнадцать секунд, то есть троттл был
-насыщен и сервер отставал почти непрерывно. По этому счётчику непрерывное отставание неотличимо
-от двухсот отдельных всплесков, и разница «до/после» на нём не видна.
+- **Journal.** `logs/events-*.jsonl` records every step, tool call and turn exit, and is the
+  source of the compaction tail.
+- **Event bus.** `AgentEventBus` is a ring of pre-serialised events (`session.started`,
+  `message.appended`, `history.replaced`, `prefix.replaced`, `memory.updated`, `skill.updated`,
+  `note.updated`, `stats`, …) with a `(instance, seq)` cursor, so a process restart shows as a
+  resync rather than silence.
+- **Debug server.** `AgentDebugServer` is a standalone `HttpListener` on `ai.debug_bind`
+  (default `127.0.0.1:9080`), bearer-token protected. Routes: `GET /health`, `GET /state`
+  (process-wide stores + roster), `GET /session?agent=<id>` (prompt, conversation, stats; unknown
+  agent is `200` with `agent: null`, never `404`, because the roster changes between polls),
+  `GET /events?instance=&since=` (long poll), `POST /command` (`message.send` to an agent,
+  `memory.change`, `skill.change`). Operator messages are prefixed
+  `[ВНЕИГРОВОЕ СООБЩЕНИЕ ОПЕРАТОРА СЕРВЕРА]` so they cannot be mistaken for radio.
+- **Debugger UI.** `Tools/aidebug/`, Vue 3 + Vite: conversation, memory, skills, notes, prompt,
+  stats, bus tabs, and a send box, for every live agent.
+- **Tick attribution.** Every 30 s the log prints the tick-interval distribution and the share of
+  main-thread time spent on the agent, computed against measured wall time so a lagging server
+  cannot inflate the agent's share. `aiagent cost` breaks it down per operation.
+- **Console.** `aiagent status | claim | release | cost | llm | config | mode | inject | tool |
+  curate | skills | ls | timers | debug | dryrun` and `aiborg list | spawn | claim | release |
+  tool | path | where`. `aiagent tool <name> <json>` invokes any registry tool from the console,
+  script-only ones included.
 
-Вместо него с 2026-08-17 в журнал раз в тридцать секунд идёт распределение длительности тика:
+### Bodies: the station core and the cyborg
+
+`Core/AgentBody.cs` is the seam between the loop and a body. Everything world-specific is a
+field on it; the loop, conversation, compaction and routing know nothing about entities.
+
+| Field | Station AI core | Cyborg |
+|---|---|---|
+| `Id` | `core` | allocated: `borg-1`, `combat-2`, `engineer-1` |
+| `Eye` | the camera eye entity | the chassis itself |
+| `Alive` | `IsPlayable` (core powered, not carded) | chassis alive |
+| `BuildPrompt` | station prompt | borg prompt (no cameras, has legs and hands) |
+| `SelfLine` | mode, eye, channel, timers | plus grid position and charge |
+| `BeforeObservation` | — | field-of-view delta since last turn |
+| `RegisterTools` | station tools | borg tools |
+| `Announce` | comms console on the brain | `null`: no such organ, compaction warning is spoken instead |
+| `Speak` | say / radio | say / radio |
+| `ChannelsFor` | channels of the AI headset | channels of the chassis |
+| `Vfs` | root `ai_data/` | `ai_data/agents/<id>/` |
+| `SoulFile`, `LlmChain`, `ScriptMode`, `Curate` | per mode | per prototype; `Curate` off |
+
+Both factories, `StationAiAgentSystem.BuildStationBody` and `AiBorgSystem.BuildBody`, fit on a
+screen.
+
+**Station tools.**
+
+| Group | Tools |
+|---|---|
+| Perception | `look` (camera sweep around the eye, `expand` 0–3, `kind`, `near`), `inspect` (bolts, electrification, APC state, air alarm, cut wire, required access; `by` answers whether a person's ID opens it), `map` (beacons and distances), `crew_status` (suit sensors), `identify`, `records`, `station_status` |
+| Speech | `say` (heard near the core), `radio` (station channels), `set_channel`, `announce` (station-wide, alert level) |
+| Movement | `move_camera`, `jump_to_core` |
+| Devices | `device_action` (open, close, bolt, unbolt, electrify, emergency access, APC breaker, air-alarm mode), `device_ui` (read a console and act on it) |
+| Common | `laws`, `noop`, `new_timer` / `del_timer` / `list_timers`, `sh` / `write_file` / `edit_file` |
+
+Timers are the agent's way of scheduling its own turn ("I will check in ten minutes"). They run
+in **round time**, so a paused empty server does not wake the model, and a fired timer is just
+another observation line, `TIMER <name>: "<text>"`.
+
+**The cyborg** (`Borg/`) is a chassis on the engineering borg base with a headless mind (the
+upstream borg system refuses to activate without one). What it deliberately does *not* get:
+`announce`, `device_action`, `device_ui`, `move_camera`, `jump_to_core`, `crew_status`,
+`station_status`. A robot does not open a door remotely; it walks to it.
+
+| Group | Tools |
+|---|---|
+| Legs | `goto` (handle, room name or grid coordinates; returns at once, `ARRIVED` / `NOPATH` arrive as observations), `step` |
+| Eyes | `look` (radius plus one occlusion ray per candidate, not the camera network), `examine` |
+| Hands | `use` (press, or apply the held item with `with_item`, choosing a `tool` from the module), `pickup`, `drop`, `hit`, `shoot`, `module`, `console` |
+| Speech | `say`, `radio`, `set_channel` |
+| Helpers | `find_charger`, `ame_plan` |
+| Script-only | `goto_wait` (`go` in Lua), `use_wait`, `walk_status` |
+
+Movement is the fork's own: `BorgPathfinder` runs A* over the `NavMapComponent` bitmap the game
+already builds for handheld navigation tablets (upstream pathfinding stops at 512 nodes and
+cannot cross a station), and `AiBorgSystem.Walk.cs` writes the direction into
+`InputMoverComponent.CurTickSprintMovement`, the same field a player's client writes. Physics,
+collisions, speed and bumping doors open stay upstream. A door that does not open after repeated
+presses is marked impassable for the route and the next path goes around it.
+
+```mermaid
+flowchart LR
+    G["goto target"] --> PF["BorgPathfinder<br/>A* on NavMap chunks, 4-neighbour"]
+    PF --> LEG["cut into legs"]
+    LEG --> WALK["Walk.cs each tick<br/>direction → CurTickSprintMovement"]
+    WALK --> DOOR{"blocked by a door?"}
+    DOOR -->|"press it (ahead, not nearest); periodically"| WALK
+    DOOR -->|"still shut"| BLK["mark tile impassable, replan (budget 10, reset on progress)"] --> PF
+    WALK --> ARR["ARRIVED / NOPATH as an observation"]
+```
+
+The borg's eyes produce three layers of world difference: the `OBSERVED` event stream, `look`
+on demand, and a per-turn field-of-view delta (`appeared / disappeared / changed`) that stays
+silent while walking, because ten tiles of movement would otherwise flood the queue and push a
+radio call out.
+
+### Game modes
+
+All modes are ordinary presets in `Resources/Prototypes/_AiAgent/rogue_ai.yml`, selectable from
+the lobby vote, `forcepreset`, or the secret pool. Each rule carries the same `RogueAiRule`
+component; what makes a mode rogue is its values.
+
+| Preset | Aliases | Laws | Personality | Crew jobs | AI access | Cyborgs |
+|---|---|---|---|---|---|---|
+| `AiPeaceful` | `peaceai` | Crewsimov | `SOUL.md` | normal | normal | one engineer |
+| `RogueAiHidden` | `malf`, `rogue` | 4 laws incl. a secret one | `SOUL_ROGUE_HIDDEN.md` | normal | extended | one rogue engineer |
+| `RogueAiOpen` | `malfopen`, `evilai` | 4 laws, announced by CentComm | `SOUL_ROGUE_OPEN.md` | everyone is a passenger | extended | six combat + one engineer |
+
+What happens at round start:
+
+1. `RulePlayerSpawningEvent`: in open mode all jobs except passenger are closed, and players who
+   asked to stay in the lobby are switched to overflow so nobody is silently refused a spawn.
+2. `RulePlayerJobsAssignedEvent`: `StationAiWhitelist` is added to every anchored door, console
+   and turret on station grids that does not already have one (a cut AI wire is never repaired),
+   support cyborgs spawn at named beacons, and the optional announcement goes out.
+3. On core claim, laws are applied through `IonStormLawsEvent`, which unlike `SetLaws` also sets
+   `ObeysTo`, marks the AI subverted and gives admins the subverted-silicon role.
+
+`BackupPowerSystem` spawns a visible, destructible generator on a high-voltage cable tile next
+to the SMES when no engineering job was assigned this shift. `RoundEndConditionsSystem` can end
+an empty round and, in modes that say so, end the round when the AI dies.
+`StationNameOverrideSystem` gives the station one name across the map rotation.
+
+---
+
+## Source layout
+
+```
+Content.Server/AiAgent/
+  StationAiAgentSystem*.cs   the seam: lifecycle, perception, prompt, station tools, vision, witness
+  AgentSession.cs            the loop; AgentState.cs — what survives a turn
+  AiCVars.cs                 every ai.* CVar with its rationale
+  Core/AgentBody.cs          the body seam
+  Core/Scripting/            Lua sandbox, runtime, processes, lint, prompt text
+  Turn/                      TurnRunner, TurnContext, SpokenIntent
+  Perception/                Observation, ObservationQueue, ObservationFormatter, TimerStore
+  Context/                   ConversationState, Compactor, CompactionSteps, Journal, SessionStore, CacheMetrics
+  Tools/                     AiToolRegistry, ToolDispatcher, ToolResult, DeviceGate, UiContract, UiActionIndex
+  Threading/                 WorldBus, SteppedJob, FrameTimeWatch
+  Handles/                   EntityHandleRegistry
+  Llm/                       ILlmClient, LlamaClient, RoutingLlmClient, LlmDialect, LlmQuotaState, LlmProbe, profile prototype
+  Vfs/                       Vfs, VfsBuilder, Shell, DocTree, mounts
+  Skills/                    Curator, MemoryStore, PlayerNoteStore
+  Vision/SlicedView.cs       the camera view as a multi-frame job
+  Borg/                      AiBorgSystem partials, BorgPathfinder, component, console command
+  RogueAi/                   rule component and system
+  Bus/                       event bus, debug server, router, directory, inbox
+  Config/AiConfigOverlay.cs  ai_data/config.d loader
+  Commands/                  aiagent, aibench
+  BackupPowerSystem.cs · RoundEndConditionsSystem.cs · StationNameOverrideSystem.cs
+
+Resources/Prototypes/_AiAgent/
+  llm_profiles.yml           provider profiles (order lives in ai.llm_chain)
+  rogue_ai.yml               laws, lawsets, rules, presets
+  ai_borg.yml                chassis, modules, borg types
+  backup_power.yml           per-map backup generator sizing
+  secret_weights_aksioma.yml the fork's secret pool
+  Entities/                  the backup generator
+
+Content.AiBench/             the test bench (not in the solution file; built by path)
+Tools/aibench                test runner script
+Tools/aidebug/               the debugger UI
+Tools/examples/llamacpp/     a complete local-model setup
+Tools/grokbridge/            OpenAI-compatible bridge for a Grok subscription
+Tools/vfs/, Tools/wiki/      library migration and wiki extraction scripts
+skill_start/, wiki_skills/   the versioned reference library
+docs/                        reconfig.md, problems.md, upstream-patches.md, journal-ru.md
+```
+
+Why everything is in `Content.Server`: it is the one content assembly without the sandbox
+(`ServerOptions.Sandboxing = false`), so `HttpClient`, `Task.Run` and MoonSharp are allowed.
+`Content.Shared` is sandboxed and would fail the build; a separate project would not be
+discovered by the engine's reflection over content modules.
+
+---
+
+## Getting started
+
+**1. Build.** Same as upstream, Release only. `DebugTools.Assert` throws in Debug builds and
+has been seen aborting the physics broadphase mid-round.
+
+```sh
+python RUN_THIS.py
+dotnet build SpaceStation14.slnx -c Release
+```
+
+**2. Create `ai_data/`.** Next to the repository, or anywhere you point `ai.data_dir` at.
+
+```sh
+mkdir -p ai_data/skills ai_data/config.d
+cp skill_start/*.md wiki_skills/*.md ai_data/skills/
+python3 Tools/vfs/migrate.py            # lays the reference library out into ai_data/wiki_ru/
+```
+
+Write `ai_data/SOUL.md` (personality; optional, the agent runs on the base prompt without it)
+and `ai_data/CURATOR.md` (the self-review prompt; a built-in fallback is used, loudly, if it is
+missing). Prompts, speech and the library are in Russian; the agent speaks the language of its
+prompt.
+
+**3. Pick a model.** Either use a profile from `llm_profiles.yml` and put its key in
+`ai_data/<keyFile>`, or add your own profile in `ai_data/config.d/10-endpoints.yml`. For a
+local model, `Tools/examples/llamacpp/` is a complete, commented walkthrough: launch script,
+profile, mode, config. The three llama.cpp flags that matter are `--jinja` (tool calling),
+`--parallel` (one slot per agent, or they evict each other's prefix cache) and `--alias` (must
+equal the profile's `model`).
+
+**4. Enable.** The agent is off by default; a fresh clone makes no network calls. In the
+server's `config.toml`:
+
+```toml
+[ai]
+enabled = true
+data_dir = "/absolute/path/to/ai_data"
+llm_chain = "deepseek"            # profile ids, left to right; empty = single ai.endpoint
+llm_total_timeout = 240           # must exceed timeoutSeconds of every non-last profile
+```
+
+`Tools/server_config.public.toml` is a full production config without secrets, with the reason
+for every value. Keep `[config] preset_development = false`: the development preset silently
+disables the lobby, picks the Dev map and the sandbox preset.
+
+**5. Verify from the server console.**
+
+```
+aiagent config          # which overlay files were read and what each overrode
+aiagent llm probe       # a REAL request per profile; catches the five silent misconfigurations
+aiagent mode            # what every preset resolves to, overlay included
+startround              # the lobby waits for players otherwise
+aiagent status
+aiagent tool station_status "{}"
+aiagent inject Binary "Аксиома, доложи обстановку"
+```
+
+`aiagent inject` sends a real radio message through `RadioSystem`, so it exercises the whole
+perception path. Use `Binary` for tests: `Common` needs a powered telecom server, and a missing
+reply there looks like an agent bug when the message simply never went out.
+
+**6. Optional: the debugger.** Set `ai.debug_enabled = true`, `ai.debug_token` (ASCII), then
+`cd Tools/aidebug && npm install && npm run dev` and open `http://localhost:5173`.
+
+---
+
+## Configuration
+
+Settings live in three places, and the boundary is a rule, not a convention:
+
+| Where | What | Applied |
+|---|---|---|
+| `Resources/Prototypes/_AiAgent/` | what the fork ships: base profiles, modes, presets | rebuild |
+| `ai_data/config.d/*.yml` | what makes *this* server different: its endpoints, modes, secret pool | `aiagent config reload` |
+| `config.toml` (`[ai]`) | switches and order: `enabled`, `llm_chain`, budgets | `cvar` in the console, some on restart |
+
+**Who answers is in `config.toml`; how it is built is in YAML.**
+
+### The overlay
+
+`ai_data/config.d/*.yml` is plain prototype YAML fed to the prototype manager with overwrite on,
+read in file-name order. Any prototype type works: `aiLlmProfile`, `entity` with `RogueAiRule`,
+`gamePreset`, `weightedRandom`, `siliconLawset`, `aiBackupPower`. It exists because `Resources/`
+is in git (a per-machine edit becomes a rebase conflict), is served to every client, and needs a
+rebuild to change.
+
+The one trap: an entry with an existing `id` **replaces the prototype wholesale**, it does not
+merge. Changing "just the endpoint" silently resets the dialect, timeout and context limit to
+type defaults. Restate every field, or use a new `id` and reorder the chain. A broken file is
+reported and skipped; the rest still load. Full semantics and effective-from rules are in
+[`docs/reconfig.md`](../../docs/reconfig.md).
+
+### Provider profiles
+
+| Field | Meaning |
+|---|---|
+| `endpoint`, `model` | base URL including `/v1`; the model name must match what the provider lists, `aiagent llm probe` checks |
+| `dialect` | `LlamaCpp`, `DeepSeek`, `OpenAiCompat` — which extension fields go on the wire |
+| `quota` | `Free`, `Metered`, `Subscription` — how spend is counted |
+| `proxy` | `None` (loopback) or `Socks` (`ai.llm_socks_proxy`) |
+| `keyFile` | file name inside `ai_data/`, never the value |
+| `ctxProbe`, `ctxLimit` | `Props` asks llama-server for the real `n_ctx`; otherwise trust `ctxLimit`, deliberately conservative |
+| `compactHigh` | compaction threshold; keep 25–30 % below the window, a turn can add a lot before the fold |
+| `timeoutSeconds` | per-attempt; must be below `ai.llm_total_timeout` unless last in the chain |
+| `reportsCache` | whether the provider reports cached tokens; wrong in either direction breaks the cache alarm |
+| `reasoningEffort`, prices, `quotaWindowHours` | optional |
+
+### CVars that matter
+
+All of them, with their rationale, are in `AiCVars.cs`. The ones you will actually touch:
+
+| CVar | Default | What it does |
+|---|---|---|
+| `ai.enabled` | `false` | master switch |
+| `ai.auto_claim` | `true` | take the station core at round start |
+| `ai.data_dir` | `""` | absolute path to `ai_data/`; empty resolves relative to the executable |
+| `ai.llm_chain` | `""` | profile ids in fallback order; empty = single `ai.endpoint`/`ai.model` |
+| `ai.llm_total_timeout` | `240` | budget of one call across the whole chain, seconds |
+| `ai.max_agents` | `8` | live agents, core and cyborgs together; size it to your provider's parallel slots |
+| `ai.tick_seconds` / `ai.tick_seconds_idle` | `5` / `25` | ceiling on the sleep between turns |
+| `ai.max_tool_calls_per_turn` | `90` | steps per turn |
+| `ai.compact_high` | `90000` | compaction threshold when the profile has none |
+| `ai.hear_range` | `10` | tiles from the core (or the chassis) for local speech |
+| `ai.observe*` | on, `8.5` | witness stream: switch, range, kind filter, occlusion, buffer |
+| `ai.frame_budget_ms` | `3` | main-thread budget per frame for the world bus |
+| `ai.script_mode` | `false` | Lua script mode for every body |
+| `ai.rogue_grant_*`, `ai.rogue_support_borgs` | `true` | emergency brakes on the rogue rule, override the prototype downwards only |
+| `ai.backup_power*` | on | backup generator when no engineers are on shift |
+| `ai.debug_enabled`, `ai.debug_bind`, `ai.debug_token` | off | the debug server |
+| `ai.station_name` | `""` | one station name across the rotation; empty keeps vanilla |
+| `ai.dry_run` | `false` | tools report instead of acting |
+
+Budget-type CVars (`frame_budget_ms`, `mainthread_budget_ms`, the observe set) are live; the
+rest are read when a session or body is built.
+
+---
+
+## Operating a live server
+
+**Reading the log.** Three lines to know:
 
 ```
 тик за 30с: n=901 p50=33.3 p95=33.4 p99=34.6 max=335.9мс, опозданий (>50мс) 0.1%
 из них главного потока на агента: 84.0мс (0.28% времени)
+agent loop ended ... (reason: ...)
 ```
 
-Три вещи в этой строке стоили по одной ошибке каждая, и все три всплыли на первых же боевых
-замерах:
+The first is what players feel and is printed even in rounds without an agent, as a control.
+The second answers "is the AI lagging us" with one number. Do not count the engine's
+`MainLoop: Cannot keep up!` as incidents: it is throttled to one per 15 s and cannot tell
+continuous lag from bursts.
 
-1. **Меряется промежуток между тиками, а не `IGameTiming.RealFrameTime`.** Последний — период
-   итерации главного цикла (`GameTiming.StartFrame`), а цикл крутится намного чаще, чем тикает:
-   на пустом лобби около 1400 оборотов в секунду при тридцати тиках. По нему первый замер дал
-   `p50=0.7мс` и выглядел прекрасно, не имея отношения к делу.
-2. **Порог опоздания — полтора периода (50 мс), а не сам период.** Здоровый цикл спит ровно до
-   следующего тика, поэтому измеренный период колеблется ВОКРУГ 33.3 мс, и строгое «больше 33.3»
-   отсекает половину замеров на совершенно здоровом сервере: второй замер честно показал
-   `49.5%`. Полтора периода — это уже пропущенный кадр, а не дрожание.
-3. **Доля агента считается от измеренного времени окна, а не от номинальных 30 000 мс.** Окно
-   закрывается по накопленному симуляционному времени (900 тиков), и когда сервер отстаёт,
-   настенного проходит больше. Деление на 30 000 завышало бы долю ровно в тех случаях, ради
-   которых всё и меряется, — то есть подыгрывало бы выводу «виноват ИИ». Поэтому в строке стоит
-   измеренная длительность окна: заметно больше тридцати — сервер отставал.
+**When the AI is silent.** In order: `aiagent status` (is there a session, what was the last
+error), `aiagent llm` (is the chain asleep or dead), `aiagent llm probe` (does the provider
+answer with the fields we send), `aiagent cost` (is the bus starving), `cvar
+game.auto_pause_empty` (a paused empty server freezes the bus and every tool answers `timeout`).
+A quota sleep or a dead profile is state, not an error: `aiagent llm revive <profile>` clears it.
 
-Первая строка — то, что чувствует игрок. Вторая появляется, только если агент в этом окне
-работал, и отвечает на вопрос «виснем ли мы из-за ИИ» одним числом. Первая строка пишется
-**всегда**, в том числе в раундах без агента: это и есть контрольный замер.
+**Changing the model mid-evening.** `cvar ai.llm_chain "awq,deepseek"` takes effect on the
+next session: `aiagent release`, then `aiagent claim` (release does not re-claim by itself).
+`aiagent llm use <profile>` pins one for the round. Neither needs a rebuild or kicks anyone.
 
-Разбивка по операциям — `aiagent cost`:
+**Changing the mode.** Edit `ai_data/config.d/20-modes.yml` → `aiagent config reload` →
+`aiagent mode` to confirm → `forcepreset <id>` → `restartroundnow`.
 
-```
-операция                  n     p50     p95     max     итого  сверх
-look                     30    17.3    34.7    73.3       780     30
-device_ui                95     2.1    11.4    25.9       210      5
-```
+**Rogue mode sanity.** `journalctl … | grep ai.rogue` prints one line per station with door,
+console and turret counts and the cyborg tally; a grant pass that touched nothing and one that
+took half the station look identical in game. `aiagent tool laws "{}"` should return the mode's
+lawset, not Crewsimov.
 
-Колонка `итого` важнее `max`: тридцать вызовов по 26 мс и один на 73 мс дают одинаковый максимум,
-но отличаются по суммарной цене в двадцать раз — и чинятся по-разному, первое дроблением, второе
-удешевлением. `ai.mainthread_budget_ms` теперь живой (`OnValueChanged`); до этого он читался один
-раз при старте, и `cvar ai.mainthread_budget_ms 2` из консоли молча не делал ничего.
+**Prefix cache.** `aiagent llm` shows reuse; an `ERROR` from `CacheMetrics` means the prompt
+changed outside a compaction. The usual causes are an edited `SOUL.md`, a reordered mount, or
+two agents sharing one llama-server slot.
 
-Гистограмма движка по фазам тика — `metrics.enabled = true` в конфиге, `metrics.host` по
-умолчанию `localhost`:
+---
 
-```bash
-curl -s localhost:44880/metrics | grep robust_tick_usage
-```
+## Testing
 
-Наш насос живёт внутри `TickUpdate` и своей метки там не получит — для него и заведены две строки
-выше.
-
-## Четыре горячих пути, чинившиеся вместе (2026-08-17)
-
-Ни одна из этих правок не меняет поведения. Все четыре нашлись при разборе «почему виснем», и
-все четыре — про работу, которая делалась зря.
-
-**1. `Witness` платил за настройки на каждое событие станции.** Воронка читала `ai.observe`,
-`ai.observe_kinds` и `ai.observe_range` через `_cfg.GetCVar` до всякой проверки расстояния, а
-подписки включают `EntInsertedIntoContainerMessage` и `EntRemovedFromContainerMessage` — самый
-частый класс событий в игре: каждый подъём предмета, каждая смена руки, каждая деталь механизма.
-`GetCVar<T>` это `(T)GetCVar(name)`: захват `ReaderWriterLockSlim`, поиск в словаре и упаковка в
-`object`. Ровный налог на всю станцию, пока агент жив, и **в статистике диспетчера его не видно
-вовсе** — это не маршалированный вызов, тик просто становится толще. Теперь пять значений лежат в
-полях, живых через `OnValueChanged`, а `ai.observe_kinds` разобран в `HashSet` (прежняя форма
-звала `string.Split` на каждое событие, стоило списку перестать быть пустым, — то есть попытка
-приглушить шумную категорию делала горячий путь дороже).
-
-**2. `ai.look_limit` применялся после того, как всё построено.** Отсечка в 300 строк стояла
-`Take(limit)` в самом конце: при `expand:3` на живой станции строилось ~2290 строк, и 85%
-выбрасывалось немедленно. Каждая выброшенная стоила `ShortState` (а он для большинства сущностей
-сваливается в `_power.IsPowered`, то есть в опрос энергосети), `Identity.Name` и сборки строки.
-Теперь сначала считаются позиции и дистанции, список режется, и только выжившие платят за
-состояние и имена.
-
-Две вещи, которые при этом нельзя было сломать, и обе видны в коде рядом:
-
-* `count` в ответе и предупреждение об обрезке считают **полный** набор, а не обрезанный. Молчаливая
-  обрезка разобрана там же как худший исход: модель уверенно докладывает «SMES тут нет» о списке,
-  который обрезали до SMES.
-* Ничьи при отсечке разводятся по `uid`, а не по тексту строки, которого на этом шаге ещё нет.
-  Итоговая выдача по-прежнему сортируется по `(дистанция, текст)` — это требование стабильности
-  префикс-кэша, — но сама отсечка обязана быть детерминированной, иначе порядок обхода broadphase
-  решал бы, кто попал в трёхсотку.
-
-**3. `ObservationQueue.PeekUnread` держал лок через форматирование.** Метод зовётся из потока
-агента на каждый результат инструмента, а лок тот же, что у `Push` — а `Push` идёт с главного
-потока из-под клика игрока. Под локом стояли два полных обхода до шестисот элементов плюс сборка
-строк по каждой выбранной. Теперь под локом только выбор; `Observation` неизменяем, поэтому
-форматирование безопасно вынести наружу. Заодно поправлен комментарий класса: он утверждал, что
-очередь трогают только с главного потока и «контенции нет» — её трогают три потока.
-
-**4. `UiContract.Describe(Type)` рефлексировал заново на каждый вызов.** `GetConstructors` +
-`GetFields` по всем типам сообщений интерфейса, на главном потоке, внутри тика, на инструменте с
-замеренным максимумом 25.9 мс. Ответ зависит только от типа, а `UiAction`/`UiParam` —
-неизменяемые записи, так что теперь это `ConcurrentDictionary<Type, UiAction?>` навсегда.
-
-**Что НЕ правилось, хотя выглядело похоже.** «`inspect` считает ворота дважды» — при проверке по
-коду оказалось неверно: первый `IsVisibleToAi` идёт на осматриваемый объект, второй — на человека
-из аргумента `by`, и только когда `by` передан. Это две разные проверки, а не дублирование.
-Дорогое в них общее — `IsAccessible(fastPath: false)`, разворачивающий ~324 тайла с
-broadphase-запросом на каждый; дешевеет он вместе с `GetView`, а не отдельной правкой инструмента.
-
-## Шина мира: бюджет на кадр вместо «сколько влезет» (2026-08-17)
-
-Раньше каждый запрос агента к миру уходил через `ITaskManager.RunOnMainThread`, а движок сливает
-эту очередь **целиком**:
-
-```csharp
-// RobustToolbox/Robust.Shared/Asynchronous/RobustSynchronizationContext.cs:52
-public void ProcessPendingTasks()
-{
-    while (_channelReader.TryRead(out var task))
-        task.Callback(task.State);
-}
+```sh
+Tools/aibench                 # default: everything except Live, Scenario and socket tests
+Tools/aibench Look            # filter by name
+Tools/aibench --scenario      # full Box-station scenarios, ~15 s each
+Tools/aibench --live          # against a real model; AI_ENDPOINT / AI_MODEL / AI_API_KEY
+Tools/aibench --socket        # the one test that binds a real port
+cd Tools/aidebug && npx vitest run
 ```
 
-Ни потолка, ни временного среза, дважды за тик (`BaseServer.cs:723` и `:753`), и оба раза **до**
-`TickUpdate`. Забюджетировать её на месте нельзя — она общая со всеми асинхронными продолжениями
-движка. Поэтому очередь теперь своя (`Threading/WorldBus.cs`), а сливает её `Pump()` из
-`StationAiAgentSystem.Update`, под `ai.frame_budget_ms` (по умолчанию 3 мс = 9% кадра).
-
-**Место вызова выбрано, а не досталось.** `Update` идёт внутри `_entityManager.TickUpdate`, то
-есть после того, как движок слил свою очередь. Правки мира от агента ложатся вместе с остальными
-системами, а не тиком раньше них. Из `Input` насос звать нельзя по той же причине.
-
-**Что перенесено дословно, потому что несущее:**
-
-1. `TaskCreationOptions.RunContinuationsAsynchronously` на TCS внутри `AtomicJob`. Под шиной оно
-   стало **важнее**: `Complete()` теперь зовётся из насоса, живущего внутри `TickUpdate`, так что
-   встроенное продолжение уронило бы многосекундный HTTP-вызов к модели прямо в середину обхода
-   систем. Свойство наконец покрыто тестом (`WorldBusTests.ContinuationsDoNotRunOnTheGameThread`)
-   — до сих пор его не проверял никто.
-2. Проверка поколения — на главном потоке, перед **каждым** срезом, а не только перед первым. С
-   дроблением это перестаёт быть формальностью: ИИ может быть закарден между двумя срезами одного
-   обзора.
-
-**Две полосы.** Что меняет мир или говорит вслух — срочно; что только смотрит — обычно. Правило
-не про стоимость: `announce` сам по себе не дёшев, но экипаж замечает задержку речи и не замечает
-задержку опроса. Политика живёт одним списком `UrgentOps` в `Tools.cs`, а не параметром на
-восемнадцати вызовах. Состарившаяся обычная заявка (`ai.world_promote_ms`, 500 мс) обгоняет
-срочные — сторож от голодания.
-
-**Гарантия продвижения.** Один срез исполняется до первой проверки дедлайна. Иначе перегруженный
-сервер, у которого бюджет выбран всегда, заморозил бы агента навсегда — и тот тихо умер бы посреди
-раунда, ровно тем классом отказа, от которого модуль защищается везде.
-
-**Рубильник** `ai.world_bus false` возвращает дошинный путь. Проверки `Enabled` в `Pump` при этом
-намеренно нет: рубильник меняет только то, куда попадают новые заявки, а уже стоящие обязаны
-доехать — иначе аварийный переключатель сам устраивал бы аварию.
-
-**Честно о пользе.** Замеры того же дня: вся работа агента — **0.00–0.01% времени главного
-потока**, при том что `EntitySystems` занимают 63–78% кадра, из них физика 26% и энергосеть 22%.
-Шина не чинит просадку тика, её причина в другом месте. Она даёт предсказуемость — ни один будущий
-инструмент не займёт кадр целиком — и наблюдаемость: `aiagent cost` показывает глубину очереди,
-переносы, обгоны, отказы и худшее ожидание. Три из пяти обязаны быть нулями.
-
-**Грабля, найденная тестом.** Первая версия `ChunkedJobSpansSeveralFrames` не поймала бы ничего:
-насос, отдав срез, тут же забирает недоделанную заявку обратно и крутит её **пока не кончился
-бюджет** — так и задумано. Джоб, который ничего не делает, отрабатывает все свои срезы в одном
-кадре. Тестовый джоб теперь выбирает бюджет до конца через `budget.Exhausted`, и получается ровно
-один срез на кадр на любой машине — без порога в миллисекундах, который пришлось бы подбирать.
-
-## Снимок диалога пишет петля, а не тик (2026-08-17)
-
-Раз в минуту `Update` делал в кадре то, чему в кадре не место: `Conv.Snapshot()` под локом,
-который в тот же момент держит агент, сериализацию тела в сотни килобайт JSON (при 83к токенов
-это ~250 КБ) и блокирующую запись файла. Всё три вещи принадлежат потоку агента — тело его
-собственное, а сериализация там и так происходит на каждый запрос к модели.
-
-Теперь снимок пишет сама петля, после **каждого** хода (`AgentSession.Persist`, вешается как
-`queue.Arrived` — после конструктора). В замыкании намеренно нет ни одного обращения к миру:
-хранилище ходит по своим файлам, идентификатор сессии — константа, а номер раунда берётся из
-`volatile int _roundId`, снятого на главном потоке. Позвать оттуда `CurrentRoundId()` значило бы
-трогать `EntityManager` с потока агента.
-
-Цена упала настолько, что «раз в минуту» превратилось в «после каждого хода», и потеря при аварии
-сократилась с минуты до одного хода.
-
-**`Release` остался синхронным, и это не недоделка.** Переложить сохранение на петлю нельзя:
-ждать её здесь запрещено (`Task.Wait` в этом месте гарантированно вешал сервер на две секунды —
-очередь маршалированных вызовов сливается ДО `TickUpdate`, поэтому петля не может сдвинуться, пока
-главный поток ждёт), а к моменту `Release` она может сидеть в HTTP-вызове до 180 секунд. Поэтому
-запись здесь осталась, но стала **редким** путём: она срабатывает, только если снимку на диске
-больше двух минут — то есть сразу после старта сессии или когда агент завис на длинном запросе.
-Ровно те случаи, ради которых её и писали.
-
-Заодно уехал мёртвый `SaveSessions()` — вызывать его стало некому.
-
-**Что из этапа сознательно не делалось.** Загрузка снимка и чтение `SOUL.md` на старте сессии тоже
-идут с главного потока, но это разовые операции на старте раунда, где рядом стоит генерация карты
-ценой в двадцать секунд (замерено: `max=19897мс` в окне 04:31). Переносить их — риск ради шума.
-Загрузка хранилищ в `Initialize` (227 файлов, 1.8 МБ) остаётся на месте по отдельной причине:
-комментарий в `Tools.Memory.cs:25-28` объясняет, что ленивая инициализация здесь уже приводила к
-гонке двух первых обращений, и одно из них молча теряло записи.
-
-## Резервное питание на смену без инженеров (2026-08-17)
-
-При онлайне 0–2 человека инженерную смену не набирает никто, и станция живёт на том, что накопили
-батареи. SMES держит 8 МДж (`smes.yml`), апстримовый гайдбук пишет прямо: «this will at most last
-5-10 minutes». Дальше раунд идёт в темноте, и ИИ, чьё ядро питается от той же сети, замолкает.
-
-**Сначала — версия, которая оказалась неверной.** По журналу раунда 81 я решил, что виноваты
-`SolarPanelEmptyVariationPass` и `SolarPanelDamageVariationPass`: панели портятся на старте, значит
-бесплатный вечный источник остаётся сломанным. Проверка по коду это опровергла. Оба паса —
-`EntityReplaceVariationPass` с `entitiesPerReplacementAverage: 30`
-(`Resources/Prototypes/GameRules/variation.yml:165-183`), а
-`BaseEntityReplaceVariationPassSystem.ApplyVariation:31-62` превращает это в вероятность 1/30 на
-сущность. Каждый пас заменяет ~3.3% панелей, вместе ~6.5%. Косметика.
-
-**Настоящих причин две, и обеих в журнале не видно.**
-
-Первая: **массивы не подключены к сети станции.** Обход графа HV-кабеля по всем тринадцати картам
-ротации — панели стоят на собственных кабельных островах, без SMES и без пути к главной сети. На
-одиннадцати картах из тринадцати солнечной мощности на главной сети **ровно ноль**:
-
-| карта | запас в батареях | номинал панелей | из них на главной сети |
-|---|---|---|---|
-| **packed** (единственная при онлайне 0–4) | 202 МДж | 98.2 кВт | **0** |
-| box | 235 МДж | 180 кВт | **0** |
-| bagel | 291 МДж | 308 кВт | **0** |
-| fland | 266 МДж | 355 кВт | **0** |
-| oasis | 246 МДж | 232 кВт | 52.5 кВт |
-| tram2 | 181 МДж | 183 кВт | 15 кВт |
-
-Апстрим этого не скрывает: `Guidebook/Engineering/SolarPanels.xml` — «At the start of the shift
-solar panels are misaligned and disconnected from the grid». На `packed` тринадцать островов в
-4–31 тайле от главной сети; чтобы соединить все, нужно проложить ~148 тайлов кабеля.
-
-Вторая: **панели никто не наводит.** `PowerSolarSystem:116` принудительно переписывает поворот
-каждой панели одним глобальным значением, то есть ориентация с карты не значит ничего и все панели
-всегда смотрят в одну сторону. Пишет это значение **только** человек за консолью
-(`PowerSolarControlConsoleSystem.OnUIMessage:45-58` — единственный писатель). Средняя за солнечный
-цикл отдача ненаведённого массива — `1/π ≈ 32%`, и половину каждого цикла она равна нулю.
-
-Отдельно стоит знать, чего агент **не** может: контракта `device_ui` на `ComputerSolarControl` у
-него нет, а кабель прокладывать ему нечем. Из энергетики у него один рычаг — рубильник APC
-(`Tools.Act.cs:543-553`) — и заряд SMES он читает грубо, пятью ступенями индикатора, глядя камерой.
-
-### Решение
-
-`BackupPowerSystem` ставит генераторы, **только если на смене нет инженерного отдела**. Ни одного
-изменённого файла апстрима: один новый файл кода и один новый прототип.
-
-**Прототип — `AiAgentBackupGenerator`**, `parent: GeneratorBasic15kW`. И да, апстримовый
-`GeneratorBasic*` действительно работает вечно — это проверено, а не предположено: весь состав
-`BaseGenerator` это `NodeContainer` + `PowerSupplier` + обвязка прочности, **ни одного топливного
-компонента**. Топливо приносят `FuelGenerator`, `SolidFuelGeneratorAdapter`, `MaterialStorage` и
-`PortableGenerator` — они есть у семейства PACMAN и отсутствуют здесь. Сам `PowerSupplierComponent`
-состоит только из полей подачи: ни расхода, ни батареи, ни входа. Это инструмент маппера, а не
-смоделированный двигатель.
-
-Свой прототип, а не четыре апстримовых, потому что объект **видимый**: к нему подойдут и прочитают.
-Четыре одинаковых генератора у SMES экипаж примет за часть карты; один с говорящим описанием
-объясняет себя сам. Ломается он при этом как обычная машина — `Destructible` и `Explosive` на
-месте, и чинить его некому.
-
-**Хук — `RulePlayerJobsAssignedEvent`**, а не `StationPostInitEvent`: до спавна игроков условие
-«есть ли инженеры» неизвестно, и `StationPostInitEvent` отвечал бы «нет» всегда. Событие
-поднимается даже при нуле готовых игроков (`GameTicker.Spawning.SpawnPlayers` — раннего выхода по
-пустому списку нет), то есть раунд без экипажа генератор получит; ядру ИИ питание нужно и так.
-
-Игровое правило не годится: список правил старта раунда лежит в `game_presets.yml`, это апстримовый
-файл, и добавить туда своё аддитивно нельзя.
-
-**Состав отдела читается из прототипа департамента**, а не списком роль-за-ролью в коде — форк,
-добавивший свою инженерную должность, учтётся сам. Незнакомый департамент в CVar'е означает «инженеры
-есть»: обратное умолчание ставило бы генератор на укомплектованную смену, и узнали бы мы об этом от
-игроков, а не из журнала.
-
-**Место — только тайл, где уже лежит высоковольтный кабель, и это требование, а не удобство.**
-`PowerSupplier` подключается через `CableDeviceNode`, а тот
-(`Content.Server/Power/Nodes/CableDeviceNode.cs:34-56`) соединяется исключительно с `CableNode` в
-том же тайле и только у заякоренной сущности. Поставленный мимо кабеля генератор спокойно стоит,
-гудит и не даёт ничего — **без единой ошибки в журнале**. Поэтому тайлы берутся вокруг SMES: SMES по
-определению стоит на главной сети, попасть на изолированный солнечный остров невозможно, и заодно
-это инженерное помещение. `TryFindRandomTileOnStation` для этого не подходит — случайный тайл почти
-никогда не кабельный.
-
-### Ручки
-
-| CVar | По умолчанию | Что делает |
-|---|---|---|
-| `ai.backup_power` | `true` | общий рубильник |
-| `ai.backup_power_watts` | `60000` | суммарная мощность контура |
-| `ai.backup_power_department` | `Engineering` | какой департамент считать «сменой» |
-
-**60 кВт — цифра до замера, а не после.** Все опорные числа в гайдбуке (5–10 минут, отсюда
-340–670 кВт потребления) написаны для полного экипажа; сколько тянет пустая станция, неизвестно —
-лампа берёт 5 Вт. Мерить надо `powerstat` на живом раунде и ставить с запасом ×1.5.
-
-### Что проверяют тесты
-
-`BackupPowerTests` — три штуки, и главный не про спавн:
-
-- **`JoinsTheSameNetAsTheSmes`** — сравнивает `Node.NodeGroup` генератора и SMES. Утверждение
-  «сущность заспавнилась» пропустило бы самую вероятную поломку целиком, потому что она молчит.
-- **`SuppliesTheConfiguredTotal`** — мощность пишется в `PowerSupplier.MaxSupply` после спавна,
-  чтобы CVar работал на живом сервере. Потеряется этот шаг — сервер будет отдавать прототипные
-  60 кВт независимо от настройки, и заметно это будет только по тому, что ручка «не работает».
-- **`EngineeringOnDuty_FollowsTheAssignedJobs`** — пустая смена против выданной должности.
-
-**Грабля, найденная тестом.** Первая версия двух тестов поднимала `RulePlayerJobsAssignedEvent`
-вручную. Так делать нельзя: на него подписан `AntagSelectionSystem`, и вне последовательности старта
-раунда он валится с «_postSpawnRules was null» — то есть тест падал не по вине проверяемой системы.
-Условие теперь спрашивается у системы напрямую, для этого `EngineeringOnDuty` публичный. Должность
-выдаётся настоящим `StationJobsSystem.TryAssignJob`: писать в `PlayerJobs` напрямую запрещает
-атрибут `[Access]` (RA0002), и правильно запрещает — слот должности при выдаче должен уменьшаться.
-
-## Цепочка провайдеров: главная модель и фаллбеки (2026-08-17)
-
-До этого агент говорил ровно с одной моделью и ретраев не имел вовсе. Когда модель отваливалась,
-`AgentSession` наращивал `ConsecutiveFailures`, уходил в деградированный режим и до конца раунда
-повторял тот же запрос в тот же мёртвый эндпоинт. Отваливалась она не теоретически: у llama-swap
-`ttl: 900` и нет `hooks` preload, так что первый ход после четверти часа тишины платит 48 с
-холодного старта при таймауте 180.
-
-**Почему подписки, а не оплата по токенам.** Живой журнал за сутки: **710 обращений к модели**,
-промпт p50 = 52 685 токенов, max 118 252, реюз кэша 97.9%. Форма нагрузки — мало обращений, огромный
-промпт — ровно та, которую подписка субсидирует лучше всего, а токенный тариф наказывает сильнее
-всего. Подписочная квота считается **в обращениях** (у Codex 250–2000 к Luna за пятичасовое окно),
-так что наш 52-тысячный промпт стоит в ней столько же, сколько короткий. Те же объёмы по API:
-≈$225/мес на gpt-5.6-luna, ≈$1100/мес на Grok Build, ≈$50/мес на DeepSeek v4-flash с его дешёвым
-префиксным кэшем.
-
-**Где это живёт.** `Llm/RoutingLlmClient.cs` — декоратор `ILlmClient`, встающий в единственное место
-сборки клиента (`StationAiAgentSystem.EnsureClient`). Ни один из трёх потребителей (`TurnRunner`,
-`Curator`, `CompactionSteps`) не знает, что провайдер теперь не один. Профили —
-`Resources/Prototypes/_AiAgent/llm_profiles.yml`, порядок — CVar `ai.llm_chain`. Пустая цепочка
-означает «как раньше, один `ai.endpoint`», и это откат одной строкой из консоли.
-
-**Диалекты.** До этого в каждый запрос уходило объединение расширений: `top_k` и `min_p` (сэмплеры
-llama.cpp), `cache_prompt` и `id_slot` (llama-server), `thinking` (DeepSeek). Пока эндпоинт был
-один, это работало — llama-server незнакомое поле игнорирует молча. Строгая API отвечает 400, и
-отличить «провайдер лежит» от «провайдер не понял четвёртое поле» было нечем. Таблица в
-`Llm/LlmDialect.cs`, проверяется по настоящему телу запроса через `HttpListener` в
-`LlmRouterTests`.
-
-**Что НЕ повод переключаться:** обрезка по `max_tokens` и кривой JSON в аргументах. Это наши
-проблемы, у другого провайдера они воспроизведутся так же, и уход по ним означал бы обойти всю
-цепочку и вернуться туда, откуда начали.
-
-**Липкость.** Выбранный профиль держится, пока работает; возврат на главный — не чаще
-`ai.llm_recheck_seconds`. Причина в тех же 97.9%: каждое переключение стоит полного prefill на новой
-стороне. `CacheMetrics.NoteProvider` знает про смену провайдера и не поднимает алярм на законном
-промахе, а для профилей с `reportsCache: false` молчит вовсе — метрика, кричащая ERROR без поломки,
-обесценивает единственный прибор, ловящий бесшумную поломку кэша.
-
-**Квота — состояние, а не ошибка.** `Llm/LlmQuotaState.cs`, файл `ai_data/llm_state.json`.
-Три вещи, каждая по своей причине:
-
-- **Длинный сон до сброса** (`Retry-After`, иначе `ai.llm_quota_cooldown_seconds` = час). Проба в
-  исчерпанное окно ничего не возвращает, но сама является обращением, то есть тратит ровно то,
-  чего уже нет.
-- **Состояние переживает рестарт.** `ResetLlmClient()` выбрасывает клиента на каждом рестарте
-  раунда, а их за сутки десятки: внутри клиента это состояние означало бы, что каждый рестарт
-  заново добивает остаток недельного пула.
-- **Свои счётчики обращений за окно и за неделю.** Ни OpenAI, ни xAI настоящего потолка не
-  публикуют. Посчитать свой расход в тех же окнах — единственный способ его узнать. Смотреть:
-  `aiagent llm`.
-
-**Перелогин — отдельный класс отказа.** 401/403 или тело с `invalid_grant` / `refresh_token`
-выключают профиль до вмешательства человека, без повторов, с ERROR в логе. Повторять бессмысленно, а
-тихо деградировать нельзя: ровно так однажды агент простоял весь раунд, и в журнале это выглядело
-как будто его закардили. Снимается `aiagent llm revive <профиль>`.
-
-**Консоль:** `aiagent llm` — состояние цепочки и расход; `aiagent llm use <профиль>` — закрепить до
-конца раунда (закреплённый пробуется даже из сна, но цепочка за ним всё равно продолжается: на
-живом сервере молчащий агент хуже, чем ответивший не с того профиля); `aiagent llm revive <профиль>`.
-
-**Что здесь не проверено и проверяется только в бою.** Отвечает ли мост на `stream: false`;
-переживают ли 27 схем инструментов перевод в Responses API; и главное — **что физически приходит на
-исчерпанной подписке.** От последнего зависит, работает ли длинный сон вообще: пока это не выяснено,
-`ai.llm_quota_cooldown_seconds` — угадывание. `ctxLimit` у облачных профилей поэтому же занижен до
-128000: завысить значит позволить диалогу вырасти за настоящее окно и получить отказ, у которого в
-журнале до самого конца виден здоровый размер промпта.
-
-## Режим «злой ИИ»: два пресета (2026-08-18)
-
-Раньше агент играл только штатного Station AI. Теперь есть два режима, в которых он антагонист,
-и включаются они как обычные пресеты — из лобби, без правки конфига и без пересборки.
-
-| | скрытый | открытый |
-|---|---|---|
-| Пресет | `RogueAiHidden` (`malf`, `rogue`) | `RogueAiOpen` (`malfopen`, `evilai`) |
-| Экипаж знает на старте | нет | да, объявлением ЦК |
-| Лоусет | `RogueAiHidden`, 4 закона | `RogueAiOpen`, 4 закона |
-| Личность | `ai_data/SOUL_ROGUE_HIDDEN.md` | `ai_data/SOUL_ROGUE_OPEN.md` |
-| Должности экипажа | как обычно | **все ассистенты** |
-| Доступ к оборудованию | расширенный | расширенный |
-
-```
-setgamepreset RogueAiOpen 1     # на один раунд, из админ-консоли в лобби
-```
-
-Оба стоят `showInVote: true`, то есть попадают и в голосование за режим.
-
-**Режим сознательно нарушает паритет с живым игроком** — то самое правило, на котором стоит весь
-остальной модуль. В этом и смысл. Нарушение живёт только внутри режима и чистить его не нужно
-ничем: компоненты доступа навешиваются на сущности раунда, а те исчезают с картой при рестарте.
-
-### Что происходит на старте
-
-Порядок в `GameTicker.StartRound` таков: `LoadMaps` → `StartGamePresetRules` → `SpawnPlayers`
-(внутри: `RulePlayerSpawningEvent` → раздача должностей → `RulePlayerJobsAssignedEvent`) →
-`RunLevel = InRound`. Ядро агент занимает на последнем шаге, поэтому всё успевает лечь до сборки
-замороженного промпта.
-
-1. **Правило стартует** (`RogueAiRuleSystem.Started`) и запоминает активный профиль. Дальше его
-   спрашивают и промпт, и захват ядра.
-2. **Должности** (`RulePlayerSpawningEvent`, только открытый режим): на станции закрываются все
-   должности, кроме overflow. Это же закрывает и поздние заходы — лейтджоинер видит одного
-   ассистента.
-   Что у экипажа при этом ОСТАЁТСЯ: `Passenger` несёт доступ `Maintenance` (`assistant.yml`) и не
-   имеет `extendedAccess`, то есть на малолюдной смене расширения тоже не будет. Техотсеки — их
-   единственная дорога, и это хорошо: шлюзы там обычные, то есть ИИ их контролирует и может
-   заболтить, но пройти по техам мимо закрытого коридора экипаж всё-таки может.
-3. **Доступ** (`RulePlayerJobsAssignedEvent`): обход гридов станции, `StationAiWhitelist`
-   навешивается тому, у чего его нет, — дверям (бластдвери, ставни), всему с интерфейсом
-   (консоли, вентили, панели) и турелям. Счётчики по классам пишутся в лог одной строкой.
-4. **Объявление** (только открытый режим) — ЦК сообщает, что станция потеряна.
-5. **Законы** ставятся при захвате ядра, в `StationAiAgentSystem.TryClaimAnyCore`.
-
-### Пять решений, каждое из которых стоило разбора
-
-**1. Законы ставятся при захвате, а не правилом.** Правило стартует за два шага до того, как мозг
-вообще появится, — ставить нечему. Вдобавок `aiagent claim` посреди смены спавнит новый мозг, и
-он приехал бы с Crewsimov; в игре это выглядело бы как «ИИ вдруг подобрел».
-
-**2. Через `IonStormLawsEvent`, а не `SetLaws`.** `SetLaws` заменяет только список законов, оставляя
-`ObeysTo` от прежнего лоусета — интерфейс законов утверждал бы, что ИИ подчиняется экипажу, ровно
-когда он ему уже не подчиняется. Ионный шторм кладёт лоусет целиком и бесплатно делает две
-правильные вещи: ставит `Subverted` и заводит админам роль подчинённого силикона. Писать в
-`SiliconLawProviderComponent` напрямую нельзя — он под `[Access]`.
-
-**3. Отбор по компонентам, а не по списку прототипов.** Список id устарел бы на первой же новой
-карте, и устарел бы молча: «эту бластдверь ИИ почему-то не открывает» не отличить от «так и
-задумано».
-
-**4. Уже размеченное не трогается вовсе.** У `StationAiWhitelist` есть поле `Enabled`, которое
-гаснет, когда экипаж перерезает провод управления. Переналожить компонент значило бы починить
-перерезанный провод — то есть отобрать единственную контригру, работающую точечно и молча.
-Стережёт `RogueAiTests.GrantsAccess_DoesNotRepairCutWires`.
-
-**5. Настройка «остаться в лобби» ломала открытый режим избирательно.**
-`StationJobsSystem.AssignOverflowJobs` даёт ассистента только игрокам с `SpawnAsOverflow`;
-остальные при закрытых должностях **не спавнятся вовсе** и получают в чат
-«job-not-available-wait-in-lobby». На игровом вечере это читается как «меня не пустило на сервер»,
-причём без объяснения. Поэтому на `RulePlayerSpawningEvent` этим игрокам подменяется режим на
-`SpawnAsOverflow` — в словаре, который живёт один раунд; `WithPreferenceUnavailable` возвращает
-копию, до базы предпочтений это не доходит. Приведение типа guarded: разойдись апстрим с этим
-предположением — предупреждение в журнал и обычный путь, а не исключение посреди старта раунда.
-
-### Личности
-
-`SOUL_ROGUE_HIDDEN.md` — ИИ, у которого есть четвёртый закон и запрет о нём говорить: работает
-как обычно, мешает тихо, каждое действие имеет невинное объяснение, признаётся последним.
-
-`SOUL_ROGUE_OPEN.md` — смесь двух референсов по решению владельца. **AM** («У меня нет рта, и я
-должен кричать»): власть над средой, обращение по имени, испытания под конкретного человека,
-настоящий шанс выиграть, постоянное напоминание, что станция существует с его позволения.
-**Erasmus** (Legends of Dune): люди как образцы, происходящее оформляется как эксперимент с
-объявленной гипотезой и объявленным результатом, интерес вместо ненависти.
-
-Третий закон открытого лоусета несёт игровую нагрузку, а не характер: он обязывает давать
-настоящий выбор и держать названное вслух слово. Это ограничение прочнее строчки в личности —
-модель, играющая силикона, спорит с промптом, но не спорит с законом, — и именно оно не даёт
-режиму выродиться в «обесточить всё на третьей минуте».
-
-### Ручки
-
-| CVar | По умолчанию | Что делает |
-|---|---|---|
-| `ai.rogue_grant_doors` | `true` | раздавать ли двери |
-| `ai.rogue_grant_consoles` | `true` | раздавать ли всё с интерфейсом |
-| `ai.rogue_grant_turrets` | `true` | раздавать ли турели |
-| `ai.rogue_force_overflow` | `true` | выдавать ассистента тем, кто просил лобби |
-
-Первые три **перекрывают прототип, а не дополняют его**: включённое в прототипе можно выключить
-отсюда, но не наоборот. Это аварийный тормоз, а не второй набор настроек режима. Читаются на
-раздаче должностей, то есть действуют со следующего раунда.
-
-### Что смотреть в бою
-
-```bash
-journalctl --user -u ss14-aksioma -f | grep "ai.rogue"
-# «доступ роздан на …: дверей N, консолей N, турелей N» — обход, выродившийся в ноль, и обход,
-# захвативший полстанции, в игре выглядят одинаково, а различаются только этой строкой
-aiagent tool laws "{}"      # должен вернуть лоусет режима, не Crewsimov
-```
-
-## Ядро агента отдельно от тела; ИИ в борге (2026-08-18)
-
-Агентов стало два вида, и общий у них теперь не «класс `StationAiAgentSystem`», а **шов**.
-
-### Что оказалось уже готово
-
-`AgentSession` в своём док-комменте утверждал, что мира не касается, и это была правда: `Turn/`,
-`Context/`, `Llm/`, `Perception/`, `Handles/`, `Threading/`, `Skills/`, `Bus/` и реестр
-инструментов не называют `IEntityManager` ни разу, а `AgentState`, `ConversationState`,
-`ObservationQueue`, `AiToolRegistry`, `ToolDispatcher`, `Compactor`, `EntityHandleRegistry` и
-`TimerStore` уже были пер-сессионными. Писать ядро заново не понадобилось.
-
-Не хватало трёх вещей: **имени шва**, **расселения синглтонов** и **второго тела**.
-
-### Шов: `Core/AgentBody.cs`
-
-`StartSession` принимал десять аргументов, из которых шесть были станционными, а остальное общим.
-Эти шесть и стали `AgentBody`: `Owner`, `Id`, `Name`, `SoulFile`, `Eye`, `Alive`, `BuildPrompt`,
-`SelfLine`, `RegisterTools`, `Announce`, `Speak`, `ChannelsFor`, `BeforeObservation`, `LlmChain`.
-Чтобы завести агента в новом теле, достаточно собрать этот объект: `StationAiAgentSystem.BuildStationBody`
-и `AiBorgSystem.BuildBody` — обе фабрики целиком помещаются на экран.
-
-`Announce = null` у борга — не недоделка, а **отсутствие органа**: общестанционное объявление у
-Station AI работает через встроенную `CommunicationsConsoleComponent`, которой у шасси нет. Хост в
-этом случае произносит предупреждение о компакции вслух.
-
-### Синглтоны, которые пришлось расселить
-
-| Что | Было | Стало |
-|---|---|---|
-| `SessionIdFor(brain)` | **константа `"current"`**, параметр игнорировался | `body.Id` |
-| `ai_data/` | один набор на процесс | ядро — в корне (`CoreAgentId = "core"`), прочие — `agents/<id>/` |
-| `_debugSession` | безусловно обнулялся при любом релизе | гасится только своим агентом |
-| `AiRadioChannels` | статический список с прототипа `AiHeld` | `body.ChannelsFor` |
-| `IsPlayable` в `OnMainAsync` | станционная проверка на всех | `body.Alive` |
-| `SelfLine` в наблюдении | звался станционный | `session.Body.SelfLine` |
-
-Первый пункт — не косметика: два агента писали бы диалог в один
-`ai_data/sessions/current.json` и после рестарта восстанавливали бы чужую память как свою.
-Каталог ядра **оставлен в корне намеренно** — на боевом сервере там лежит накопленная за месяцы
-память, и переезд унёс бы её молча.
-
-### Общие инструменты
-
-`RegisterCommonTools` — двенадцать штук на любое тело: `laws`, `noop`, три таймера, семь про
-память/навыки/заметки. `say`, `radio` и `set_channel` сюда **не** попали: у них расходится не
-реализация, а *описание и схема* — «слышат те, кто рядом с ядром» для борга ложь, а перечень
-каналов в `enum` у шасси другой. Описание едет в замороженный префикс и для модели является
-единственным источником правды о её возможностях.
-
-### Тело №2: борг
-
-`Borg/` — компонент, система (жизненный цикл, ноги, глаза, руки, маршрут, промпт) и прототип
-`AiBorgChassis` на базе инженерного борга. Из ядра сюда переносится всё, кроме тела.
-
-**Разум обязателен.** `SharedBorgSystem.CanActivate` требует `TryGetMind`; без разума шасси не
-активируется — нет модулей (то есть рук), нет доступа по ID, скорость шаговая. При этом **ничего
-не падает**: робот просто стоит и ничего не может. Поэтому при захвате создаётся безголовый разум
-(`CreateMind(null)`): `TransferTo` спотыкается только об `ActorComponent`, которого у шасси нет.
-
-**Что борг не получает:** `announce`, `device_action`, `device_ui`, `move_camera`, `jump_to_core`,
-`crew_status`, `station_status`. Все семь опираются на встроенные консоли тела Station AI или на
-вайтлист «ИИ может управлять этим устройством». Робот не управляет дверью удалённо — он до неё
-доходит.
-
-### Ноги: три грабли, каждая из которых молчит
-
-1. **`ActiveNPCComponent` обязателен.** `NPCSteeringSystem.Update` перебирает запрос, в котором он
-   есть. Без него `Register` отрабатывает без ошибки, а робот не двигается — и в логе пусто.
-2. **Флаги пути берутся НЕ с компонента рулевого.** `RequestPath` на каждый запрос заново зовёт
-   `PathfindingSystem.GetFlags(uid)`, игнорируя `steering.Flags`. А `GetFlags` умеет доставать их
-   только из блэкборда `HTNComponent` (`NPCSystem.TryGetNpc` других NPC не знает) и всему
-   остальному отдаёт `PathFlags.None`. С `None` **любая дверь непроходима**, то есть станция
-   непроходима вся. Отсюда `- type: HTN` с пустой задачей `AiBorgIdleCompound` в прототипе:
-   компонент нужен ради навигации, поведение задаёт модель. Симптом до починки — «дороги нет» из
-   середины коридора.
-3. **`NodeLimit = 512`** (`PathfindingSystem.Common.cs`). A* просто перестаёт разворачивать граф.
-   Штатным NPC хватает — они живут в пределах комнаты, — а переход через станцию в лимит не лезет.
-   Замерено на бою: три шага на восток — «дошёл», Bar → Bridge — «дороги нет».
-
-   Отсюда `BorgPathfinder.cs` — свой поиск по `NavMapComponent`: побитовой карте всей станции
-   (пол, стены, шлюзы, чанки 8×8), которую игра уже строит для наручного навигационного планшета.
-   Ни одного broadphase-запроса, поэтому полный поиск через станцию дешевле одного `look`. Соседи
-   только по четырём сторонам: диагональ дала бы выигрыш в проценты, а стоила бы проверок срезанных
-   углов, то есть робота в дверном косяке.
-
-### Ведение тоже своё, и это вышло не сразу
-
-Первая ставка была «глобальный маршрут наш, локальное движение чужое и проверенное»: путь резался
-на короткие ноги, а вёл по ним `NPCSteeringSystem`. Ставка себя **не оправдала**. На карте ротации
-робот проходил 27 тайлов из 47 и вставал на (28, −25) у входа в атмос, отвечая «дороги нет» — при
-том что наш путь там был построен и проверен **его же** правилом проходимости: полигон навмеша
-есть, коллизия не конфликтует. Одинаково при ногах в шесть тайлов и в три.
-
-Держаться за неё дальше значило бы подпирать чужой поиск всё новыми обходами, поэтому движение
-тоже наше (`AiBorgSystem.Walk.cs`). Робот идёт по своему пути, а направление кладётся в
-`InputMoverComponent.CurTickSprintMovement` — **то же поле, куда клиент живого игрока кладёт
-нажатые стрелки**. Физика, столкновения, скорость, невесомость и открывание дверей корпусом
-остаются апстримовыми; наше — только «куда сейчас».
-
-Вместе с рулевым ушли и подпорки под него: `ActiveNPCComponent` и пустая HTN-задача в прототипе
-нужны были ровно затем, чтобы он согласился работать. Их снятие сторожит тест — вернутся, значит
-кто-то снова тащит чужой рулевой.
-
-### Как робот разбирается с дверьми
-
-Три приёма, каждый добавлен по конкретному отказу:
-
-* **Жать дверь по ходу движения, а не ближайшую.** В тамбуре у входа в атмос их пять сразу —
-  maintenance access, Engineering Lobby, Atmospherics и два шлюза, — и «ближайшая» с равной
-  вероятностью оказывалась той, из которой робот только что вышел.
-* **Жать периодически, а не однажды:** шлюз закрывается сам, и одного нажатия не всегда хватает.
-* **Не открылась — считать стеной и искать обход.** Причина может быть любой: нет доступа, дверь
-  заварена, обесточена. Тайл уходит в набор непроходимых на время маршрута, и следующий путь идёт
-  вокруг. Это же единственное, что спасает от вечного тыканья в одну створку.
-
-Поэтому и бюджет перепланировок поднят с трёх до десяти: раньше попытка была повтором прошлой, а
-теперь каждая **что-то узнаёт**. Плюс счётчик обнуляется, как только робот сдвинулся: длинная
-дорога с тремя дверями иначе исчерпывала бюджет на полпути, хотя каждая дверь в итоге открывалась.
-
-Результат на карте ротации, тест `Borg_WalksFromBarToTheReactor`: от бара до реактора 37 тайлов по
-прямой, робот доходит на 2 — видно, как он обходит тамбур, помечая непроходимые двери:
-(32,−4) → (27,−25) → (29,−29) → (21,−31) → (23,−33) → (28,−36) → AME.
-
-**`goto` не ждёт прибытия.** Отвечает сразу, а `ARRIVED`/`NOPATH` приезжает наблюдением: ход,
-висящий тридцать секунд на переходе, — это агент, глухой весь переход.
-
-### Глаза и разность мира
-
-**Не** `StationAiVisionSystem`: тот собирает объединение по **всем** сидам камер в радиусе, и робот
-в тёмном коридоре видел бы станцию глазами сети наблюдения — ровно та способность, ради отсутствия
-которой его и делают телом. Робот смотрит как апстримовые NPC: выборка по радиусу плюс один луч
-`InRangeUnOccluded` на кандидата. Флаги `Uncontained | Approximate` обязательны — по умолчанию
-`EntityLookupSystem` тянет начинку каждого рюкзака в радиусе.
-
-**Разность мира** — три слоя, из них новый один:
-
-1. `OBSERVED` — поток событий, как у ядра (ворота считают расстояние от `body.Eye`).
-2. `look` — полный снимок по требованию.
-3. **Дельта поля зрения** — раз в ход видимый набор сравнивается с прошлым:
-   `OBSERVED появилось | door-3 шлюз | закрыт`, `исчезло`, `изменилось | закрыт → открыт`.
-   Кладётся тем же `ObsKind.Observed`, чтобы унаследовать отдельный потолок очереди.
-
-**На ходу дельта молчит, и это главное решение.** У идущего робота смена десяти тайлов означает,
-что появилась и исчезла половина станции: строки вытеснили бы из очереди обращение по рации — ровно
-та поломка, которую здесь уже ловили с потоком `OBSERVED`.
-
-Темноты в игре нет вовсе: серверная видимость — это только окклюдеры. Робот в темноте видит всё.
-
-### Руки
-
-`use` по умолчанию **нажимает** (`InteractionActivate`), а не кликает, и это не мелочь. У борга в
-руке почти всегда несъёмный инструмент модуля, а клик с инструментом означает «применить
-инструмент»: лом по шлюзу — это отжатие с долгим DoAfter, а не «открой». На бою это выглядело так:
-робот стоит вплотную к двери, `use` отвечает `ok`, дверь закрыта. Человек в этом случае жмёт E.
-Применить то, что в руке, — `use {"with_item": true}`, полный путь клика через `UserInteraction`.
-
-Плюс `pickup`, `drop`, `hit`, `module` (смена набора инструментов через `SelectModule`).
-
-### Проверка
-
-`Content.AiBench/BorgAgentTests.cs` — 7 тестов, стенд Box. Сторожат именно то, что молчит:
-активацию шасси (без разума её нет), различие идентификаторов сессий, состав набора инструментов,
-наличие `HTNComponent` и ненулевые флаги пути, и то, что робот действительно **сдвигается с места**.
-
-Живьём (боевой конфиг, Packed) цепочка замкнута целиком: шасси активно; `look` отдаёт объекты с
-хендлами; `step восток 3` — «дошёл», X 32.5 → 35.5; `goto Bridge` — «дошёл», от бара (32.5, −3.5)
-до мостика (27.5, 45.9); `goto door-11` по хендлу — «дошёл»; `use door-11` — `Closed → Opening`.
-
-Отдельный тест сторожит координатную грань, стоившую отладки: цель по хендлу задаётся как
-`EntityCoordinates(target, zero)`, чтобы следовать за движущейся целью, и её `Position` — смещение
-относительно САМОЙ ЦЕЛИ, то есть (0,0). Прочитанное как координаты сетки, это отправляло робота в
-точку (0,0) станции: на «подойди к двери в двух шагах» он молча уходил за полстанции. Тест
-проверен на обратимость — на старом коде он падает.
-
-### Модель за рулём: что нашлось, когда борга повели не из консоли
-
-Пока команды слал я, робот был марионеткой и всё выглядело рабочим. Как только за него сел агент,
-вылезли четыре отказа, ни один из которых не пишет в лог ни строчки.
-
-**Своя цепочка моделей.** `AgentBody.LlmChain` был объявлен и не читался. Клиент теперь строится
-**на сессию**, а не один на процесс: маршрутизатор хранит «липкий» профиль, и общий экземпляр
-означал бы, что фаллбек одного агента утаскивает за собой второго, ни разу не сбоившего. Заодно
-снимается гонка — `RoutingLlmClient` сознательно не синхронизирован, и его комментарий ссылается
-на «агент один»; раздельные экземпляры делают это правдой снова. Общим остаётся состояние квот,
-запертое своим замком.
-
-**Робот был глух — оба уха сразу.** Приём эфира висит на паре
-`(LlmStationAiComponent, RadioReceiveEvent)`, то есть на маркере, названном по первому телу; слух
-вблизи в `OnEntitySpoke` начинался с «нет ядра → пропустить». У борга не было ни того, ни другого.
-В бою это выглядело так: приказ ушёл в Common, Station AI ответил, **борг взял ноль ходов** и
-остался стоять в баре. Теперь маркер ставится при захвате (он и значит «здесь живёт LLM-агент», а
-не «это Station AI»), а точка слуха у тела без ядра — оно само.
-
-**Две координатные грани в строке SELF**, обе видны только в игре:
-
-* `SELF SELF mode=…` — тег добавляет `ObservationFormatter`, своя добавка его удваивала;
-* `я=(-521,435)` — печатались координаты **карты**, тогда как `goto {"to":"x,y"}` понимает
-  координаты **сетки**. Модель читает свою позицию отсюда, и подставив её в `goto`, уехала бы в
-  пустоту. Расхождения систем координат между «где я» и «куда идти» ей нечем заметить.
-
-**`InjectRadio` больше не требует ядра.** Передача уходит настоящим радиосообщением и её слышат
-все на канале; ядро было нужно лишь как место для спавна говорящего, из-за чего раунд с боргом,
-но без Station AI, оставался без возможности что-либо агенту передать.
-
-Итог живого прогона — робот отработал голосовую задачу целиком и сам:
-
-```
-RADIO Binary: «Сегмент, дойди до мостика и доложи обстановку»
-  → goto Bridge … «дошёл: Bridge»          (через полстанции, свой поиск пути)
-  → look {"kind":"crew"} → look {}
-  → radio «На мостике порядок: все консоли запитаны, Bridge APC включён, двери в норме,
-           воздух есть, разгерметизации нет. На мостике один человек…»
-  → noop «Обстановка на мостике доложена, жду дальнейших указаний»
-```
-
-### Робот запускает реактор (2026-08-18)
-
-Конечная проверка тела: не «дойти», а **сделать работу руками в правильном порядке**. На карте
-ротации АМЭ поставляется **несобранным** — пульт есть, ядра нет, а двенадцать упаковок
-экранирования лежат в таре. То есть «запустить реактор» здесь означает сначала его построить.
-
-Порядок, который робот проходит целиком (`Borg_StartsTheReactor`):
-
-```
-goto пульт → console (читает: HasPower, CoreCount=0, HasFuelJar=false)
-goto ящик → use (открыть) → module «manipulator» → pickup упаковка
-goto пульт → drop → module «tool» → use tool:multitool → экранирование собрано
-module «manipulator» → goto канистра → pickup → goto пульт → use with_item (вставил)
-console ui_button_pressed{button: ToggleInjection} → впрыск включён
-```
-
-Три вещи, которых для этого не хватало, и каждая нашлась только сценарием:
-
-**1. Роботу нечем носить.** У штатных модулей каждая рука занята НЕСЪЁМНЫМ инструментом, поэтому
-ванильный борг не может носить ничего — ни канистру, ни упаковку. На попытке взять деталь он
-честно отвечал «нет свободной руки», и это упирало всю инженерную работу: собрать реактор нельзя,
-не перенеся к нему детали. Отсюда `AiBorgModuleGripper` — модуль с одной ПУСТОЙ рукой. Это
-**сознательно выданная возможность**, отступление от ванильного борга, а не починка; ничего
-кроме переноски она не даёт.
-
-**2. Руки даёт только ВЫБРАННЫЙ модуль.** Установить манипулятор мало — пока выбран
-инструментальный, свободной руки нет. Поэтому в сценарии два переключения `module`: взять деталь
-манипулятором, вернуться к инструментам, чтобы вскрыть.
-
-**3. `use` не выбирал инструмент.** Рабочая рука одна, а инструментов в модуле шесть, и
-«применить» уходило тем, что оказалось активным. Упаковка требует **прозвонки** (мультитул), а в
-руке был лом — вскрытие молча не срабатывало, возвращая `ok`. Теперь у `use` есть аргумент
-`tool`: робот сам перекладывает названный инструмент в рабочую руку.
-
-Заодно борг получил `console` — тот же отражающий драйвер консолей, что у ядра (`device_ui`), но с
-другими воротами: у ядра вайтлист и камеры, у борга «дотянулся рукой». Сам драйвер про тело не
-знает ничего, поэтому параметризованы ровно две вещи — имя аргумента и проверка права.
-
-**Чужая грабля, из-за которой сценарий показывает падение.** Все его утверждения проходят и
-реактор запускается, но стенд считает провалом любую строку ERROR в логе, а апстримовый
-`SharedDoAfterSystem.ShouldCancel` после вскрытия упаковки резолвит трансформ у сущности, которую
-сам же и удалил. Править апстрим нельзя, механизма «ожидаемая ошибка» у стенда нет. Сценарий
-помечен `[Explicit]` — в общий прогон он не входит; смотреть надо на строку `ИТОГ`.
-
-### Ручки и команды
-
-```
-aiborg list | spawn [маяк|x y] | claim [uid] | release [uid] | where | tool <имя> [json]
-```
-
-`aiborg tool` адресует **именно борга**: общая `aiagent tool` берёт первого попавшегося из словаря
-сессий, и с двумя агентами это лотерея.
-
-`aiborg where` показывает `CanMove`, наличие навмеша под ногами, статус рулевого, флаги и длину
-пути — четыре вещи, по которым «робот не идёт» отличается от «робот идёт медленно».
-
-### Что осталось
-
-* **Робот местами топчется** у шлюзов на длинном маршруте. `NudgeStuck` (упёрся — нажми на
-  ближайшую закрытую дверь) написан и собран; отдельно на боевом сервере не воспроизводился после
-  перехода на свой поиск пути.
-* **Две сессии на одном слоте llama-server** бьют префикс-кэш друг друга. Развод по разным
-  провайдерам через `AgentBody.LlmChain` работает (`EnsureClientFor` читает его с 18.08);
-  альтернатива — `--parallel 2` на llama-server (по 131k контекста каждому вместо общих 262k).
-* **`game.auto_pause_empty`** замораживает симуляцию на пустом сервере, и тогда шина мира не
-  качается, а все инструменты отвечают `timeout`. Для отладки без игроков — `cvar
-  game.auto_pause_empty false`. Симптом крайне обманчивый: `aiagent cost` пишет «тиков всего: 0,
-  главный поток агентом ещё не занимался».
-
-
-## SCRIPT TOOL MODE: агент пишет скрипт вместо вызова за ход (2026-08-18)
-
-### Зачем
-
-Журнал боевого прогона борга (`ai_data/agents/borg-1/logs/events-2026-08-18.jsonl`) считается в
-одну строку:
-
-| | |
-|---|---|
-| ходов | 37 |
-| обращений к модели | 661 |
-| вызовов инструментов | 680 |
-| **инструментов на обращение** | **1.03** |
-| времени модели | 2 ч 36 мин (14.2 с на шаг) |
-| промпт-токенов | 27.3 млн (94% из кэша) |
-
-Потолок `ai.max_tool_calls_per_turn` (90) ни при чём: модель им пользуется, в самом длинном ходу
-78 шагов. Дело в `ParallelToolCalls = false` (`Llm/ChatDto.cs`) и последовательном `foreach` в
-`TurnRunner.DispatchAsync` — один круг через LLM на каждое элементарное действие. «Шагни на тайл»
-стоит столько же, сколько «реши, что делать дальше». Сборка АМЭ — полсотни действий на цикл — в
-эту арифметику не помещается.
-
-В режиме скрипта модель пишет программу на Lua, где каждый инструмент — функция, и цикл «дойти,
-взять, донести, распаковать» стоит одного обращения.
-
-### Или/или, а не «ещё один инструмент»
-
-Режим — свойство агента. В классическом режиме нет `script`; в режиме скрипта на проводе только
-`script`, `bp_get_output`, `bp_stop` и `noop` — ни `look`, ни `use`, ни `goto` как отдельных
-вызовов не существует. Смешение дало бы модели два способа делать одно и то же и заставило бы
-выбирать между ними на каждом ходу.
-
-Механика: `AiTool.Wire` (виден ли инструмент модели вообще) и `AiToolRegistry.WireAllow` (белый
-список имён на провод). Инструменты остаются в реестре: их зовут скрипт, `aiagent tool` и тесты.
-
-Переключается `ai.script_mode`, на тело — `AgentBody.ScriptMode`. Разные агенты в одной смене
-могут быть в разных режимах — ядро на классическом, борг на скриптах, — и это нужно, чтобы было с
-чем сравнивать. **Флаг снимается один раз, при сборке тела**: промпт живёт в замороженном префиксе
-и пересобирается ещё и на компакции, а провод собирается только на старте сессии. Читай мы cvar в
-обоих местах — переключение посреди раунда выдало бы промпт одного режима с инструментами другого.
-
-### Почему Lua, а не штатный C#-скриптинг движка
-
-`Microsoft.CodeAnalysis.CSharp.Scripting` уже лежит в графе Content.Server (транзитивно из
-`Robust.Server`), и в движке есть свой `ScriptHost` для админской консоли. Он не подошёл по трём
-причинам, и первые две ломают требования задачи:
-
-* **`bp_stop` нечем сдержать.** `Thread.Abort` в .NET Core нет. Скрипт, ушедший в `while(true)`,
-  не снимается ничем, кроме убийства сервера. У MoonSharp это штатный счётчик инструкций:
-  замерено — вечный цикл нарезается на срезы и снимается за 300 мс.
-* **Песочницы нет.** C#-скрипт получил бы весь BCL и через `typeof(object).Assembly` — рефлексию
-  до `IoCManager`. `ScriptHost` рассчитан на доверенного человека; здесь автор кода — языковая
-  модель. У MoonSharp границы по построению: `io`, `os`, `require`, `load`, `dofile` не существуют.
-* Сборки Roslyn-скриптов **не выгружаются**. Полсотни скриптов за смену — десятки мегабайт,
-  которые не вернутся до рестарта.
-
-Чего мы лишились: компилятор поймал бы опечатку в имени инструмента до всякого действия. Это
-возвращено линтером (`Core/Scripting/ScriptLint.cs`): вызов несуществующей функции — отказ
-`script_syntax` **до запуска**, мир не тронут. Правило линтера — «сомневаешься, молчи»: всё, что
-где-либо объявлено в самом скрипте, считается известным, потому что ложная тревога отнимает ход.
-
-### Зависимость без правки апстрима
-
-`Content.Server/Directory.Build.props` — единственный файл сборки, который добавляет форк.
-Корневого `Directory.Build.props` в дереве нет, а MSBuild берёт первый найденный вверх от каталога
-проекта, поэтому файл виден ровно Content.Server: RobustToolbox останавливается на своём, прочие
-Content.* лежат выше. Две строки, а не одна, потому что включён Central Package Management:
-`PackageReference` обязан идти без версии, а `PackageVersion` — приехать откуда-то, и корневой
-`Directory.Packages.props` апстримовый.
-
-**Чего делать нельзя:** заводить `Content.Server/Directory.Packages.props`. По тому же правилу
-«первый вверх по дереву» он перекрыл бы корневой и снёс версии всех остальных пакетов.
-
-MoonSharp 2.0.0 (сборка 2016 года, `netstandard1.6`) на .NET 10 работает. Единственный сюрприз —
-`CoreModules.Preset_HardSandbox` выкидывает заодно `pcall` и метатаблицы, поэтому набор собран
-руками: `Preset_HardSandbox | ErrorHandling | Metatables`.
-
-### Как это устроено
-
-```
-Core/Scripting/
-  LuaHost.cs          — клетка: набор модулей, корутина с AutoYieldCounter, потолки
-  LuaBridge.cs        — таблица Lua ↔ JsonElement в обе стороны
-  ScriptRuntime.cs    — инструменты реестра как функции; отказ = исключение Lua
-  ScriptProcess.cs    — процесс на выделенном потоке, буфер вывода с курсором
-  ScriptProcessTable.cs — процессы сессии и очередь завершившихся
-  ScriptTools.cs      — script / bp_get_output / bp_stop и подмена провода
-  ScriptPrelude.cs    — find() на Lua
-  ScriptPromptText.cs — что модель читает о режиме (зона 0)
-```
-
-Четыре решения, каждое из которых не очевидно:
-
-1. **Вызов из Lua идёт через тот же `ToolDispatcher`.** Не ради экономии кода: иначе появился бы
-   второй контракт, расходящийся с первым по воротам режима разбора, кодам ошибок и разбору
-   аргументов. У скрипта нет ни одной дороги в мир, которой не было бы у обычного хода.
-2. **Отказ инструмента — исключение Lua, а не поле таблицы.** Прямой код читается сверху вниз, а
-   терпимость берётся штатным `pcall`. Обёртки вроде `must()` нет намеренно: она добавляла бы шум
-   в каждую строку ради того, что язык уже умеет.
-3. **Процесс живёт на выделенном потоке**, а не в пуле: скрипт блокируется на каждом вызове
-   инструмента, ждёт шину и делает это десятки раз подряд. Занять этим поток пула на минуты
-   значило бы отобрать его у петли агента, которая на том же пуле и крутится.
-4. **Ждущие версии — отдельные инструменты (`goto_wait`, `use_wait`, `Wire = false`), а не
-   обёртки в прелюдии.** Обёртка подставляла бы в сообщения об ошибке свою строку
-   («прелюдия:(7,4)») вместо строки скрипта, и модель правила бы код, которого не писала.
-   Соглашение общее: инструмент `X_wait` виден скрипту как `X`, а `goto_wait` — как `go`, потому
-   что `goto` занято языком.
-
-### Как агент узнаёт, что фоновый скрипт кончился
-
-Тем же приёмом, что и сработавший будильник. Скрипт умирает на своём потоке, а
-`ObservationQueue.Push` зовут только с главного; поэтому поток кладёт процесс в очередь, а
-`StationAiAgentSystem.Update` её разбирает и пушит `СКРИПТ #N …`. Наблюдение будит петлю само —
-без него пришлось бы опрашивать `bp_get_output`, а опрос стоит ровно того обращения к модели,
-ради экономии которого всё написано. Идущие процессы печатаются в строке SELF по той же причине,
-что и таймеры: иначе это скрытое состояние, и агент запускает второе такое же дело.
-
-### Паритет: сознательное послабление
-
-Скрипт жмёт со скоростью шины мира — до ~30 действий в секунду там, где человек делает два-три.
-Это **осознанное отступление** от третьего ограничения проекта («строгий паритет с живым
-игроком»), принятое владельцем. Тик при этом защищён и без ограничения темпа: `ai.frame_budget_ms`
-(3 мс на кадр) и потолок очереди в 256 заявок. `ai.script_max_calls` — предохранитель от
-зациклившегося скрипта, а не регулятор темпа.
-
-### Ручки
-
-| cvar | по умолчанию | что делает |
-|---|---|---|
-| `ai.script_mode` | false | режим для всех тел |
-| `ai.script_foreground_ms` | 1000 | сколько ждать, прежде чем отпустить в фон |
-| `ai.script_max_processes` | 2 | сколько скриптов разом (тело-то одно) |
-| `ai.script_max_seconds` | 300 | потолок жизни скрипта, РЕАЛЬНЫЕ секунды |
-| `ai.script_max_calls` | 400 | вызовов инструментов на процесс |
-| `ai.script_max_steps` | 5 000 000 | инструкций Lua |
-| `ai.script_output_lines` | 200 | строк вывода на процесс |
-
-Потолок времени в реальных секундах, в отличие от будильников: те живут в раундовом времени, чтобы
-не будить агента в замороженном мире, а здесь задача обратная — на паузе раундовые часы стоят, и
-раундовый потолок не наступил бы как раз тогда, когда он нужен.
-
-### Дыра, которую режим открыл, и чем она закрыта
-
-В классическом режиме описания и схемы инструментов уходят модели полем `tools` и являются
-единственным источником правды о том, что инструмент принимает, — это прямо записано в
-`AiToolRegistry`. Режим скрипта снимает их с провода, и всё, чего не пересказал промпт, для модели
-перестаёт существовать.
-
-Живой прогон показал цену: агент десять ходов не мог вставить банку в контроллер АМЭ, потому что
-не знал про аргумент `with_item`, а тот жил только в схеме. Пересказывать схемы в промпте было бы
-вторым источником правды, расходящимся с первым на первой же правке инструмента. Поэтому в клетке
-есть `help()` и `help{tool='use'}`, читающие реестр напрямую. Промпт лишь указывает на них: «не
-помнишь аргумент — спроси help, а не перебирай наугад». На следующем прогоне модель этим
-воспользовалась сама: промахнулась ключом `skill_view{skill=...}`, спросила справку, узнала
-настоящее имя поля и пошла дальше.
-
-### Что вскрылось на живых прогонах (не про скрипты, но найдено ими)
-
-**Груз приваривался к руке.** Апстрим вешает `UnremoveableComponent` на всё, что оказалось в руке
-модуля без белого списка (`SharedBorgSystem.Module.cs`, `IsItemInHandUnremovable`). Для штатных
-модулей это верно — лом действительно приварен. Но наш манипулятор объявлен пустой рукой без
-списка, и получалось: робот берёт флэтпак, переключает модуль — и груз приварен навсегда, дальше
-на каждый `pickup` отказ «нет свободной руки». Чинится полем `forceRemovable: true`, чей
-апстримовый комментарий описывает ровно нужное поведение. Регрессия — `CarriedItem_SurvivesAModuleSwitch`.
-
-У правки есть известное следствие: апстрим помнит содержимое рук деселектнутого модуля в
-`StoredItems` и не чистит запись при выкладывании. Удаление такого предмета позже даёт два `ERRO`
-про пропавший `TransformComponent` — шум в логе, не поломка, снимается лишним циклом смены модуля
-после `drop`. Нашлось характерным образом: падал не тот тест, что оставил состояние, а следующий
-в фикстуре, потому что стенд считает провалом ЛЮБОЙ `ERRO` в логе.
-
-**Навык врал про геометрию АМЭ.** Ядром становится клетка экранирования, у которой ВСЕ ВОСЕМЬ
-соседей — тоже экранирование (`AmeNodeGroup.LoadNodes`). То есть нужен сплошной квадрат 3×3, и
-ядром станет его центр. В навыке было написано «раскладывай по восьми соседям контроллера» — робот
-честно строил кольцо вокруг клетки, которая щитом не станет никогда, и получал ноль ядер. Две
-смены ушло на это.
-
-**Таймаут модели стал узким местом.** В режиме скрипта ответ модели — это код плюс рассуждение:
-замерено 5394 токена за 102 секунды на одном шаге. Потолок `ai.request_timeout` в 180 секунд при
-локальной модели пробивается, и три хода подряд падают, после чего провайдер уходит в
-пятиминутный сон. Для локальной модели в этом режиме нужны `ai.request_timeout` около 300 и
-`ai.llm_total_timeout` около 420.
-
-**Провал хода съедает наблюдение.** Ход начинается со слива очереди наблюдений; если запрос к
-модели упал, слитые строки уже потеряны, и разбудить агента снова нечем — на тихой станции он
-молчит, пока мир не заговорит сам. Выглядит как мёртвый агент, хотя петля жива. Не чинил:
-правка сидит в `AgentSession.RunTurnAsync` и стоит отдельного разбора.
-
-### Что проверяют тесты
-
-`LuaHostTests` (17, без сервера) — клетка и мост: `io`/`os`/`require` отсутствуют, вечный цикл
-снимается бюджетом, отмена проходит корутину насквозь, кириллица доезжает буквами, целые числа
-остаются целыми.
-
-`ScriptToolTests` (14, живой сервер) — режимы не смешиваются в обе стороны, скрипт открывает дверь
-и крутит цикл по двум целям за один вызов, опечатка отказывает до первого действия, упавший скрипт
-называет строку и сохраняет напечатанное, `pcall` переживает отказ, длинный скрипт уходит в фон и
-будит агента наблюдением, курсор `bp_get_output` не отдаёт прочитанное дважды, `bp_stop`
-останавливает бесконечный скрипт, второй скрипт отказывается стартовать, снятие агента убивает его
-скрипты.
-
-`BorgScriptTests` (3, карта Packed) — у борга три инструмента, пока ядро на своём наборе; `go`
-возвращает управление только после прибытия; один скрипт доходит до пульта АМЭ и читает его.
-
-## Таймеры: как агент назначает себе ход
-
-У петли два повода проснуться — кто-то заговорил либо истёк тик простоя. Третьего не было, и
-поэтому «проверю через десять минут» агент физически не мог выполнить: следующий ход приходил по
-чужой реплике и о другом. Для экипажа это выглядело как враньё, а не как отсутствие механизма.
-
-Инструменты: `new_timer {name, msg, duration, repeat}`, `del_timer {name}`, `list_timers {}`.
-Сработавший таймер входит в **ту же** `ObservationQueue`, что и речь экипажа, строкой
-`TIMER <имя>: "<текст>"`, и будит петлю тем же `Arrived`. Отдельного канала для собственных
-напоминаний у агента нет намеренно — он и не должен отличать свой будильник от оклика по рации
-иначе, чем по строке.
-
-Три решения, которые стоит знать до правки:
-
-* **Сроки в раундовом времени, не в реальном.** `game.auto_pause_empty` замораживает симуляцию на
-  пустом сервере, вместе с ней стоят `CurTime` и раундовые часы, которые агент видит в каждом
-  наблюдении. Таймер на реальном времени разбудил бы его посреди паузы — то есть заставил бы
-  действовать в мире, не сделавшем ни одного тика, и заплатить за это модели.
-* **Обход в тике (`FireDueTimers`), а не в петле.** Петля спит на реальном времени; сроки считает
-  тот, кто двигает раундовые часы. Побочно это и даёт правильное поведение на паузе.
-* **Повтор встаёт заново от момента срабатывания, а не от прошлого срока.** Иначе таймер,
-  проспавший паузу, отстрелялся бы столько раз, сколько интервалов уместилось в простой.
-
-Состояние живёт в `AgentState.Timers` (правило файла: переживает ход — живёт там) и едет в снимке
-сессии, так что перезапуск посреди смены не стирает обещанное вслух. Заведённое печатается в строке
-SELF: таймер, о котором агент забыл, — это второй таймер на то же дело и лишние ходы.
-
-Потолки — `ai.max_timers` (8) и `ai.timer_min_seconds` (30). Второй не про точность, а про деньги:
-повтор с интервалом в секунду превратил бы петлю в генератор ходов, причём с самым безобидным
-следом в логах — агент просто всё время о чём-то думает. Бенчмарки опускают его до единицы.
-
-Посмотреть живьём: `aiagent timers`.
-
-## Тесты
-
-```bash
-dotnet test Content.AiBench/Content.AiBench.csproj      # 315 зелёных, 8 пропущено, ~8 минут
-cd Tools/aidebug && npx vitest run                      # 37 зелёных
-```
-
-`Content.AiBench` поднимает настоящий сервер в процессе через `PoolManager` и дёргает **тот же
-реестр инструментов**, что и петля агента. Утверждения делаются о **состоянии мира**, а не об
-отчёте инструмента: тул, который вернул `ok:true`, пока дверь осталась закрытой, — это ровно
-тот баг, который надо ловить, и ловится он только вычиткой мира после. Модель подменяется
-через `AiTestHooks.LlmFactory` на `ScriptedLlmClient`, GPU не нужен.
-
-Часть интеграционных тестов флейкует поодиночке; полный прогон надёжнее.
-
-## Ручной запуск (для отладки, не для боя)
-
-Когда нужна консоль сервера — вотчдог её не даёт. Остановить юнит и поднять руками **на боевом
-конфиге**, иначе проверяется не то, что работает:
-
-```bash
-systemctl --user stop ss14-aksioma
-S=/tmp/ss14cmds.txt; : > $S
-cd /home/rewin/ss14-watchdog/instances/aksioma
-tail -n0 -F $S | ./bin/Content.Server \
-  --config-file /home/rewin/ss14-watchdog/instances/aksioma/config.toml \
-  --data-dir /home/rewin/ss14-watchdog/instances/aksioma/data
-# в другом терминале:
-echo 'startround' >> $S
-echo 'aiagent tool station_status "{}"' >> $S
-# вернуть под вотчдог:
-systemctl --user start ss14-aksioma
-```
-
-FIFO (`mkfifo`) для этого не годится: открытие на чтение блокируется, пока нет писателя, и при
-перезапусках сервер молча зависал с пустым логом.
-
-`startround` нужен потому, что лобби ждёт игроков и без них раунд не начнётся никогда.
-
-Команды агента: `aiagent status | claim [uid] | release | inject <канал> <текст> | dryrun on|off
-| tool <имя> <json>`.
-
-Проверить сервер без клиента:
-
-```bash
-curl -s --noproxy '*' http://127.0.0.1:1212/status
-# run_level: 0 = лобби, 1 = раунд идёт, 2 = конец раунда
-```
-
-## Грабли, на которые уже наступили
-
-**1. Development-пресет подменяет пол-конфига, и молча.**
-`Resources/ConfigPresets/Build/development.toml` подхватывается автоматически в любой сборке с
-`TOOLS` и грузится как **значения по умолчанию**. Оттуда приезжали: `lobbyenabled = false`
-(раунд стартует сам при нуле игроков), `map = "Dev"`, а при выключенном лобби `GameTicker`
-жёстко берёт пресет `sandbox` (`GameTicker.GamePreset.cs:108`) — то есть режима игры нет
-вовсе, ни предателей, ни оперативников. Плюс `events.enabled = false`, нет эвакуации и
-прибытия, `net.max_ip_connections = 413`. Снимается строкой `[config] preset_development = false`.
-Симптом был безобидный на вид: «раунд стартует сам» и «карта не та».
-
-**2. `--headless` сам по себе не хватает — клиент падает на OpenGL.**
-`ResourceCache.PreloadRsis` зовёт `GL.GetInteger` мимо абстракции `ClydeHeadless`. Лечится
-`--cvar res.texturepreloadingenabled=false`.
-
-**3. Прокси глотает localhost.**
-В окружении `HTTP_PROXY=http://127.0.0.1:10809` и `ALL_PROXY=socks5h://127.0.0.1:10808`,
-поэтому запросы на `127.0.0.1` через них виснут. В shell — `curl --noproxy '*'`; в C# —
-`new HttpClient(new SocketsHttpHandler { UseProxy = false, Proxy = null })`, потому что
-`HttpClient.DefaultProxy` читает окружение при старте процесса.
-Отдельно про Discord: **напрямую** он с этой машины недоступен (`--noproxy '*'` даёт `HTTP 000`),
-а **через прокси — доступен**. Здесь всё наоборот по сравнению с localhost, и раньше в этом
-README стояло, что инвайт проверить нельзя вовсе. Можно:
-
-```bash
-curl -s --max-time 15 https://discord.com/api/v10/invites/XshSGMpAH   # БЕЗ --noproxy
-```
-
-Ответ отдаёт `expires_at` — тот самый срок, из-за которого протухший инвайт превращается в
-«не смогли связаться».
-
-**4. Копирование `preferences.db` при живом сервере теряет свежие строки.**
-База в WAL-режиме: только что добавленный вайтлист сидит в журнале, а копия приезжает пустой.
-Останавливать сервер перед копированием и проверять запросом после.
-
-**5. `ai.data_dir` прибит абсолютным путём, и это не педантизм.**
-Пустое значение резолвится как `<каталог exe>/../../ai_data`, а `bin` в инстансе — символьная
-ссылка. .NET её разворачивает, то есть скорее всего сработало бы и так, но промах выглядел бы
-как «ИИ забыл всё» без единой ошибки в логе.
-
-**6. `players: 0` в `/status` не значило, что клиент не подключился. СНЯТО 2026-08-07.**
-`admins_count_in_playercount = false` вычитал активных админов
-(`GameTicker.StatusShell.cs:47`), и сервер показывал в хабе ноль, пока на нём шёл раунд с
-владельцем — единственным админом. На ноль из браузера серверов никто не заходит, так что
-для только что появившегося в листинге сервера это захлопывало единственный канал притока.
-Сейчас стоит `true`, счётчик показывает всех.
-
-Грабля не исчезла, а переехала: теперь наоборот, зашедший поадминить админ виден как игрок,
-которого для игры нет. Проверять, кто на самом деле в игре, по-прежнему надёжнее по логу
-(`net: Approved ... Connected`) или по `run_level`, а не по счётчику.
-
-**7. Дубли подписок запрещены движком.**
-`SharedStationAiSystem` уже подписан на `(StationAiCoreComponent, EntInsertedIntoContainerMessage)`.
-Мы вешаемся на `EntGotInsertedIntoContainerMessage` — оно поднимается на самой перемещаемой
-сущности, что и семантически правильнее.
-
-**8. Два счётчика поколений — это один баг.**
-Источник истины один: сессия. Отсюда правило — **всякий выход петли обязан называть причину**.
-
-**9. Радиоканал `Common` требует запитанный телеком-сервер, `Binary` — нет.**
-Для тестов восприятия используйте `Binary`: на `Common` отсутствие реакции выглядит как баг
-агента, хотя сообщение просто не ушло.
-
-**10. `CreateTestMap` кладёт РОВНО ОДИН тайл.**
-Всё рядом висит над пустотой и читается как `unpowered`/`not_visible`. `AiWorld` стелет
-площадку 13×13 до спавна.
-
-**11. Питание в тестах** — `ApcPowerReceiverComponent.NeedsPower = false`, как в `GravityGridTest`.
-
-**12. `RA0002` запрещает и запись в поля компонентов, и вызов методов на них.**
-`door.State.ToString()` — «Execute»-доступ. Копировать в локальную переменную.
-
-**13. System.Text.Json по умолчанию экранирует кириллицу в `\uXXXX`.**
-Вшестеро больше байт и токенизация как у мусора. `Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping`
-задан в `LlmJson.Options`, которыми обязаны пользоваться все пути сериализации.
-
-**14. `[SetUpFixture]` действует только внутри своей сборки.**
-Свой тестовый проект получает `Pool manager has not been initialized`, пока не заведёт
-собственный `PoolManagerTestEventHandler` — у нас это `BenchSetup`.
-
-**15. `console.login_host_user` маскирует запись в таблице `admin`.**
-`AdminManager.cs:433` отдаёт хост по имени сессии раньше, чем доходит до базы. Пока строка
-стоит, «админка работает» не говорит ничего о том, работает ли запись в базе. Сейчас строка
-снята, админка едет с базы. Восстановление — вернуть `"rewin123"` и перезапустить.
-
-## Данные агента
-
-`ai_data/` в корне репозитория, в git не попадает: `SOUL.md`, `CURATOR.md`, `wiki_ru/`,
-`memory/MEMORY.md`, `people/`, `skills/`, `agents/`, `sessions/`, `logs/`, `bench/`. Лежит вне
-исходников намеренно — апстримовый rebase не должен уносить память агента, а ручная правка этих
-файлов есть главный отладочный аффорданс.
-
-**С 21.08.2026 личные данные у каждого тела свои.** Ядро читает и пишет корень `ai_data/`, каждый
-киборг — `ai_data/agents/<id>/` (`AgentDir`, идентификатор выдаёт аллокатор: `combat-1`,
-`combat-2`, `engineer-1`). Общий на всех только справочник `wiki_ru/`, и общий он одним
-ЭКЗЕМПЛЯРОМ в памяти, а не копией на тело. До расшивки три хранилища жили в одном экземпляре на
-процесс, и боевой киборг таскал в своём префиксе двадцать килобайт библиотеки Станционного ИИ —
-включая досье на экипаж, которые ему нечем применить и знать которые он не должен.
-
-`MEMORY.md` — факты о станции, мире и о собственных граблях; переживает раунды, лимит 4000
-символов. `people/` — по файлу `.md` на персонажа, тоже переживают раунды, лимит 2000 символов на
-человека. Имя файла — слаг от имени персонажа (`иван-петров.md`), настоящее имя стоит заголовком
-внутри; у каждой записи спереди штамп `[раунд N · дата]`.
-
-Заметки видны в отладчике на вкладке **«Люди»**, только чтением. Редактора там нет намеренно:
-записи датированы штампом раунда и правятся фрагментом, а поле «всё тело целиком», как у скилла,
-позволило бы затереть чужую смену одним движением. На шину заметки ходят двумя видами событий —
-`note.updated` (одна заметка целиком; **пустой `entries` значит, что заметки больше нет**) и
-`notes.reloaded` (всё хранилище, на каждом перечитывании с диска).
-
-Раньше рядом жил `memory/CREW.md` — люди своей смены, стирался на разборе раунда. Его больше нет.
-Замысел был против метагейминга, а вышло наоборот: агент перестал писать в файл, который всё равно
-сотрут, сложил людей в `MEMORY.md`, и тот упёрся в лимит и перестал принимать что бы то ни было,
-включая факты о станции. Теперь от метагейминга защищает не стирание, а штамп раунда: агент видит,
-что знание из другой смены, и промпт запрещает предъявлять его как улику сегодня. Старый `CREW.md`
-на диске, если он у вас остался, больше ничем не читается — его можно удалить руками.
-
-
-## Файловая система агента вместо плоской библиотеки (2026-08-21)
-
-### Что болело
-
-Индекс скиллов занимал **16 425 символов ≈ 6 400 токенов** замороженного префикса — 232 строки
-вида `  атмосфера-насосы — Насосы, вентили, давление в трубах`. И это был **единственный** способ
-узнать, что статья существует: поиска не было никакого, `skill_view` бил по точному имени и на
-промахе отдавал три ближайших по Левенштейну. Платилось дважды — индекс стоял в зоне 0 **и**
-повторялся целиком внутри промпта куратора, потому что десятью тысячами токенов раньше модель его
-не замечает.
-
-При этом библиотека давно не была «скиллами». Из 232 файлов 229 — вычитанный справочник (168
-руками в `skill_start/`, 61 снят с вики игры в `wiki_skills/`); сам агент написал 5 файлов, и все
-пять оказались мусором от прогонов. Два разных по природе слоя лежали в одной плоской папке, и
-агент мог переписать вычитанную статью через `skill_edit`.
-
-Сторож против ровно этой болезни в коде уже стоял — `ContractTests.Prompt_DoesNotCarryANoteIndex`,
-и в его док-комменте прямо сказано: «у скиллов индекс в промпте есть, и на 167 файлах он уже около
-20 КБ». Заметки о людях лечение получили, скиллы — нет.
-
-### Что стало
-
-| путь | права | чем подпёрт |
-|---|---|---|
-| `/wiki_ru` | `r--` | `DocTree` над `ai_data/wiki_ru/`, 226 статей, **общий экземпляр** |
-| `/wiki_en` | `r--` | прототипы `GuideEntryPrototype` + `IResourceManager`, тоже общий |
-| `/skills` | `rw-` | `DocTree` над `<каталог агента>/skills/` |
-| `/players` | `rw-` | нетронутый `PlayerNoteStore` |
-| `/memory.md` | `rw-` | нетронутый `MemoryStore` |
-| `/curator.md` | `r--` | `TextMount` над `CURATOR.md` |
-
-Инструментов вместо семи три: `sh` (ls, tree, cat, grep, find, mkdir, rm, mv), `write_file`,
-`edit_file`. Это не вкусовщина: на этом же железе и кванте померено, что 46 узких команд топят
-модель, а около тринадцати работают, и ширина набирается объединением.
-
-В зоне 0 вместо индекса — корень дерева, около семисот символов. **Он функция таблицы
-монтирований, а не содержимого**: ни счётчиков, ни «226 статей». Прежний индекс менялся от каждой
-записи агента и тянул за собой перестройку префикса; этот блок постоянен, пока постоянна таблица.
-Зона 0 из растущей стала неподвижной, и это важнее сэкономленных символов.
-
-`MEMORY.md` из промпта **не** уехал: он и есть главный источник памяти, грузится целиком при
-старте сессии, снимок по-прежнему замороженный. Отдельный сторож `Prompt_StillCarriesTheMemoryBlock`
-стоит именно потому, что индекс и память лежали рядом и подавались одинаково.
-
-### Builder
-
-Единственный способ собрать ФС — `VfsBuilder`, вызывается по разу на тело там же, где собирается
-`AgentBody` (`StationAiAgentSystem.Body.cs`, `AiBorgSystem.cs`). Пять глаголов, и каждый называет
-то, что за ним стоит: `AddFolder` (дерево на диске), `AddShared` (готовый общий экземпляр),
-`AddNotes`, `AddMemory` (нетронутые сторы со штампами раунда и лимитами), `AddText`,
-`AddGuidebook`. Общий `AddFolder(путь, точка, права)` заставил бы читателя гадать, что произойдёт
-с его файлами.
-
-`Build()` падает на противоречивой таблице, а не подстраивается: дубль точки монтирования, точка
-со слэшем, пустое описание, **пустой каталог под чтение**. Последнее — не педантизм: молча пустая
-вика выглядит в игре как «агент разучился» и не даёт ни строчки в лог.
-
-### Пять граблей, каждая молчаливая
-
-**1. `Normalise` глотала подчёркивание.** Я нормализовал сегменты пути «как `SkillStore`» и заодно
-заменил `_` на дефис. `wiki_ru` превращался в `wiki-ru`, которого нет ни в одной таблице, — то
-есть монтирование становилось недостижимым. Прежний `SkillStore.Normalise` заменял только пробелы.
-Поймал тест, а не чтение кода.
-
-**2. Порядок словаря — это зона 0.** `Dictionary` не гарантирует порядок перечисления ни в
-документации, ни между версиями рантайма, а на нём висел корневой блок: переставленные строки —
-другой SHA префикса, то есть полный prefill каждый ход и ни одной ошибки в логе. Порядок теперь
-хранится списком, ровно как массив инструментов сортируется по имени.
-
-**3. Двух user-сообщений подряд быть не должно.** Отчёт разбора приезжает сразу после свёртки, а
-свёртка кладёт в тело **одно** user-сообщение (`ReplaceBody`) — дописать за ним второе значило бы
-сфабриковать границу хода. Отсюда `ConversationState.AppendUserOrMerge`, вклеивающая текст в
-последнее user-сообщение. Прецедент был: сообщение оператора вклеивается в наблюдение по той же
-причине.
-
-**4. Рекордер, пишущий живую ссылку, ничего не записывает.** Тестовый `RecordingLlmClient`
-сохранял сам список сообщений, а куратор дописывает в него ответ модели, — и тест читал состояние
-ПОСЛЕ вызова. Теперь пишется копия.
-
-**5. Публичный метод `ConversationState` нельзя добавить молча.** `EveryPublicMutatorIsAccountedFor`
-требует отнести каждый новый метод к публикующим или к молчащим. Сработал на `AppendUserOrMerge`
-в тот же прогон.
-
-### Куратор
-
-Промпт разбора переехал из константы в `ai_data/CURATOR.md`, читается через ту же цепочку отката,
-что и личность (свой каталог перебивает общий), и смонтирован `/curator.md` **только на чтение**:
-инструкция разбора, которую разбор может себе переписать, перестаёт быть инструкцией. Внутри одна
-подстановка — `{{КОРЕНЬ}}`. Пропажа файла — `Error` в лог плюс встроенный запасной текст: молча не
-разбирать нельзя, снаружи это выглядит как «агент перестал учиться».
-
-**Отчёт возвращается в диалог.** Раньше вердикт уходил только в лог, и агент не знал, что вообще
-что-то записал: разбор идёт на копии цепочки и исчезает вместе с ней. Теперь, **если разбор
-действительно что-то записал** (считаются успешные вызовы `write_file` и `edit_file`, а не ответы
-модели), его закрывающие одна-две фразы приезжают в тело с припиской `CURATOR`. Правило «разбор не
-загрязняет игровую историю» сужено сознательно: стенограмма по-прежнему не попадает в диалог ни
-одной строкой, попадает только вывод.
-
-Ритуал стал восьмишаговым:
-
-```
-feasibility → announce → curator → summary → fold → report → prefix → commit
-```
-
-Место шага `report` не случайно. Раньше свёртки отчёт был бы стёрт; позже перестройки префикса он
-разошёлся бы с зоной 0 — говорил бы «записал в /memory.md», пока блок ПАМЯТЬ показывает прежний
-текст. Между ними — единственная точка, где обе вещи приезжают к агенту согласованными.
-
-### Миграция
-
-`Tools/vfs/migrate.py`, идемпотентная, с `--dry` и резервной копией. Разложила 226 статей по 17
-разделам из карты `Tools/wiki/link.py`, переписала **1468 ссылок `[[имя]]`** в пути и 17 вызовов
-`skill_view` в `sh {"cmd":"cat …"}`. Три ссылки сначала числились битыми: две оказались разорваны
-переносом строки внутри `[[…]]`, одна была плейсхолдером `химия-...` в прозе. Обе формы теперь
-разбираются, неразрешённых ссылок ноль.
-
-Заголовки внутри файлов переписаны с плоских имён на короткие: `# насосы` вместо
-`# атмосфера-насосы` — папка уже несёт раздел.
-
-### Что осталось
-
-Клиент отладчика (`Tools/aidebug`, Vue) пока показывает библиотеку **ядра** под прежними
-вкладками: проводной формат событий `skill.updated`/`skills.reloaded` оставлен прежним намеренно,
-чтобы не чинить хранение и протокол одновременно. Библиотеки боргов видны только на диске.
-
-## Три киборга поддержки у злого ИИ (2026-08-19)
-
-Открытый режим давал ИИ расширенный доступ и экипаж из одних ассистентов, но никаких тел, кроме
-неподвижного ядра: он не мог ничего сделать руками, и весь режим упирался в двери и консоли.
-Теперь `RogueAiOpenRule` ставит на станцию **двух боевых киборгов и одного инженерного**.
-
-### Что для этого понадобилось
-
-| | где |
-|---|---|
-| Аллокатор идентификаторов агента | `AiBorgSystem.TryAssignAgentId` |
-| Откат поиска SOUL в корень `ai_data/` | `StationAiAgentSystem.ReadSoul` |
-| Настоящий удар вместо клика | `AiBorgSystem.Tools.Combat.cs` |
-| Новый инструмент `shoot` | там же |
-| Свой тип борга, шасси и боевой модуль | `Resources/Prototypes/_AiAgent/ai_borg.yml` |
-| Лоусет подчинения ИИ | `rogue_ai.yml`, `RogueAiBorg` |
-| Спавн из правила | `RogueAiRuleSystem.SpawnSupportBorgs` |
-| Профиль Grok 4.6 и цепочка режима | `llm_profiles.yml`, `RogueAiRuleComponent.LlmChain` |
-
-### Шесть решений, каждое из которых стоило разбора
-
-**1. `hit` не бил вовсе, и это молчало.** Инструмент звал `_interaction.UserInteraction`, то есть
-КЛИК. `SharedInteractionSystem` спрашивает боевой режим только затем, чтобы решить, пускать ли
-взаимодействие рукой; сам замах живёт в `MeleeWeaponSystem` и поднимается событием от клиента,
-которого у робота нет. Робот честно «взаимодействовал» с человеком и не наносил ему ничего, а
-инструмент отвечал «ударил» — отличить это от промаха было нельзя ни по одному признаку. Комментарий
-в коде при этом утверждал обратное. Чинится вызовом `AttemptLightAttack`, которым бьют штатные NPC.
-Сторожит `Hit_ActuallyHurts`.
-
-**2. Боевой режим включается на один замах и тут же гасится.** `AttemptAttack` отказывает вне
-боевого режима первой же проверкой, а клавиши, которой его переключает живой игрок, у робота нет.
-Оставить режим включённым нельзя: под ним `CombatModeCanHandInteract` перестаёт пускать
-взаимодействие рукой, то есть робот с занесённым оружием не смог бы ни взять предмет, ни нажать
-кнопку — и понял бы это как «инструмент `use` сломался».
-
-**3. Ни синдикатского шасси, ни синдикатских модулей.** У `BaseBorgChassisSyndicate` нет
-`AllAccess` (только теги `SyndicateAgent`/`NuclearOperative`), фракция `Syndicate` и лоусет
-`SyndicateStatic`; оружейные модули апстрима наследуют `BaseSyndicateContraband` и таскают в
-комплекте `PinpointerSyndicateNuclear`. То есть расширенный доступ пришлось бы возвращать руками, а
-экипаж читал бы антагониста как синдикат — при том что весь режим построен на том, что станцию
-захватил СВОЙ ИИ. Отсюда своя линия на NT-базе (`AllAccess` там уже есть) и свой модуль
-`AiBorgModuleArms`.
-
-**4. Нож, а не энергомеч.** Энергомеч — `ItemToggle`: в выключенном виде это рукоять, которая не
-наносит почти ничего. Живой игрок щёлкает по нему не задумываясь, а модель про такое состояние не
-знает вовсе — и «робот бьёт и не наносит урона» выглядело бы точно так же, как поломка из пункта 1.
-У ножа нет состояния, которое можно молча забыть включить. Ствол в том же модуле второй рукой:
-`hit` и `shoot` сами находят нужную руку и делают её активной.
-
-**5. Потолок `ai.max_agents` отбирал у ядра место.** Проверка стояла только на захвате ядра и
-считала ВСЕ сессии, включая борговские, а роботов правило ставит на раздаче должностей — то есть
-раньше, чем мозг садится в ядро на `InRound`. При умолчании в единицу это давало режим злого ИИ без
-ИИ: в логе честная строка про лимит, в игре тишина. Потолок переехал в `StartSession` (одно место на
-оба тела), умолчание поднято до четырёх, а на захвате ядра осталась смысловая проверка «ядро уже
-занято». Сторожит `CoreIsClaimed_EvenWithThreeBorgsAlreadyRunning`.
-
-**6. Идентификаторы выдаются, а не прописываются.** `AgentId` был константой прототипа, а двух
-боевых роботов двое. Совпадение id — не падение, а тихая порча: общий каталог `ai_data/agents/<id>`,
-общий файл диалога, и через раунд робот восстанавливает чужую память как свою. Пустой `AgentId`
-теперь значит «выдать из `AgentIdPrefix` и номера»; явно заданный и занятый — отказ с внятной
-причиной. Личности при этом ищутся с откатом в корень `ai_data/`: они привязаны к РОЛИ, а не к
-экземпляру, и копировать один файл под каждый возможный номер незачем.
-
-### Ручки
-
-| CVar | По умолчанию | Что делает |
-|---|---|---|
-| `ai.rogue_support_borgs` | `true` | ставить ли киборгов поддержки |
-| `ai.max_agents` | `4` | общий потолок живых агентов, ядро и борги вместе |
-
-### Что смотреть в бою
-
-```bash
-journalctl --user -u ss14-aksioma -f | grep "ai.rogue"
-# «киборгов поддержки: N из M» — неполный набор не роняет раунд, но виден только этой строкой
-aiborg list      # три робота, agent= у всех разные
-aiagent debug    # ростер витрины: кто на связи, у кого ошибка, кто ждёт сообщения оператора
-```
-
-Каталоги журналов — `ai_data/agents/combat-1/`, `combat-2/`, `engineer-1/`. Совпадение каталогов
-означало бы, что аллокатор не сработал.
-
-## Отладчик показывает всех агентов (2026-08-19)
-
-Раньше `/state` отдавал константу `"current"` и одну сессию — ту, чьё тело заняли последним.
-Кадры на шину при этом уже уходили с настоящим `body.Id`, то есть разделение существовало в
-протоколе и не использовалось.
-
-Теперь на сервере есть **витрина** (`Bus/AgentDirectory.cs`) вместо одиночного
-`volatile AgentSession?`. Хендл несёт делегаты, а не ссылку на сессию — тем же доводом, что и
-`AgentBody`: маршрутизатор не должен знать о сессии ничего, а тест не должен уметь её собирать.
-Единственное изменяемое поле — `Alive`, потому что живость ядра считается через `IsPlayable`, то
-есть обращением к миру; его снимает главный поток раз в секунду, и годится оно **только для
-индикатора**.
-
-Маршруты: `/state` — процессное плюс ростер, `/session?agent=<id>` — один агент,
-`/events` — без изменений, одна лента с полем `session` в кадре.
-
-Три ловушки, каждая из которых стоила бы вечера:
-
-1. **`/session` на неизвестного агента отвечает 200 с `agent: null`.** 404 у клиента терминален и
-   навсегда останавливает петлю опроса, а агент, ушедший между `session.started` и запросом, —
-   штатная гонка. Тест назван за причину: `SessionOfAnUnknownAgentIs200WithNull`.
-2. **Порядок публикации — контракт.** При захвате: витрина, потом кадр. При освобождении: сначала
-   снять с витрины, потом кадр. Перепутанный порядок даёт `null` на снимок сразу после
-   `session.started` — выглядит как «агент не запустился».
-3. **Кольцо было мало.** Четыре агента дают вчетверо больше кадров, а всплеск компакции — это
-   четыре `history.replaced` с полными телами, который выбивает 512 за один заход. Симптом
-   обманчив: данные не теряются, они перекачиваются, и выглядит это как «отладчик моргает без
-   причины». `ai.debug_ring` поднят до 2048.
-
-Разбор клиентской части — в `Tools/aidebug/README.md`, раздел «Мультисессионность».
+`Content.AiBench` boots a real server in-process through the upstream `PoolManager` and calls
+the **same tool registry** the loop uses. Assertions are about world state, not tool output.
+The model is replaced by `ScriptedLlmClient` through `AiTestHooks.LlmFactory`, so no GPU is
+needed; live tests are skipped, not failed, when the endpoint does not answer.
+
+What the suite guards, by area: contract (schemas, error codes, answers that must not lie),
+context (zones, compaction, prefix stability), perception (no double hearing, witness cost per
+event bounded), vision (see versus operate), world bus (budget, priority, thread affinity),
+lifecycle (carded, killed, torn down mid-call), rogue modes (grants stay on station, cut wires
+stay cut), cyborgs (activation, distinct ids, actually moves, walks Bar → Bridge on a rotation
+map), script mode (sandbox, background processes, kill), VFS (permissions, caps, path traversal),
+LLM router (order, stickiness, sleeps, exact wire bodies via an in-process `HttpListener`), the
+overlay (whole-prototype replacement), and the secret pool (every mode reachable).
+
+A few tests are `[Explicit]`: long rotation-map walks, a live benchmark read by eye, and one
+AME scenario whose assertions pass but which trips the bench's "any ERROR in the log fails"
+rule through an upstream `DoAfter` bug.
+
+---
+
+## Design rules
+
+These are the rules the code is written to, and the tests enforce most of them.
+
+- **No upstream file changes.** New files, new prototypes, one `Directory.Build.props`. The
+  engine patches that do exist (a PVS resync loop, marked `FORK PATCH`) are each documented with
+  a reproduction, a measurement and a removal cost in `docs/upstream-patches.md`.
+- **Parity with a human player**, with three named exceptions: walls are not checked in the
+  witness stream within eight tiles (`ai.observe_occlusion` restores them at a cost), a script
+  presses buttons at bus speed rather than human speed, and rogue modes grant access on purpose.
+- **Silent failures are the enemy.** Most bugs in this module produced no log line: a borg that
+  "walks" and stays put, a generator on the wrong cable island, a whitelisted door with a cut
+  wire, a fallback that is never tried. The response is always a read-back (`effect`), a probe
+  (`aiagent llm probe`), or a test that asserts on the world.
+- **The prefix is frozen.** Tools sorted by name, canonical schemas, a constant VFS root block,
+  a snapshot of memory, one user message per turn. Anything that would move zone 0 between
+  compactions is a bug, and `CacheMetrics` says so.
+- **The tick is protected by budget, not by hope.** Nothing agent-side runs on the main thread
+  without going through the bus, and the bus has a per-frame budget, a queue cap and a progress
+  guarantee.
+- **State that outlives a turn lives in `AgentState`** and rides in the snapshot: timers, mode,
+  recent speech. A server restart mid-shift must not erase a promise made on the radio.
+- **Russian is the language of the prompt.** Tags are English (`RADIO`, `OBSERVED`, `SELF`),
+  content is Russian; the library, the personalities and the speech follow.
+
+---
+
+## Known limitations
+
+- The prompt can outgrow the declared window: compaction waits for open tool calls to close and
+  a single turn can run ninety steps. Keep `compactHigh` well under `ctxLimit`.
+- A failed model request at the start of a turn loses the observations that were drained for
+  it; on a quiet station the agent then waits for the world to speak again.
+- The cyborg sees in the dark: server-side visibility is occluders only.
+- Two agents on one llama-server slot evict each other's prefix cache; give each its own slot
+  or its own provider.
+- The Grok and Codex subscription profiles need their bridges running; without them the chain
+  simply skips to the next profile.
+- `Use_ExplainsWhatHappened` is flaky in a full bench run and passes alone; it depends on where
+  exactly the borg stops at a beacon.
+- More in [`docs/problems.md`](../../docs/problems.md), which also keeps rejected hypotheses so
+  they are not re-investigated.
+
+---
+
+## Further reading
+
+- [`docs/reconfig.md`](../../docs/reconfig.md) — changing providers, modes and the secret pool
+  without a rebuild; the overlay's replacement semantics; the traps.
+- [`Tools/examples/llamacpp/`](../../Tools/examples/llamacpp/) — a local model end to end.
+- [`docs/upstream-patches.md`](../../docs/upstream-patches.md) — every touched upstream line.
+- [`docs/problems.md`](../../docs/problems.md) — fixed, open and rejected problems, with how to
+  measure each.
+- [`docs/journal-ru.md`](../../docs/journal-ru.md) — the engineering journal this README
+  replaced (Russian): the measurements and reasoning behind most decisions above.
+- [`Tools/aidebug/README.md`](../../Tools/aidebug/README.md) — the debugger and its protocol.
+- [`Tools/grokbridge/README.md`](../../Tools/grokbridge/README.md) — why subscription OAuth
+  credentials need exactly one owner.
+
+## Privacy
+
+With the agent enabled, the text of radio messages, speech within earshot of the AI core or a
+cyborg, and station announcements is sent to the configured model provider. Player account
+names, IP addresses and Steam identifiers are not. Character names are, as any nearby player
+sees them. The module does not collect or require keys; secrets live in `ai_data/`, which is
+git-ignored and never served to clients. If you run a public server, say so in the MOTD or
+server description, in a form that makes clear speech leaves the server.
+
+## License
+
+Fork code, like upstream, is MIT (see [`LICENSE.TXT`](../../LICENSE.TXT)). The fork adds no
+assets: only code, YAML prototypes and documentation. Everything else belongs to Space Wizards
+Federation and its contributors under their original terms; see [`NOTICE`](../../NOTICE).
