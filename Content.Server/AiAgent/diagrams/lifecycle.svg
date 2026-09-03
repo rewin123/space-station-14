@@ -17,18 +17,18 @@
 <text x="275.0" y="114.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">RunLevel = InRound</text>
 <text x="275.0" y="114.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">RunLevel = InRound</text>
 <circle cx="420" cy="150" r="4" fill="#0969da"/>
-<text x="432" y="154" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">TryClaimAnyCore() — a station core, not CentComm&#x27;s; retries for 30 s</text>
+<text x="432.0" y="154.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">TryClaimAnyCore() — a station core, not CentComm&#x27;s; retries for 30 s</text>
 <circle cx="420" cy="175" r="4" fill="#0969da"/>
-<text x="432" y="179" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">spawn StationAiBrain · add LlmStationAiComponent · apply the mode&#x27;s laws</text>
+<text x="432.0" y="179.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">spawn StationAiBrain · add LlmStationAiComponent · apply the mode&#x27;s laws</text>
 <path d="M 420.0 210.0 L 660.0 210.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
 <text x="540.0" y="204.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">StartSession(BuildStationBody(brain)) — ai.max_agents checked here</text>
 <text x="540.0" y="204.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">StartSession(BuildStationBody(brain)) — ai.max_agents checked here</text>
 <circle cx="660" cy="240" r="4" fill="#0969da"/>
-<text x="672" y="244" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">freeze zone 0 · restore the snapshot</text>
+<text x="672.0" y="244.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">freeze zone 0 · restore the snapshot</text>
 <circle cx="660" cy="262" r="4" fill="#0969da"/>
-<text x="672" y="266" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">(only if prefix hash and round match)</text>
+<text x="672.0" y="266.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">(only if prefix hash and round match)</text>
 <circle cx="660" cy="284" r="4" fill="#0969da"/>
-<text x="672" y="288" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">loop starts on the thread pool</text>
+<text x="672.0" y="288.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">loop starts on the thread pool</text>
 <path d="M 130.0 312.0 L 420.0 312.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
 <text x="275.0" y="306.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">RoundRestartCleanupEvent</text>
 <text x="275.0" y="306.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">RoundRestartCleanupEvent</text>

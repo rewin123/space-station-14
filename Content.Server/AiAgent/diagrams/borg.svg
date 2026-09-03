@@ -5,21 +5,21 @@
 <rect x="20" y="60" width="5" height="56" rx="2.5" fill="#0969da"/>
 <text x="95.0" y="84.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">goto target</text>
 <text x="95.0" y="100.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">handle · room · x,y</text>
-<rect x="200" y="52" width="225" height="72" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
-<text x="312.5" y="76.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">BorgPathfinder</text>
-<text x="312.5" y="92.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">A* over NavMapComponent chunks</text>
-<text x="312.5" y="108.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">4-neighbour · no broadphase</text>
-<rect x="455" y="60" width="100" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
-<text x="505.0" y="92.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">cut into legs</text>
-<rect x="585" y="52" width="215" height="72" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="1.6"/>
-<rect x="585" y="52" width="5" height="72" rx="2.5" fill="#0969da"/>
-<text x="692.5" y="76.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Walk.cs, each tick</text>
-<text x="692.5" y="92.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">direction → InputMoverComponent</text>
-<text x="692.5" y="108.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">.CurTickSprintMovement</text>
-<rect x="815" y="60" width="140" height="56" rx="8" fill="#ffffff" stroke="#bc4c00" stroke-width="1.6"/>
-<rect x="815" y="60" width="5" height="56" rx="2.5" fill="#bc4c00"/>
-<text x="885.0" y="84.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">door ahead?</text>
-<text x="885.0" y="100.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">pressed, repeatedly</text>
+<rect x="200" y="52" width="200" height="72" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="300.0" y="76.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">BorgPathfinder</text>
+<text x="300.0" y="92.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">A* over NavMapComponent</text>
+<text x="300.0" y="108.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">4-neighbour · no broadphase</text>
+<rect x="425" y="60" width="115" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
+<text x="482.5" y="92.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">cut into legs</text>
+<rect x="565" y="52" width="225" height="72" rx="8" fill="#ffffff" stroke="#0969da" stroke-width="1.6"/>
+<rect x="565" y="52" width="5" height="72" rx="2.5" fill="#0969da"/>
+<text x="677.5" y="76.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">Walk.cs, each tick</text>
+<text x="677.5" y="92.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">direction → InputMoverComponent</text>
+<text x="677.5" y="108.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">.CurTickSprintMovement</text>
+<rect x="810" y="60" width="140" height="56" rx="8" fill="#ffffff" stroke="#bc4c00" stroke-width="1.6"/>
+<rect x="810" y="60" width="5" height="56" rx="2.5" fill="#bc4c00"/>
+<text x="880.0" y="84.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">door ahead?</text>
+<text x="880.0" y="100.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">pressed, repeatedly</text>
 <rect x="200" y="175" width="340" height="56" rx="8" fill="#ffffff" stroke="#8c959f" stroke-width="1.2"/>
 <text x="370.0" y="199.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">still shut → tile marked impassable</text>
 <text x="370.0" y="215.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">replan · budget 10, reset on progress</text>
@@ -27,20 +27,20 @@
 <text x="685.0" y="195.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="13" font-weight="700" fill="#1f2328">ARRIVED / NOPATH</text>
 <text x="685.0" y="211.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="12" fill="#59636e">as an observation</text>
 <path d="M 170.0 88.0 L 200.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<path d="M 425.0 88.0 L 455.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<path d="M 555.0 88.0 L 585.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<path d="M 800.0 88.0 L 815.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<path d="M 885.0 60.0 L 885.0 28.0 L 692.5 28.0 L 692.5 52.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<text x="792.8" y="23.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">opened, keep walking</text>
-<text x="792.8" y="23.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">opened, keep walking</text>
-<path d="M 885.0 116.0 L 885.0 252.0 L 370.0 252.0 L 370.0 231.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<text x="685.0" y="246.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">not opened after retries</text>
-<text x="685.0" y="246.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">not opened after retries</text>
-<path d="M 312.5 175.0 L 312.5 124.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
-<text x="320.5" y="143.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">new route</text>
-<text x="320.5" y="143.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">new route</text>
+<path d="M 400.0 88.0 L 425.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 540.0 88.0 L 565.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 790.0 88.0 L 810.0 88.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<path d="M 880.0 60.0 L 880.0 28.0 L 677.5 28.0 L 677.5 52.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="782.8" y="23.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">opened, keep walking</text>
+<text x="782.8" y="23.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">opened, keep walking</text>
+<path d="M 880.0 116.0 L 880.0 252.0 L 370.0 252.0 L 370.0 231.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="682.5" y="246.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">not opened after retries</text>
+<text x="682.5" y="246.0" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">not opened after retries</text>
+<path d="M 300.0 175.0 L 300.0 124.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
+<text x="308.0" y="143.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">new route</text>
+<text x="308.0" y="143.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">new route</text>
 <path d="M 685.0 124.0 L 685.0 175.0" fill="none" stroke="#6e7781" stroke-width="1.6" marker-end="url(#head)"/>
 <text x="693.0" y="143.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="none" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">at the goal / no route</text>
 <text x="693.0" y="143.5" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">at the goal / no route</text>
-<text x="20" y="285.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">Physics, collisions, speed and bumping doors open stay upstream: the fork only decides the direction for this tick.</text>
+<text x="20.0" y="285.0" text-anchor="start" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'Noto Sans', sans-serif" font-size="11.5" fill="#59636e">Physics, collisions, speed and bumping doors open stay upstream: the fork only decides the direction for this tick.</text>
 </svg>

@@ -19,23 +19,24 @@ OUT = os.path.join(os.path.dirname(__file__), "..", "..", "Content.Server", "AiA
 
 # --------------------------------------------------------------------------- 1. overview
 def overview():
-    s = Svg(960, 760)
+    s = Svg(960, 770)
 
     # ---- game world
     s.lane(20, 20, 670, 100, "GAME WORLD", "grey", "RobustToolbox + Content.Server, unmodified")
-    ecs = s.node(35, 45, 170, 56, "Entities & events", "doors · APCs · radio · mobs")
-    vis = s.node(215, 45, 175, 56, "StationAiVisionSystem", "the camera view")
-    nav = s.node(405, 45, 150, 56, "NavMapComponent", "the borg's route map")
+    ecs = s.node(35, 45, 180, 56, "Entities & events", "doors · APCs · radio · mobs")
+    vis = s.node(230, 45, 180, 56, "StationAiVisionSystem", "the camera view")
+    nav = s.node(425, 45, 160, 56, "NavMapComponent", "the borg's route map")
 
     # ---- seam
-    s.lane(20, 135, 670, 140, "THE SEAM", "blue", "the only code that touches both sides")
-    sas = s.node(35, 160, 280, 56, "StationAiAgentSystem",
+    s.lane(20, 135, 670, 140, "THE SEAM", "blue")
+    sas = s.node(35, 160, 290, 56, "StationAiAgentSystem",
                  "lifecycle · perception · tools · vision", accent="blue")
-    borg = s.node(330, 160, 185, 56, "AiBorgSystem", "legs · eyes · hands · route", accent="blue")
-    modes = s.node(530, 160, 145, 56, "Mode systems", "rogue · power · end", accent="blue")
+    borg = s.node(340, 160, 180, 56, "AiBorgSystem", "legs · eyes · hands · route", accent="blue")
+    modes = s.node(535, 160, 140, 56, "Mode systems", "rogue · power · end", accent="blue")
     wit = s.node(35, 225, 215, 40, "Witness", "game events → OBSERVED")
-    gate = s.node(265, 225, 300, 40, "DeviceGate",
+    gate = s.node(262, 225, 278, 40, "DeviceGate",
                   "whitelist → wire → power → visible → access")
+    con = s.node(552, 225, 123, 40, "Server console", "aiagent · aiborg")
 
     s.arrow(ecs.bottom(), sas.top(-55), label="game events", label_at=0.5, label_dx=8,
             label_anchor="start")
@@ -47,86 +48,87 @@ def overview():
     s.arrow(sas.bottom(-100), wit.top(), head=False)
 
     # ---- world bus (narrow lane so the observation path visibly bypasses it)
-    s.lane(20, 290, 480, 70, "WORLD BUS", "warm", "Threading/")
-    bus = s.node(35, 312, 450, 40, "WorldBus",
+    s.lane(20, 290, 480, 80, "WORLD BUS", "warm", "Threading/")
+    bus = s.node(35, 320, 450, 40, "WorldBus",
                  "urgent + normal lanes · per-frame budget · generation check", accent="warm")
 
     s.arrow(bus.top(), (bus.cx, 275), label="`Pump()` inside `Update`, one slice per frame budget",
             label_at=0.5, label_dx=12, label_anchor="start")
 
     # ---- agent core
-    s.lane(20, 375, 670, 200, "AGENT CORE", "green", "world-independent")
-    tools = s.node(35, 400, 150, 70, "Tools", "AiToolRegistry", "ToolDispatcher", accent="green")
-    turn = s.node(200, 400, 150, 70, "TurnRunner", "request → classify", "dispatch → settle",
+    s.lane(20, 385, 670, 200, "AGENT CORE", "green")
+    tools = s.node(35, 410, 150, 70, "Tools", "AiToolRegistry", "ToolDispatcher", accent="green")
+    turn = s.node(200, 410, 150, 70, "TurnRunner", "request → classify", "dispatch → settle",
                   accent="green")
-    sess = s.node(365, 400, 150, 70, "AgentSession", "wake · turn · persist", "backoff · degraded",
+    sess = s.node(365, 410, 150, 70, "AgentSession", "wake · turn · persist", "backoff · degraded",
                   accent="green")
-    obs = s.node(530, 400, 145, 70, "ObservationQueue", "+ TimerStore", "caps per kind",
+    obs = s.node(525, 410, 150, 70, "ObservationQueue", "+ TimerStore", "caps per kind",
                  accent="green")
-    body = s.node(35, 485, 150, 70, "AgentBody", "the body seam:", "eye · speak · tools · vfs")
-    conv = s.node(200, 485, 150, 70, "ConversationState", "zone 0 · zone 1 · zone 2",
+    body = s.node(35, 495, 150, 70, "AgentBody", "the body seam:", "eye · speak · tools")
+    conv = s.node(200, 495, 150, 70, "ConversationState", "zones 0 · 1 · 2",
                   "frozen prefix hash")
-    comp = s.node(365, 485, 150, 70, "Compactor · Curator", "8-step ritual", "self-review")
-    vfs = s.node(530, 485, 145, 70, "Vfs · Lua scripts", "`/wiki_ru /skills`",
+    comp = s.node(365, 495, 150, 70, "Compactor", "8-step ritual", "Curator: self-review")
+    vfs = s.node(530, 495, 145, 70, "Vfs · Lua scripts", "`/wiki_ru /skills`",
                  "`/players /memory.md`")
 
-    s.arrow(tools.top(), bus.bottom(-115), label="tool handlers marshal jobs", label_dx=12,
+    s.arrow(tools.top(40), bus.bottom(-75), label="tool handlers marshal jobs", label_dx=12,
             label_anchor="start")
     s.arrow((obs.cx, 275), obs.top(), dashed=True, label="Observation",
-            label_at=0.3, label_dx=10, label_anchor="start")
-    s.text(obs.cx + 10, 355, "pushed from the main thread,", size=11)
-    s.text(obs.cx + 10, 370, "no bus in between", size=11)
+            label_at=0.25, label_dx=10, label_anchor="start")
+    s.text(obs.cx + 10, 350, "pushed from the", size=11)
+    s.text(obs.cx + 10, 365, "main thread,", size=11)
+    s.text(obs.cx + 10, 380, "no bus between", size=11)
     s.arrow(obs.left(), sess.right(), label="wakes", label_at=0.5, label_dy=-40)
     s.arrow(sess.left(), turn.right())
     s.arrow(turn.left(), tools.right())
-    s.arrow(turn.bottom(), conv.top(), label="messages", label_dx=8, label_anchor="start")
-    s.arrow(sess.bottom(), comp.top(), label="at a turn boundary", label_dx=8, label_anchor="start")
-    s.arrow(comp.right(), vfs.left(), head=True, label="writes")
+    s.arrow(turn.bottom(), conv.top(), label="messages", label_dx=8, label_anchor="start",
+            label_dy=4)
+    s.arrow(sess.bottom(), comp.top(), label="compacts", label_dx=8, label_anchor="start",
+            label_dy=4)
+    s.arrow(comp.right(), vfs.left())
     s.arrow(tools.bottom(), body.top(), head=False, dashed=True)
-    s.arrow(comp.left(), conv.right(), head=True)
+    s.arrow(comp.left(), conv.right())
 
     # ---- llm layer
-    s.lane(20, 590, 670, 75, "LLM LAYER", "purple", "Llm/")
-    router = s.node(35, 615, 260, 40, "RoutingLlmClient", "chain · sticky · fallback · quota",
+    s.lane(20, 600, 670, 75, "LLM LAYER", "purple", "Llm/")
+    router = s.node(35, 625, 260, 40, "RoutingLlmClient", "chain · sticky · fallback · quota",
                     accent="purple")
-    client = s.node(310, 615, 180, 40, "LlamaClient", "OpenAI-compatible · dialects")
-    quota = s.node(505, 615, 170, 40, "LlmQuotaState", "`ai_data/llm_state.json`")
+    client = s.node(310, 625, 190, 40, "LlamaClient", "OpenAI-compatible · dialects")
+    quota = s.node(515, 625, 160, 40, "LlmQuotaState", "`ai_data/llm_state.json`")
     s.arrow(conv.bottom(), router.top(75), label="`ChatAsync(messages, tools)`", label_at=0.5,
             label_dx=12, label_anchor="start")
     s.arrow(router.right(), client.left())
     s.arrow(client.right(), quota.left(), head=False, dashed=True)
 
-    prov = s.node(35, 690, 640, 44, "Model providers",
+    prov = s.node(35, 700, 640, 44, "Model providers",
                   "DeepSeek · OpenRouter · llama.cpp · vLLM · Grok bridge", accent="purple",
                   fill="#faf7ff")
-    s.arrow(client.bottom(), (client.cx, 690), label="HTTP", label_dx=8, label_anchor="start")
+    s.arrow(client.bottom(), (client.cx, 700), label="HTTP", label_dx=8, label_anchor="start")
 
     # ---- observability (right column)
-    s.lane(710, 20, 230, 250, "OBSERVABILITY", "teal")
+    s.lane(710, 20, 230, 195, "OBSERVABILITY", "teal")
     evb = s.node(725, 45, 200, 40, "AgentEventBus", "ring buffer · (instance, seq)")
     dbg = s.node(725, 100, 200, 40, "AgentDebugServer", "`/state /session /events`")
     ui = s.node(725, 155, 200, 40, "Tools/aidebug", "Vue debugger")
-    con = s.node(725, 210, 200, 40, "Server console", "`aiagent` · `aiborg`")
     s.arrow(evb.bottom(), dbg.top())
     s.arrow(dbg.bottom(), ui.top())
-    s.arrow((690, 395), (703, 395), (703, 65), evb.left(), dashed=True,
-            label="events", label_at=0.4, label_dx=8, label_anchor="start")
-    s.arrow(con.left(), (692, 230), label="commands", label_at=0.5, label_dy=-6)
+    s.arrow((690, 405), (706, 405), (706, 65), evb.left(), dashed=True,
+            label="events", label_at=0.45, label_dx=8, label_anchor="start")
 
     # ---- data (right column)
-    s.lane(710, 375, 230, 200, "DATA", "warm", "ai_data/, git-ignored")
-    data = s.node(725, 400, 200, 150, "ai_data/",
+    s.lane(710, 385, 230, 200, "DATA", "warm", "ai_data/, git-ignored")
+    data = s.node(725, 410, 200, 150, "ai_data/",
                   "SOUL.md · CURATOR.md", "wiki_ru/ shared, read-only",
                   "agents/<id>/: skills, people,", "memory, sessions, logs",
                   "config.d/*.yml overlay", "*.key · llm_state.json")
     s.arrow(vfs.right(), (700, vfs.cy), (700, data.cy), data.left(), tail=True)
 
     # ---- legend
-    s.text(710, 600, "solid arrow — call or action", size=11)
-    s.text(710, 616, "dashed arrow — observation or event", size=11)
-    s.text(710, 632, "coloured bar — a layer's key class", size=11)
+    s.text(710, 610, "solid arrow — call or action", size=11)
+    s.text(710, 626, "dashed arrow — observation or event", size=11)
+    s.text(710, 642, "coloured bar — a layer's key class", size=11)
 
-    s.save(os.path.join(OUT, "overview.svg"))
+    return s.save(os.path.join(OUT, "overview.svg"))
 
 
 # --------------------------------------------------------------------------- 2. lifecycle
@@ -161,13 +163,13 @@ def lifecycle():
     self_note(284, "S", "loop starts on the thread pool")
     msg(312, "GT", "SAS", "RoundRestartCleanupEvent")
     msg(338, "SAS", "S", "Release() — cancel, never wait; disposed later in Update")
-    s.save(os.path.join(OUT, "lifecycle.svg"))
+    return s.save(os.path.join(OUT, "lifecycle.svg"))
 
 
 # --------------------------------------------------------------------------- 3. loop
 def loop():
     s = Svg(960, 600)
-    cx, w = 330, 340
+    cx, w = 330, 360
     x = cx - w / 2
     a = s.node(x, 25, w, 56, "wait on Woken", "any observation wakes it · ceiling 5 s, idle 25 s")
     b = s.node(x, 105, w, 56, "force a turn?", "idle ≥ 6 · operator inbox · budget exhausted",
@@ -182,15 +184,15 @@ def loop():
 
     for p, q in [(a, b), (b, c), (c, d), (d, e), (e, f)]:
         s.arrow(p.bottom(), q.top())
-    s.arrow(f.bottom(), g.top(), label="no", label_dx=8, label_anchor="start")
+    s.arrow(f.bottom(), g.top(), label="no", label_dx=8, label_anchor="start", label_dy=4)
     # loop back on the left
     s.arrow(g.left(), (120, g.cy), (120, a.cy), a.left(), label="next turn", label_at=0.5,
             label_dx=-6, label_anchor="end")
 
     # idle branch
-    idle = s.node(590, 205, 170, 40, "`idleStreak++`", "nothing to say")
-    s.arrow(c.right(), idle.left(), label="null · paused · disabled", label_at=0.5, label_dy=-6)
-    s.arrow(idle.right(), (800, idle.cy), (800, a.cy), a.right(), label="", head=True)
+    idle = s.node(650, 205, 170, 40, "idleStreak++", "null · paused · disabled")
+    s.arrow(c.right(), idle.left(), label="nothing to say", label_at=0.5, label_dy=-6)
+    s.arrow(idle.right(), (845, idle.cy), (845, a.cy), a.right())
 
     # compaction branch
     comp = s.node(590, 433, 240, 40, "Compactor ritual", "mode = Review for the duration")
@@ -203,43 +205,45 @@ def loop():
     s.arrow(e.right(), (560, e.cy), (560, fail.cy), fail.left(), dashed=True)
     s.arrow(fail.right(), (945, fail.cy), (945, 12), (a.cx, 12), a.top(), dashed=True)
 
-    s.note(500, 545, 440, [
+    s.note(530, 545, 420, [
         "Only the session's own cancellation exits the loop. A provider timeout is a",
         "TaskCanceledException, which inherits OperationCanceledException: catch it",
         "with when (ct.IsCancellationRequested) or the agent dies silently.",
     ], size=11)
-    s.save(os.path.join(OUT, "loop.svg"))
+    return s.save(os.path.join(OUT, "loop.svg"))
 
 
 # --------------------------------------------------------------------------- 4. turn
 def turn():
     s = Svg(960, 370)
-    req = s.node(30, 130, 130, 48, "Request", "`ChatAsync`", accent="blue")
-    cls = s.node(200, 130, 140, 48, "Classify", "tokens · cache metrics")
-    disp = s.node(380, 40, 150, 56, "Dispatch", "every call through", "`ToolDispatcher`")
-    steer = s.node(560, 40, 170, 56, "Steer", "queue drained into one", "`NEW_EVENTS` message")
-    prose = s.node(380, 200, 150, 56, "Prose", "no tool calls")
-    nudge = s.node(380, 290, 150, 48, "Nudge", "promised, did nothing")
-    settle = s.node(560, 200, 170, 56, "Settle", "deliver untooled text", "or suppress a repeat")
+    req = s.node(30, 130, 130, 48, "Request", "ChatAsync", accent="blue")
+    cls = s.node(200, 130, 150, 48, "Classify", "tokens · cache metrics")
+    disp = s.node(390, 40, 150, 56, "Dispatch", "every call through", "ToolDispatcher")
+    steer = s.node(570, 40, 170, 56, "Steer", "queue drained into one", "NEW_EVENTS message")
+    prose = s.node(390, 200, 150, 56, "Prose", "no tool calls")
+    nudge = s.node(390, 290, 150, 48, "Nudge", "promised, did nothing")
+    settle = s.node(570, 196, 185, 64, "Settle", "nothing owed → deliver text",
+                    "or suppress a repeat")
     close = s.node(785, 130, 150, 48, "Close", "exit reason · delivery", accent="blue")
 
     s.arrow(req.right(), cls.left())
-    s.arrow(cls.right(), (360, cls.cy), (360, disp.cy), disp.left(), label="tool calls",
-            label_at=0.35, label_dx=-6, label_anchor="end")
-    s.arrow(cls.right(), (360, cls.cy), (360, prose.cy), prose.left(), label="text only",
-            label_at=0.75, label_dx=-6, label_anchor="end")
+    s.arrow(cls.right(), (370, cls.cy), head=False)
+    s.arrow((370, cls.cy), (370, disp.cy), disp.left(), label="tool calls",
+            label_at=0.5, label_dx=-6, label_anchor="end")
+    s.arrow((370, cls.cy), (370, prose.cy), prose.left(), label="text only",
+            label_at=0.5, label_dx=-6, label_anchor="end")
     s.arrow(disp.right(), steer.left())
     s.arrow(steer.top(), (steer.cx, 18), (req.cx, 18), req.top(), label="next step",
             label_at=0.5, label_dy=-5)
-    s.arrow(steer.right(), (760, steer.cy), (760, close.cy - 8), close.left(-8),
+    s.arrow(steer.right(), (770, steer.cy), (770, close.cy - 8), close.left(-8),
             label="noop or step budget", label_at=0.5, label_dx=6, label_anchor="start", label_dy=4)
-    s.arrow(prose.right(), settle.left(), label="nothing owed", label_dy=-6)
+    s.arrow(prose.right(), settle.left())
     s.arrow(prose.bottom(), nudge.top(), label="addressed but silent", label_dx=8,
             label_anchor="start", label_dy=4)
     s.arrow(nudge.bottom(), (nudge.cx, 355), (req.cx, 355), req.bottom(), label="once per turn",
             label_at=0.5, label_dy=-5)
-    s.arrow(settle.right(), (765, settle.cy), (765, close.cy + 8), close.left(8))
-    s.save(os.path.join(OUT, "turn.svg"))
+    s.arrow(settle.right(), (770, settle.cy), (770, close.cy + 8), close.left(8))
+    return s.save(os.path.join(OUT, "turn.svg"))
 
 
 # --------------------------------------------------------------------------- 5. world bus
@@ -275,14 +279,13 @@ def worldbus():
     s.arrow(h.right(10), nor.left())
     s.arrow(urg.right(), (530, urg.cy), (530, pump.cy), pump.left())
     s.arrow(nor.right(), (530, nor.cy), head=False)
-    s.arrow(res.right(), (530, res.cy), head=False)
     s.arrow(pump.bottom(), (pump.cx, 100))
     s.arrow((pump.cx, 250), sl.top(), head=True)
     s.arrow(sl.left(-20), (535, sl.cy - 20), (535, res.cy), res.right(), dashed=True)
     s.arrow(sl.bottom(), (sl.cx, 345), (h.cx, 345), h.bottom(),
             label="result delivered; continuations run asynchronously, never on the game thread",
             label_at=0.5, label_dy=-5)
-    s.save(os.path.join(OUT, "worldbus.svg"))
+    return s.save(os.path.join(OUT, "worldbus.svg"))
 
 
 # --------------------------------------------------------------------------- 6. zones
@@ -299,7 +302,7 @@ def zones():
                     "dangling calls get a synthetic turn_budget result", size=12)
     s.lane(20, 226, 920, 58, "ZONE 2", "warm", "volatile tail")
     s.text(35, 269, "at most one user message, always last, consumed by the turn that sends it", size=12)
-    s.save(os.path.join(OUT, "zones.svg"))
+    return s.save(os.path.join(OUT, "zones.svg"))
 
 
 # --------------------------------------------------------------------------- 7. compaction
@@ -318,9 +321,9 @@ def compaction():
     nodes = []
     for i, (t, sub, fatal) in enumerate(steps):
         row, col = divmod(i, 4)
-        x = 30 + col * 230
+        x = 30 + col * 228
         y = 30 + row * 100
-        nodes.append(s.node(x, y, 215, 60, t, sub, accent="red" if fatal else None))
+        nodes.append(s.node(x, y, 218, 60, t, sub, accent="red" if fatal else None))
     for i in range(3):
         s.arrow(nodes[i].right(), nodes[i + 1].left())
         s.arrow(nodes[4 + i].right(), nodes[5 + i].left())
@@ -330,7 +333,7 @@ def compaction():
         "Red bar: a fatal step — failure aborts the ritual and zone 0 is rolled back byte for byte. "
         "Other steps are logged and skipped. Runs at a turn boundary only.",
     ])
-    s.save(os.path.join(OUT, "compaction.svg"))
+    return s.save(os.path.join(OUT, "compaction.svg"))
 
 
 # --------------------------------------------------------------------------- 8. script mode
@@ -338,13 +341,13 @@ def script():
     s = Svg(960, 320)
     model = s.node(20, 40, 150, 56, "model", "`script{code}`", accent="purple")
     lint = s.node(195, 40, 175, 56, "ScriptLint", "unknown function name →", "script_syntax, nothing ran")
-    host = s.node(395, 32, 215, 72, "LuaHost (MoonSharp)", "HardSandbox + pcall + metatables",
+    host = s.node(395, 32, 225, 72, "LuaHost (MoonSharp)", "HardSandbox + pcall + metatables",
                   "no io / os / require / load", accent="purple")
-    rt = s.node(635, 40, 160, 56, "ScriptRuntime", "tools become functions", "goto_wait → go")
+    rt = s.node(640, 40, 160, 56, "ScriptRuntime", "tools become functions", "goto_wait → go")
     disp = s.node(815, 40, 125, 56, "ToolDispatcher", "same gate,", "same errors")
-    proc = s.node(395, 175, 215, 64, "ScriptProcess", "own thread · output cursor",
+    proc = s.node(395, 175, 225, 64, "ScriptProcess", "own thread · output cursor",
                   "call cap · wall-clock cap")
-    obsn = s.node(650, 175, 170, 48, "Observation", "СКРИПТ #N wakes the loop")
+    obsn = s.node(640, 175, 180, 48, "Observation", "СКРИПТ #N wakes the loop")
     bus = s.node(830, 175, 110, 40, "WorldBus")
 
     s.arrow(model.right(), lint.left())
@@ -356,12 +359,12 @@ def script():
             label_dx=10, label_anchor="start")
     s.arrow(proc.right(-8), obsn.left(-8), label="finished in the background", label_at=0.5, label_dy=52)
     s.arrow(proc.left(), (95, proc.cy), model.bottom(),
-            label="done within `ai.script_foreground_ms` → result inline", label_at=0.3, label_dy=-6)
+            label="done within ai.script_foreground_ms → result inline", label_at=0.5, label_dy=-6)
     s.note(20, 275, 900, [
         "A tool refusal is a Lua exception, so straight-line code reads top to bottom and tolerance is ordinary `pcall`.",
         "`help{tool='use'}` reads the registry directly: schemas are off the wire in this mode.",
     ])
-    s.save(os.path.join(OUT, "script.svg"))
+    return s.save(os.path.join(OUT, "script.svg"))
 
 
 # --------------------------------------------------------------------------- 9. providers
@@ -376,14 +379,14 @@ def providers():
     inc = s.node(780, 122, 160, 56, "Incompatible", "400 / 404 / 422", "→ ERROR with body")
 
     s.arrow(head.right(), sticky.left(), label="success", label_dy=-6)
-    s.arrow(sticky.right(-0), (560, sticky.cy - 10), (560, nxt.cy), nxt.left(), label="retryable",
-            label_at=0.92, label_dx=-4, label_anchor="end")
+    s.arrow(sticky.top(60), (sticky.cx + 60, nxt.cy), nxt.left(), label="retryable",
+            label_at=0.85, label_dy=-6)
     s.arrow(sticky.right(10), quota.left(10))
     s.arrow(sticky.right(20), (565, sticky.cy + 20), (565, dead.cy), dead.left())
     s.arrow(sticky.top(), (sticky.cx, 15), (inc.cx, 15), inc.top(), label="strict API rejects a field",
             label_at=0.5, label_dy=-4)
-    s.arrow(nxt.bottom(), (nxt.cx, 108), (sticky.cx + 70, 108), sticky.top(70),
-            label="next becomes sticky", label_at=0.5, label_dy=-4)
+    s.arrow(nxt.bottom(), (nxt.cx, 108), (sticky.cx + 85, 108), sticky.top(85),
+            label="next becomes sticky", label_at=0.5, label_dy=-6)
     s.arrow(sticky.bottom(), (sticky.cx, 250), (head.cx, 250), head.bottom(),
             label="every `ai.llm_recheck_seconds`: walk from the top", label_at=0.5, label_dy=-5)
     # self loop
@@ -393,19 +396,19 @@ def providers():
         "Not a reason to switch: a reply truncated by `max_tokens` or malformed JSON in the arguments — the next provider reproduces both.",
         "One client per session, so one agent's fallback does not drag another off its provider. Quota state is shared and persisted.",
     ])
-    s.save(os.path.join(OUT, "providers.svg"))
+    return s.save(os.path.join(OUT, "providers.svg"))
 
 
 # --------------------------------------------------------------------------- 10. borg
 def borg():
     s = Svg(960, 300)
     g = s.node(20, 60, 150, 56, "goto target", "handle · room · x,y", accent="blue")
-    pf = s.node(200, 52, 225, 72, "BorgPathfinder", "A* over `NavMapComponent` chunks",
+    pf = s.node(200, 52, 200, 72, "BorgPathfinder", "A* over NavMapComponent",
                 "4-neighbour · no broadphase")
-    legs = s.node(455, 60, 100, 56, "cut into legs")
-    walk = s.node(585, 52, 215, 72, "Walk.cs, each tick", "direction → `InputMoverComponent`",
-                  "`.CurTickSprintMovement`", accent="blue")
-    door = s.node(815, 60, 140, 56, "door ahead?", "pressed, repeatedly", accent="warm")
+    legs = s.node(425, 60, 115, 56, "cut into legs")
+    walk = s.node(565, 52, 225, 72, "Walk.cs, each tick", "direction → InputMoverComponent",
+                  ".CurTickSprintMovement", accent="blue")
+    door = s.node(810, 60, 140, 56, "door ahead?", "pressed, repeatedly", accent="warm")
     blk = s.node(200, 175, 340, 56, "still shut → tile marked impassable",
                  "replan · budget 10, reset on progress")
     arr = s.node(600, 175, 170, 48, "ARRIVED / NOPATH", "as an observation")
@@ -424,11 +427,15 @@ def borg():
     s.note(20, 285, 900, [
         "Physics, collisions, speed and bumping doors open stay upstream: the fork only decides the direction for this tick.",
     ])
-    s.save(os.path.join(OUT, "borg.svg"))
+    return s.save(os.path.join(OUT, "borg.svg"))
 
 
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
+    problems = []
     for fn in (overview, lifecycle, loop, turn, worldbus, zones, compaction, script, providers, borg):
-        fn()
-        print("wrote", fn.__name__)
+        problems += fn() or []
+    for p in problems:
+        print("PROBLEM", p)
+    print(f"{len(problems)} problems")
+    sys.exit(1 if problems else 0)
