@@ -5,11 +5,11 @@ import JsonBlock from '../components/JsonBlock.vue'
 import type { AgentEventType } from '../api/types'
 
 /**
- * Сырой лог кадров.
+ * Raw frame log.
  *
- * Сделан первым и намеренно уродливым: это единственный инструмент для отладки самой машины
- * состояний. Данные для него уже есть — без этого экрана клиент разбирал бы каждый кадр и
- * выбрасывал, а когда лента разъедется, смотреть было бы не на что.
+ * Built first, and deliberately ugly: it's the only tool for debugging the state machine
+ * itself. The data for it already exists — without this screen the client would parse every
+ * frame and discard it, and when the stream drifts apart there'd be nothing to look at.
  */
 const agent = useAgent()
 
@@ -44,7 +44,7 @@ function toggleFrame(seq: number): void {
 
 const visible = computed(() => agent.frames.filter((f) => !hidden.value.has(f.type)).slice().reverse())
 
-/** Пропуск в номерах — либо потерянный кадр, либо вторая петля. Показываем явно. */
+/** A gap in the numbers means either a lost frame or a second loop. We show it explicitly. */
 function gapBefore(index: number): number {
   const rows = visible.value
   if (index + 1 >= rows.length) return 0

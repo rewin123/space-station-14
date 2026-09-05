@@ -21,38 +21,39 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Резервное питание на смену, где нет инженеров — <c>ai.backup_power</c>.
+/// Backup power for a shift with no engineers — <c>ai.backup_power</c>.
 ///
 /// <para>
-/// <b>Зачем.</b> На этом сервере онлайн 0–2 человека, и это норма, а не авария. Инженерную смену
-/// при таком онлайне не набирает никто, и станция остаётся на том, что накопили батареи: SMES
-/// держит 8 МДж (<c>smes.yml</c>), апстримовый гайдбук прямо пишет «this will at most last 5-10
-/// minutes». Дальше раунд идёт в темноте, и ИИ, чьё ядро тоже питается от этой сети, замолкает.
+/// <b>Why.</b> This server has 0-2 people online, and that is normal, not an outage. Nobody staffs
+/// an engineering shift at that population, and the station is left running on whatever the
+/// batteries stored: an SMES holds 8MJ (<c>smes.yml</c>), and the upstream guidebook says outright
+/// "this will at most last 5-10 minutes". After that the round goes dark, and the AI, whose core is
+/// also fed by this grid, goes silent.
 /// </para>
 /// <para>
-/// <b>Почему не солнечные панели, хотя они бесплатны и вечны.</b> Они не подключены. Обход графа
-/// HV-кабеля по всем тринадцати картам ротации: массивы стоят на собственных кабельных островах,
-/// без SMES и без пути к главной сети — на <b>одиннадцати картах из тринадцати</b> солнечной
-/// мощности на главной сети РОВНО НОЛЬ. Исключения два и оба частичные: Oasis (70 панелей из 230)
-/// и Tram2 (20 из 244). Апстрим этого не скрывает: «At the start of the shift solar panels are
-/// misaligned and disconnected from the grid» (<c>Guidebook/Engineering/SolarPanels.xml</c>). Чтобы
-/// они начали давать ток, на карте Packed нужно проложить около полутора сотен тайлов кабеля — то
-/// есть переписать мир кодом, что куда наглее, чем поставить одну машину. Вдобавок панели никто не
-/// наводит: <c>PowerSolarSystem</c> принудительно ставит всем панелям один поворот, и пишет его
-/// только человек за консолью, поэтому ненаведённый массив половину каждого солнечного цикла даёт
-/// нуль.
+/// <b>Why not solar panels, even though they are free and endless.</b> They are not connected. A
+/// walk of the HV cable graph across all thirteen rotation maps: the arrays sit on their own
+/// isolated cable islands, with no SMES and no path to the main grid — on <b>eleven of thirteen
+/// maps</b> solar power on the main grid is EXACTLY ZERO. There are two exceptions, both partial:
+/// Oasis (70 of 230 panels) and Tram2 (20 of 244). Upstream does not hide this: "At the start of
+/// the shift solar panels are misaligned and disconnected from the grid"
+/// (<c>Guidebook/Engineering/SolarPanels.xml</c>). To get them producing current on the Packed map
+/// would take laying roughly a hundred and fifty tiles of cable — that is, rewriting the world in
+/// code, which is far more intrusive than placing one machine. On top of that, nobody aims the
+/// panels: <c>PowerSolarSystem</c> forces the same rotation onto every panel, and only a human at
+/// the console writes it, so an unaimed array produces zero for half of every solar cycle.
 /// </para>
 /// <para>
-/// <b>Почему не игровое правило.</b> Список правил старта раунда лежит в
-/// <c>Resources/Prototypes/game_presets.yml</c> — апстримовый файл, и добавить туда своё правило
-/// аддитивно нельзя. Поэтому обычная система с подпиской, по образцу
-/// <see cref="StationNameOverrideSystem"/>, заведённого здесь по той же причине: ни одного
-/// изменённого файла апстрима.
+/// <b>Why not a game rule.</b> The list of round-start rules lives in
+/// <c>Resources/Prototypes/game_presets.yml</c> — an upstream file, and adding a rule of our own
+/// there cannot be done additively. So this is an ordinary system with a subscription, following
+/// the pattern of <see cref="StationNameOverrideSystem"/>, set up here for the same reason: not a
+/// single upstream file changed.
 /// </para>
 /// <para>
-/// <b>Почему на раздаче должностей, а не на <c>StationPostInitEvent</c>.</b> Условие «есть ли на
-/// смене инженеры» до спавна игроков неизвестно. <c>StationPostInitEvent</c> срабатывает раньше и
-/// ответил бы «инженеров нет» всегда.
+/// <b>Why on job assignment rather than <c>StationPostInitEvent</c>.</b> Whether there are
+/// engineers on shift is unknown before players spawn. <c>StationPostInitEvent</c> fires earlier
+/// and would always answer "no engineers".
 /// </para>
 /// </summary>
 public sealed partial class BackupPowerSystem : EntitySystem
@@ -69,7 +70,7 @@ public sealed partial class BackupPowerSystem : EntitySystem
 
     private const string GeneratorProto = "AiAgentBackupGenerator";
 
-    /// <summary>Мощность одной машины из прототипа. Больше — просто ставим несколько.</summary>
+    /// <summary>Power of a single unit from the prototype. More than that — we just place several.</summary>
     private const int WattsPerUnit = 60000;
 
     private ISawmill _sawmill = default!;
@@ -80,23 +81,23 @@ public sealed partial class BackupPowerSystem : EntitySystem
 
         _sawmill = _logManager.GetSawmill("ai.power");
 
-        // Момент, когда должности уже разданы и игроки заспавнены. Образец разбора —
-        // Content.Server/Access/Systems/PresetIdCardSystem.cs.
+        // The moment when jobs are already assigned and players are spawned. Analysis pattern
+        // borrowed from Content.Server/Access/Systems/PresetIdCardSystem.cs.
         //
-        // Событие поднимается ВСЕГДА, даже когда готовых игроков ноль: в
-        // GameTicker.Spawning.SpawnPlayers нет раннего выхода по пустому списку. Это то, что нужно —
-        // ядру ИИ питание нужно и на смене без экипажа.
+        // The event fires ALWAYS, even when there are zero ready players: GameTicker.Spawning.
+        // SpawnPlayers has no early exit for an empty list. That is exactly what's needed — the AI
+        // core needs power even on a shift with no crew.
         SubscribeLocalEvent<RulePlayerJobsAssignedEvent>(OnJobsAssigned);
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundCleanup);
     }
 
     /// <summary>
-    /// Станции, которым генераторы на этот раунд уже поставлены.
+    /// Stations that already have generators deployed for this round.
     ///
-    /// Событие раздачи должностей в принципе может подняться не один раз (его поднимают и правила,
-    /// доигрывающие спавн), а <see cref="Deploy"/> сам по себе не идемпотентен — он поставит вторую
-    /// партию поверх первой. Молча удвоенная мощность выглядит как «работает» и обнаружится только
-    /// тем, что питание стало неубиваемым.
+    /// The job-assignment event can in principle fire more than once (rules that finish out spawning
+    /// also raise it), and <see cref="Deploy"/> is not itself idempotent — it would place a second
+    /// batch on top of the first. Silently doubled power looks like "it works" and would only be
+    /// noticed by the power becoming unkillable.
     /// </summary>
     private readonly HashSet<EntityUid> _served = new();
 
@@ -107,17 +108,17 @@ public sealed partial class BackupPowerSystem : EntitySystem
         if (!_cfg.GetCVar(AiCVars.BackupPower))
             return;
 
-        // Своя настройка для этой станции, если она известна; иначе общий путь.
+        // This station's own tuning, if it is known; otherwise the generic path.
         //
-        // Записи может не быть, и это нормальный путь, а не отказ: апстрим добавляет карты, и новая
-        // попадёт в ротацию раньше, чем ей заведут строку. Тогда берём мощность из CVar'а и ищем
-        // место так же, как на любой незнакомой станции.
+        // A missing entry is a normal path, not a failure: upstream adds maps, and a new one will
+        // enter rotation before it gets a row here. In that case we take the power from the CVar
+        // and look for a spot the same way as on any unfamiliar station.
         var tuning = SelectedMapTuning();
 
         var baseWatts = tuning?.Watts ?? _cfg.GetCVar(AiCVars.BackupPowerWatts);
 
-        // Множитель поверх любого источника — единственный способ подкрутить мощность на живом
-        // сервере: таблица станций лежит в прототипе, а прототипы читаются при старте процесса.
+        // A multiplier on top of any source — the only way to tweak power on a live server: the
+        // station table lives in a prototype, and prototypes are read at process start.
         var scale = Math.Max(0f, _cfg.GetCVar(AiCVars.BackupPowerScale));
         var watts = (int) MathF.Round(baseWatts * scale);
 
@@ -134,18 +135,18 @@ public sealed partial class BackupPowerSystem : EntitySystem
 
             _served.Add(station);
 
-            // НЕ ставим сразу. Энергосети на этот момент ещё не существует.
+            // Do NOT deploy right away. The power grid does not exist yet at this point.
             //
-            // Группы узлов собирает NodeGroupSystem в своём Update, отложенной очередью
-            // (QueueReflood -> _toReflood -> FloodFillNode). На раздаче должностей, то есть в тот же
-            // тик, что и старт раунда, Node.NodeGroup у кабелей ещё null, и поиск по главной сети
-            // честно находит ноль тайлов. Первая версия этой правки ровно так и сломалась: тесты
-            // показали ноль генераторов при живой логике поиска.
+            // Node groups are assembled by NodeGroupSystem in its own Update, via a deferred queue
+            // (QueueReflood -> _toReflood -> FloodFillNode). At job assignment, that is, on the same
+            // tick as round start, cables' Node.NodeGroup is still null, and a search over the main
+            // grid honestly finds zero tiles. The first version of this change broke exactly this
+            // way: tests showed zero generators with live search logic.
             _pending.Add(new Pending(station, watts, tuning?.Anchors));
         }
     }
 
-    /// <summary>Станции, ждущие размещения, пока движок не соберёт энергосети.</summary>
+    /// <summary>Stations waiting for placement until the engine assembles the power grids.</summary>
     private readonly List<Pending> _pending = new();
 
     private sealed record Pending(EntityUid Station, int Watts, List<string>? Anchors)
@@ -154,11 +155,12 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Сколько ждать появления энергосети, прежде чем признать отказ.
+    /// How long to wait for the power grid to appear before declaring a failure.
     ///
-    /// Десять секунд — заведомо больше, чем нужно движку на первый флуд, и заведомо меньше, чем
-    /// время, за которое кто-то заметит темноту. Истёк — пишем ошибку: молчаливое «сеть так и не
-    /// появилась» выглядело бы точно как «генераторы не нужны».
+    /// Ten seconds is deliberately more than the engine needs for its first flood fill, and
+    /// deliberately less than the time it takes someone to notice the dark. Once it expires we log
+    /// an error: a silent "the grid never appeared" would look exactly like "generators are not
+    /// needed".
     /// </summary>
     private const float DeployTimeoutSeconds = 10f;
 
@@ -192,7 +194,7 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Настройка для выбранной на этот раунд карты, если она заведена.
+    /// Tuning for the map selected for this round, if one is set up.
     /// </summary>
     private AiBackupPowerPrototype? SelectedMapTuning()
     {
@@ -205,21 +207,22 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Есть ли на этой станции хоть один игрок с должностью из инженерного департамента.
+    /// Whether there is at least one player on this station with a job from the engineering
+    /// department.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Состав отдела берётся из прототипа департамента, а не списком роль-за-ролью в коде: форк,
-    /// добавивший свою инженерную должность, учтётся сам. Для апстрима это
-    /// <c>AtmosphericTechnician</c>, <c>ChiefEngineer</c>, <c>StationEngineer</c>,
+    /// The department's roster is taken from the department prototype rather than a role-by-role
+    /// list in code: a fork that adds its own engineering job gets counted automatically. For
+    /// upstream that is <c>AtmosphericTechnician</c>, <c>ChiefEngineer</c>, <c>StationEngineer</c>,
     /// <c>TechnicalAssistant</c> (<c>Roles/Jobs/departments.yml</c>).
     /// </para>
     /// <para>
-    /// <b>Публичный ради теста, и это осознанно.</b> Проверить условие, поднимая
-    /// <c>RulePlayerJobsAssignedEvent</c> вручную, нельзя: на него подписан
-    /// <c>AntagSelectionSystem</c>, и вне последовательности старта раунда он валится с
-    /// «_postSpawnRules was null». То есть единственный способ проверить решение — спросить о нём
-    /// напрямую.
+    /// <b>Public for the sake of the test, and that is deliberate.</b> The condition cannot be
+    /// checked by raising <c>RulePlayerJobsAssignedEvent</c> manually: <c>AntagSelectionSystem</c>
+    /// is subscribed to it, and outside the round-start sequence it blows up with
+    /// "_postSpawnRules was null". So the only way to test the decision is to ask about it
+    /// directly.
     /// </para>
     /// </remarks>
     public bool EngineeringOnDuty(EntityUid station)
@@ -228,16 +231,17 @@ public sealed partial class BackupPowerSystem : EntitySystem
 
         if (!_protoMan.TryIndex<DepartmentPrototype>(departmentId, out var department))
         {
-            // Отказ громкий. Молча считать, что инженеров нет, — значит ставить генератор каждую
-            // смену, включая полностью укомплектованные, и узнать об этом от игроков.
+            // The failure is loud. Silently assuming there are no engineers would mean deploying a
+            // generator every shift, including fully staffed ones, and finding out about it from
+            // the players.
             _sawmill.Error(
                 $"департамент '{departmentId}' не найден — резервное питание не ставится. " +
                 "Проверь ai.backup_power_department");
             return true;
         }
 
-        // Нет компонента должностей — нечего и считать. Такое бывает у не-станций (аутпост
-        // ядерщиков, ЦК): резервное питание им не нужно.
+        // No jobs component — nothing to count. That happens for non-stations (the nuke ops
+        // outpost, CentCom): they don't need backup power.
         if (!TryComp<StationJobsComponent>(station, out var stationJobs))
             return true;
 
@@ -256,23 +260,23 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Поставить генераторы на станцию.
+    /// Place generators on the station.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Место — только тайл, на котором УЖЕ лежит высоковольтный кабель, и это не удобство, а
-    /// требование. <c>PowerSupplier</c> подключается через <c>CableDeviceNode</c>, а тот
-    /// (<c>Content.Server/Power/Nodes/CableDeviceNode.cs</c>) соединяется исключительно с
-    /// <c>CableNode</c> в том же тайле и только у заякоренной сущности. Генератор, поставленный не
-    /// на кабель, — мёртвый металл, который гудит и не даёт ничего, и никакой ошибки при этом не
-    /// будет.
+    /// The location is only a tile that ALREADY has a high-voltage cable on it, and that is a
+    /// requirement, not a convenience. <c>PowerSupplier</c> connects through
+    /// <c>CableDeviceNode</c>, and that (<c>Content.Server/Power/Nodes/CableDeviceNode.cs</c>)
+    /// connects exclusively to a <c>CableNode</c> on the same tile, and only for an anchored
+    /// entity. A generator placed off the cable is dead metal that hums and provides nothing, with
+    /// no error whatsoever.
     /// </para>
     /// <para>
-    /// Тайлы берутся вокруг SMES, а не случайные. Во-первых, SMES по определению стоит на ГЛАВНОЙ
-    /// сети — попасть на изолированный солнечный остров невозможно. Во-вторых, это инженерное
-    /// помещение: генератор оказывается там, где ему место, рядом с тем, что он питает. Случайный
-    /// тайл (<c>TryFindRandomTileOnStation</c>, которым пользуются variation-пассы) почти никогда
-    /// не окажется кабельным.
+    /// Tiles are taken around an SMES, not random ones. First, an SMES by definition sits on the
+    /// MAIN grid — landing on an isolated solar island is impossible. Second, this is an
+    /// engineering space: the generator ends up where it belongs, next to what it powers. A random
+    /// tile (<c>TryFindRandomTileOnStation</c>, used by variation passes) will almost never turn
+    /// out to be a cable tile.
     /// </para>
     /// </remarks>
     private bool Deploy(EntityUid station, int watts, List<string>? anchors)
@@ -289,23 +293,24 @@ public sealed partial class BackupPowerSystem : EntitySystem
 
             var uid = Spawn(GeneratorProto, coords);
 
-            // Мощность ставится здесь, а не только в прототипе: иначе ai.backup_power_watts нельзя
-            // было бы подкрутить на живом сервере, а пересборка кикает всех играющих.
+            // Power is set here, not only in the prototype: otherwise ai.backup_power_watts could
+            // not be tweaked on a live server, and a rebuild kicks everyone playing.
             if (TryComp<PowerSupplierComponent>(uid, out var supplier))
                 supplier.MaxSupply = perUnit;
 
             placed++;
         }
 
-        // Ноль здесь чаще всего значит «сеть ещё не собрана», а не «места нет»: вызывающий
-        // повторит попытку в следующем тике и признает отказ только по таймауту.
+        // Zero here most often means "the grid isn't assembled yet", not "no room": the caller will
+        // retry on the next tick and only declare a failure on timeout.
         if (placed == 0)
             return false;
 
-        // Недобор называется вслух. Молчаливый недобор читается как «работает», хотя мощности
-        // вдвое меньше заказанной, и разбираться с этим будут по жалобам на свет. Разбор карт
-        // показал, что это не теория: на нескольких станциях подходящих тайлов ровно столько,
-        // сколько нужно, и один катwalk от маппера превращает два генератора в один.
+        // A shortfall is called out loud. A silent shortfall reads as "it works" even though power
+        // is half of what was ordered, and it would only get sorted out from complaints about the
+        // dark. Map analysis showed this is not theoretical: on several stations the number of
+        // suitable tiles is exactly what's needed, and one catwalk from a mapper turns two
+        // generators into one.
         if (placed < wanted)
         {
             _sawmill.Warning(
@@ -323,29 +328,29 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Свободные тайлы с высоковольтным кабелем, соседние с SMES этой станции.
+    /// Free tiles with a high-voltage cable, adjacent to this station's SMES units.
     /// </summary>
     /// <summary>
-    /// Тайлы главной энергосети станции, куда можно поставить генератор, в порядке предпочтения.
+    /// Tiles on the station's main power grid where a generator can be placed, in preference order.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Первая версия искала только рядом с SMES, и это было ошибкой.</b> Разбор всех тринадцати
-    /// карт ротации показал, что банки SMES обставлены кабельными терминалами, катwalk'ами и
-    /// подстанциями почти вплотную: на Sushi подходящих тайлов вышло <b>ноль</b> — то есть система
-    /// молча не поставила бы ничего, — на Oasis один, на Marathon два, а на Bagel четыре из пяти
-    /// оказались в дальних солнечных отсеках вместо инженерного. Соседство с SMES — не то место,
-    /// где есть свободные тайлы.
+    /// <b>The first version searched only near an SMES, and that was a mistake.</b> Analysing all
+    /// thirteen rotation maps showed that SMES banks are surrounded by cable terminals, catwalks
+    /// and substations almost wall-to-wall: on Sushi the number of suitable tiles came out to
+    /// <b>zero</b> — meaning the system would have silently placed nothing — one on Oasis, two on
+    /// Marathon, and on Bagel four out of five ended up in distant solar bays instead of
+    /// engineering. Proximity to an SMES is not where the free tiles are.
     /// </para>
     /// <para>
-    /// Ищем поэтому по <b>всей главной сети</b>. Главная — та, в которой больше всего SMES; это
-    /// снимает вторую ошибку той же версии: она не различала сети и могла поставить генератор на
-    /// изолированный солнечный остров, где нет ни одного потребителя (на Packed такой SMES есть,
-    /// с тридцатью одной панелью и без APC).
+    /// So we search the <b>entire main grid</b> instead. "Main" is the one with the most SMES
+    /// units; this fixes the second mistake of that same version: it did not distinguish grids and
+    /// could place a generator on an isolated solar island with not a single consumer on it (Packed
+    /// has exactly such an SMES, with thirty-one panels and no APC).
     /// </para>
     /// <para>
-    /// Сеть берётся из рантайма, а не обходом графа кабелей: у каждого узла есть
-    /// <c>Node.NodeGroup</c>, и движок уже посчитал связность за нас.
+    /// The grid is taken from the runtime rather than by walking the cable graph: every node has a
+    /// <c>Node.NodeGroup</c>, and the engine has already computed connectivity for us.
     /// </para>
     /// </remarks>
     private List<EntityCoordinates> PlacementTiles(EntityUid station, List<string>? anchors)
@@ -380,9 +385,9 @@ public sealed partial class BackupPowerSystem : EntitySystem
             if (!seen.Add((gridUid, tile)))
                 continue;
 
-            // Штатная проверка апстрима, а не своя. Прошлая версия считала занятым любой
-            // заякоренный сосед, включая катwalk и трубу, — по физике генератор рядом с ними
-            // прекрасно стоит, а вот стена или машина действительно мешают.
+            // Upstream's own standard check, not a custom one. The previous version considered any
+            // anchored neighbour as occupying the tile, including a catwalk or a pipe — physically
+            // a generator sits fine next to those, whereas a wall or a machine genuinely blocks it.
             if (!_anchorable.TileFree((gridUid, grid), tile,
                     (int) CollisionGroup.MachineLayer, (int) CollisionGroup.MachineMask))
             {
@@ -415,11 +420,11 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Главная энергосеть станции — та, в которой больше всего SMES.
+    /// The station's main power grid — the one with the most SMES units.
     /// </summary>
     /// <remarks>
-    /// «Больше всего SMES», а не «первая найденная»: на каждой карте есть солнечные острова со
-    /// своим SMES, и попасть генератором туда значит питать сеть без потребителей.
+    /// "The most SMES units", not "the first one found": every map has solar islands with their own
+    /// SMES, and landing a generator there means powering a grid with no consumers.
     /// </remarks>
     private INodeGroup? MainNet(EntityUid station)
     {
@@ -453,12 +458,12 @@ public sealed partial class BackupPowerSystem : EntitySystem
     }
 
     /// <summary>
-    /// Мировые позиции маяков станции, чьё название совпадает с одним из названных.
+    /// World positions of the station's beacons whose name matches one of the named ones.
     /// </summary>
     /// <remarks>
-    /// Сравнение по вхождению подстроки без учёта регистра: в списке стоит «Engineering», а на карте
-    /// маяк может называться «Engineering Storage». Требовать точного совпадения значило бы, что
-    /// предпочтение молча не работает на половине карт.
+    /// A case-insensitive substring match: the list has "Engineering", but on the map a beacon might
+    /// be named "Engineering Storage". Requiring an exact match would mean the preference silently
+    /// fails to work on half the maps.
     /// </remarks>
     private List<Vector2> AnchorPositions(EntityUid station, List<string> anchors)
     {
@@ -489,7 +494,7 @@ public sealed partial class BackupPowerSystem : EntitySystem
         return result;
     }
 
-    /// <summary>Мировые позиции SMES станции — запасное предпочтение, когда маяков нет.</summary>
+    /// <summary>World positions of the station's SMES units — the fallback preference when there are no beacons.</summary>
     private List<Vector2> SmesPositions(EntityUid station)
     {
         var result = new List<Vector2>();

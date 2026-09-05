@@ -41,7 +41,7 @@ public sealed class AgentDebugRouter
 
     private readonly AgentEventBus _bus;
     private readonly AgentDirectory _agents;
-    /// <summary>Файловая система ядра. Может быть <c>null</c> до первой сессии.</summary>
+    /// <summary>The core's file system. Can be <c>null</c> before the first session.</summary>
     private readonly Func<Vfs.Vfs?> _vfs;
 
     private readonly Func<int> _round;
@@ -136,9 +136,10 @@ public sealed class AgentDebugRouter
             ring_used = _bus.Count,
             round = _round(),
 
-            // Раньше здесь стояло поле session с константой «current» и одиночный pending_input.
-            // Оба врали ровно с того дня, как агентов стало двое: показывали того, кто занял тело
-            // последним, и его же ящик. Теперь и то, и другое — свойство строки ростера.
+            // This used to be a `session` field holding the constant "current" plus a single
+            // pending_input. Both started lying the day there got to be two agents: they showed
+            // whoever last claimed a body, and that one's inbox. Now both are a property of the
+            // roster row.
             agents = _agents.Roster(),
         });
 
@@ -146,19 +147,19 @@ public sealed class AgentDebugRouter
         AgentDebugResponse.Ok(AgentDebugState.CaptureGlobal(_bus, _agents, _vfs(), _round()));
 
     /// <summary>
-    /// Снимок одного агента.
+    /// One agent's snapshot.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Неизвестный идентификатор — <b>200 с полем agent: null</b>, а не 404. Агент мог уйти между
-    /// кадром <c>session.started</c> и этим запросом, и это штатная гонка, а не ошибка клиента.
-    /// Клиент считает 404 терминальным и после него навсегда останавливает опрос — то есть
-    /// «правильный» код погасил бы весь отладчик из-за нормального события.
+    /// An unknown identifier is <b>200 with an agent: null field</b>, not 404. The agent could have
+    /// left between the <c>session.started</c> frame and this request, and that is a normal race,
+    /// not a client error. The client treats 404 as terminal and stops polling forever after one —
+    /// so the "correct" code here would kill the whole debugger over a normal event.
     /// </para>
     /// <para>
-    /// А вот отсутствие параметра — 400, и это не непоследовательность. Молча выбрать «первого
-    /// попавшегося» значило бы вернуть ту самую ошибку, ради устранения которой этот маршрут и
-    /// появился: показать не того агента, ничем не выдав подмены.
+    /// A missing parameter, on the other hand, is 400, and that is not an inconsistency. Silently
+    /// picking "whichever agent comes first" would reintroduce the exact bug this route exists to
+    /// fix: showing the wrong agent without any sign of the substitution.
     /// </para>
     /// </remarks>
     private AgentDebugResponse Session(IReadOnlyDictionary<string, string> query)
@@ -188,10 +189,11 @@ public sealed class AgentDebugRouter
         sb.Append(",\"seq\":").Append(read.Seq);
         sb.Append(",\"resync\":").Append(read.Resync ? "true" : "false");
 
-        // Ростер едет вместе с лентой, но КАДРОМ НЕ ЯВЛЯЕТСЯ: к нему не относятся ни курсор, ни
-        // resync, и применять его как событие нельзя. Он снимается в момент возврата длинного
-        // опроса, то есть может быть моложе запроса на все двадцать пять секунд. Сеять агента по
-        // ростеру поэтому нельзя — только по кадру session.started.
+        // The roster rides along with the stream but IS NOT A FRAME: neither the cursor nor resync
+        // applies to it, and it must not be treated as an event. It is captured at the moment the
+        // long poll returns, so it can be up to the full twenty-five seconds younger than the
+        // request. An agent must therefore never be seeded from the roster — only from the
+        // session.started frame.
         sb.Append(",\"agents\":")
           .Append(JsonSerializer.Serialize(_agents.Roster(), AgentDebugJson.Options));
 
@@ -246,9 +248,10 @@ public sealed class AgentDebugRouter
         var text = Str(root, "text") ?? "";
         var id = Str(root, "agent");
 
-        // Адресат обязателен, и подставлять умолчание нельзя. Сообщение оператора уходит в ящик
-        // конкретного агента и всплывает у него в следующем ходу; отправленное «кому-нибудь», оно
-        // с равным успехом попало бы боевому роботу вместо ядра, и заметить это было бы негде.
+        // The recipient is mandatory, and there is no defaulting it. An operator's message goes
+        // into a specific agent's inbox and surfaces for it on the next turn; sent "to whoever",
+        // it could just as easily land on a combat borg instead of the core, and nothing would
+        // catch that.
         if (string.IsNullOrWhiteSpace(id))
             return AgentDebugResponse.Error(400, "нужно поле agent — список даёт GET /state");
 
@@ -276,7 +279,8 @@ public sealed class AgentDebugRouter
 
     private AgentDebugResponse ChangeMemory(JsonElement root)
     {
-        // Параметра target больше нет: хранилище одно. Заметки о людях правятся своей ручкой.
+        // The target parameter is gone: there is one store now. Notes about people are edited
+        // through their own knob.
         var result = _changeMemory(Str(root, "action") ?? "add", Str(root, "match") ?? "",
             Str(root, "content") ?? "");
 
@@ -294,7 +298,7 @@ public sealed class AgentDebugRouter
             // but the model goes on reading the frozen zone-0 text until the next prefix rebuild —
             // so an operator edits memory, sees the agent behave identically, and concludes the
             // endpoint does not work.
-            // Компакция теперь у каждого агента своя, и «следующая» — это четыре разных момента.
+            // Compaction is now per-agent, so "next" is four different moments.
             visible_to_model = "next_compaction_of_each_agent",
             scope = "process",
             seq = _bus.Seq,

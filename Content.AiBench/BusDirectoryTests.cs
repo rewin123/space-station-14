@@ -9,12 +9,12 @@ using NUnit.Framework;
 namespace Content.AiBench;
 
 /// <summary>
-/// Витрина агентов: кто на ней стоит, в каком порядке и что происходит при переклейме.
+/// The agent roster: who's on it, in what order, and what happens on a re-claim.
 ///
 /// <para>
-/// Тесты чистые — ни мира, ни сессии, ни сокета. Это и есть довод, по которому
-/// <see cref="AgentHandle"/> несёт делегаты, а не ссылку на <c>AgentSession</c>: собрать
-/// настоящую сессию в тесте нельзя, а проверять витрину надо.
+/// The tests are pure — no world, no session, no socket. That's precisely the argument for why
+/// <see cref="AgentHandle"/> carries delegates rather than a reference to <c>AgentSession</c>:
+/// a real session can't be assembled in a test, yet the roster still needs testing.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -45,12 +45,12 @@ public sealed class BusDirectoryTests
     }
 
     /// <summary>
-    /// Ядро первым, дальше по алфавиту.
+    /// The core comes first, then alphabetical order.
     /// </summary>
     /// <remarks>
-    /// Порядок задаёт сервер, а не клиент, чтобы стороны не разошлись. Чисто алфавитный поставил
-    /// бы <c>combat-1</c> раньше <c>core</c>, и вкладка по умолчанию прыгала бы в зависимости от
-    /// того, кто в этом раунде вообще есть.
+    /// The order is dictated by the server, not the client, so the two sides don't diverge. A
+    /// purely alphabetical order would put <c>combat-1</c> ahead of <c>core</c>, and the default
+    /// tab would jump around depending on who happens to exist in a given round.
     /// </remarks>
     [Test]
     public void OrderPutsTheCoreFirst()
@@ -67,12 +67,12 @@ public sealed class BusDirectoryTests
     }
 
     /// <summary>
-    /// Занятый идентификатор — отказ, а не затирание.
+    /// A taken identifier is a refusal, not an overwrite.
     /// </summary>
     /// <remarks>
-    /// Совпадение означает, что два агента пишут в один каталог памяти и один файл диалога.
-    /// Витрина — единственное место, где это вообще заметно снаружи, и потому она обязана об
-    /// этом сообщить, а не показать одного вместо двух.
+    /// A collision means two agents are writing into the same memory directory and the same
+    /// dialogue file. The roster is the only place this is even visible from the outside, so it
+    /// must report the problem instead of showing one agent in place of two.
     /// </remarks>
     [Test]
     public void AddOnATakenIdIsRefused()
@@ -86,12 +86,12 @@ public sealed class BusDirectoryTests
     }
 
     /// <summary>
-    /// Снимается только свой хендл.
+    /// Only a handle's own entry can be removed by it.
     /// </summary>
     /// <remarks>
-    /// Сценарий из жизни: борга переклеймили в том же тике. Отпускание СТАРОЙ сессии не должно
-    /// снимать с витрины НОВОГО агента — иначе живой робот пропадает из отладчика насовсем, а
-    /// выглядит это как «он не запустился».
+    /// A scenario from real life: a borg gets re-claimed within the same tick. Releasing the OLD
+    /// session must not remove the NEW agent from the roster — otherwise a live robot disappears
+    /// from the debugger for good, and it looks like "it never started".
     /// </remarks>
     [Test]
     public void RemoveWithAForeignHandleDoesNothing()
@@ -108,7 +108,7 @@ public sealed class BusDirectoryTests
         Assert.That(directory.Find("borg-1"), Is.SameAs(fresh));
     }
 
-    /// <summary>Подметание убирает хендлы, за которыми не стоит живой сессии.</summary>
+    /// <summary>Sweeping removes handles that no longer have a live session behind them.</summary>
     [Test]
     public void RetainOnlyDropsHandlesWithoutASession()
     {
@@ -124,13 +124,14 @@ public sealed class BusDirectoryTests
     }
 
     /// <summary>
-    /// Чтение с чужого потока во время правок с главного.
+    /// Reading from a foreign thread while the main thread is mutating.
     /// </summary>
     /// <remarks>
-    /// Ровно та ситуация, ради которой витрина и написана: главный поток занимает и отпускает тела,
-    /// HTTP-поток в это время собирает ростер. Прежнее решение — обычный <c>Dictionary</c> — на
-    /// таком сценарии не бросало исключение, а могло уйти в бесконечный цикл внутри цепочки
-    /// корзин, и симптомом был сервер, который отчитывается о живом агенте и перестаёт тикать.
+    /// Exactly the situation the roster was written for: the main thread claims and releases
+    /// bodies while an HTTP thread is assembling the roster at the same time. The previous
+    /// solution — a plain <c>Dictionary</c> — didn't throw an exception under this scenario, but
+    /// could enter an infinite loop inside a bucket chain, and the symptom was a server that
+    /// reports a live agent and then stops ticking.
     /// </remarks>
     [Test]
     public void ReadingFromAnotherThreadWhileTheMainThreadMutates()

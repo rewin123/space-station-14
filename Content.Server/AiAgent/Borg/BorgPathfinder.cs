@@ -5,71 +5,75 @@ using Robust.Shared.GameObjects;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Свой поиск пути по всей станции.
+/// Our own pathfinder covering the whole station.
 ///
 /// <para>
-/// <b>Зачем понадобился свой.</b> Апстримовый <c>PathfindingSystem</c> не рассчитан на переходы
-/// через станцию: <c>NodeLimit = 512</c> обрывает разворот графа, и A* возвращает <c>NoPath</c>.
-/// Штатным NPC этого хватает — они дерутся и прибираются в пределах комнаты, — а робот, которому
-/// сказали «иди в инженерный», упирался в лимит и сообщал «дороги нет», стоя в проходимом
-/// коридоре. Замерено на бою: три шага на восток — «дошёл», Bar → Bridge — «дороги нет».
+/// <b>Why we needed our own.</b> The upstream <c>PathfindingSystem</c> isn't built for
+/// crossings the length of the station: <c>NodeLimit = 512</c> cuts off graph expansion, and A*
+/// returns <c>NoPath</c>. That's plenty for regular NPCs — they fight and clean up within a
+/// room — but a robot told "go to Engineering" hit the limit and reported "no path," while
+/// standing in a perfectly walkable corridor. Measured in combat: three steps east — "arrived,"
+/// Bar → Bridge — "no path."
 /// </para>
 /// <para>
-/// Обходной приём с цепочкой навигационных маяков это лечил плохо: маяки расставлены по смыслу, а
-/// не по проходимости, и цепочка «ближайших» упиралась в запертые отсеки. Здесь честный поиск.
+/// The workaround with a chain of navigation beacons handled this poorly: beacons are placed by
+/// meaning, not by walkability, and a chain of "nearest" ones ran into locked compartments. Here
+/// we do an honest search instead.
 /// </para>
 /// <para>
-/// <b>По чему ищем.</b> По <see cref="NavMapComponent"/> — той самой карте, которую игра уже
-/// строит и поддерживает для наручного навигационного планшета. Это побитовая карта всей станции:
-/// пол, стены и шлюзы, чанками 8×8. Ни одного broadphase-запроса, ни одного обхода сущностей —
-/// поэтому полный поиск через станцию стоит дешевле, чем один <c>look</c>.
+/// <b>What we search over.</b> The <see cref="NavMapComponent"/> — the very same map the game
+/// already builds and maintains for the handheld navigation tablet. It's a bitmap of the whole
+/// station: floor, walls, and airlocks, in 8×8 chunks. Not a single broadphase query, not a single
+/// entity traversal — which is why a full search across the station costs less than one
+/// <c>look</c>.
 /// </para>
 /// <para>
-/// <b>Что этот поиск НЕ делает.</b> Он не ведёт робота: найденный путь режется на короткие ноги и
-/// отдаётся апстримовому рулевому. Тот умеет всё, чего не умеет карта, — физику, обход мебели и
-/// людей, открывание дверей. Разделение намеренное: глобальный маршрут наш, локальное движение
-/// чужое и проверенное.
+/// <b>What this search does NOT do.</b> It doesn't drive the robot: the found path is cut into
+/// short legs and handed off to the upstream steering system. That system knows everything the
+/// map doesn't — physics, dodging furniture and people, opening doors. The split is deliberate:
+/// the global route is ours, local movement is someone else's and battle-tested.
 /// </para>
 /// </summary>
 public static class BorgPathfinder
 {
     /// <summary>
-    /// Во что обошёлся один поиск.
+    /// What one search cost.
     /// </summary>
     /// <remarks>
-    /// Заведено потому, что перепланировка маршрута идёт не через шину мира, а прямо в
-    /// <c>Update</c>, — то есть её цена не попадала ни в бюджет кадра, ни в профиль, ни в
-    /// <c>aiagent cost</c>. Ровно из-за этой слепой зоны поломка со счётчиком заторов держалась
-    /// живой при чистом профиле: в журнале было видно 'look' и 'observation', а восемьдесят
-    /// миллисекунд поиска в секунду не было видно нигде.
+    /// Set up because route replanning doesn't go through the world bus but runs straight inside
+    /// <c>Update</c> — meaning its cost showed up in neither the frame budget, nor the profiler,
+    /// nor <c>aiagent cost</c>. Precisely because of this blind spot, the pathfinding-stall bug
+    /// stayed alive under a clean profile: the log showed 'look' and 'observation', while eighty
+    /// milliseconds of search per second was invisible anywhere.
     /// </remarks>
     public sealed class PathStats
     {
-        /// <summary>Снятых с очереди узлов.</summary>
+        /// <summary>Nodes popped off the queue.</summary>
         public int Expanded;
 
-        /// <summary>Проверок проходимости. Самое дорогое здесь: каждая — поход в чужой навмеш.</summary>
+        /// <summary>Walkability checks. The most expensive part: each one is a trip into someone else's navmesh.</summary>
         public int Probes;
     }
 
     /// <summary>
-    /// Потолок развёрнутых узлов.
+    /// Ceiling on expanded nodes.
     ///
-    /// На порядок больше апстримовых 512 и всё ещё дёшев: узел это чтение из словаря чанков и
-    /// сравнение битов. Существует как страховка от поиска по бесконечной пустоте, а не как
-    /// бюджет — реальный переход через станцию укладывается в тысячи.
+    /// An order of magnitude above the upstream 512, and still cheap: a node is a chunk-dictionary
+    /// read plus a bit comparison. It exists as insurance against searching through infinite empty
+    /// space, not as a real budget — an actual station-wide crossing lands in the thousands.
     /// </summary>
     public const int NodeLimit = 60_000;
 
     /// <summary>
-    /// Во сколько раз дороже пройти через шлюз.
+    /// How many times more expensive it is to pass through an airlock.
     ///
-    /// Дверь физически проходима, но её надо открыть, а это секунды и иногда отказ по доступу.
-    /// Штраф заставляет предпочесть коридор в обход — ровно так же выбирает человек.
+    /// A door is physically walkable, but it has to be opened, which costs seconds and sometimes
+    /// an access denial. The penalty makes the search prefer a detour through the corridor —
+    /// exactly the choice a person would make.
     /// </summary>
     private const float DoorCost = 4f;
 
-    /// <summary>Тайл проходим: под ногами пол и нет стены. Шлюз проходим — у борга есть доступ.</summary>
+    /// <summary>A tile is walkable if there's floor underfoot and no wall. An airlock is walkable if the borg has access.</summary>
     public static bool Passable(NavMapComponent navMap, Vector2i tile)
     {
         if (!TryGetTileData(navMap, tile, out var data))
@@ -78,7 +82,7 @@ public static class BorgPathfinder
         if ((data & SharedNavMapSystem.FloorMask) == 0)
             return false;
 
-        // Стена и окно — обе категории Wall. Окно прозрачно для глаз, но не для корпуса.
+        // Both walls and windows fall under the Wall category. A window is transparent to eyes but not to a chassis.
         return (data & SharedNavMapSystem.WallMask) == 0;
     }
 
@@ -100,20 +104,20 @@ public static class BorgPathfinder
     }
 
     /// <summary>
-    /// Ближайший проходимый тайл к точке, или <c>null</c>.
+    /// The nearest walkable tile to a point, or <c>null</c>.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Нужен, потому что цель почти никогда не задаётся проходимым тайлом: навигационный маяк —
-    /// это вывеска на стене, а хендл двери — сама дверь. Идти надо «к», а не «в».
+    /// Needed because the goal is almost never a walkable tile itself: a navigation beacon is a
+    /// sign on a wall, and a door handle is the door itself. You need to walk "to" it, not "into" it.
     /// </para>
     /// <para>
-    /// Внутри кольца тайлы перебираются ПО РАССТОЯНИЮ, а не по порядку индексов. Раньше цикл шёл
-    /// <c>dx</c> от <c>-r</c>, <c>dy</c> от <c>-r</c>, и первым кандидатом кольца r=1 оказывался
-    /// угол (−1,−1): робота ставило на диагональ от цели, хотя сторона рядом была свободна. Само
-    /// расстояние при этом укладывается в 1.5 и проверку дальности проходит, а вот
-    /// <c>InRangeUnobstructed</c> с диагонали цепляет угол и отказывает — «дошёл, но работать не
-    /// могу», без единой строки о причине.
+    /// Within a ring, tiles are iterated BY DISTANCE, not by index order. The loop used to run
+    /// <c>dx</c> from <c>-r</c>, <c>dy</c> from <c>-r</c>, and the first candidate of ring r=1
+    /// turned out to be the corner (−1,−1): the robot would be placed diagonally from the target
+    /// even though the adjacent side was free. The distance itself came out to 1.5 and passed the
+    /// range check, but <c>InRangeUnobstructed</c> from the diagonal catches the corner and
+    /// refuses — "arrived, but can't work," without a single line about why.
     /// </para>
     /// </remarks>
     public static Vector2i? NearestPassable(NavMapComponent navMap, Vector2i around, int radius = 12,
@@ -141,7 +145,7 @@ public static class BorgPathfinder
                 }
             }
 
-            // Квадрат расстояния — целое, сравнение точное. Сторона (1) идёт раньше угла (2).
+            // Squared distance is an integer, so the comparison is exact. A side (1) sorts before a corner (2).
             ring.Sort((a, b) => Sq(a - around).CompareTo(Sq(b - around)));
 
             foreach (var candidate in ring)
@@ -157,26 +161,28 @@ public static class BorgPathfinder
     private static int Sq(Vector2i v) => v.X * v.X + v.Y * v.Y;
 
     /// <summary>
-    /// Путь по тайлам от старта до цели, или <c>null</c>, если его нет.
+    /// A tile-by-tile path from start to goal, or <c>null</c> if none exists.
     /// </summary>
     /// <remarks>
-    /// Соседи только по четырём сторонам. Диагонали дали бы дорогу короче на проценты, а стоили бы
-    /// проверки срезанных углов: по диагонали между двумя стенами корпус не пройдёт, и путь,
-    /// который карта считает верным, кончился бы роботом, застрявшим в дверном косяке.
+    /// Neighbors are only the four cardinal sides. Diagonals would shave a few percent off the
+    /// route length but would cost cut-corner checks: a chassis can't pass diagonally between two
+    /// walls, and a path the map considers valid would end with the robot stuck in a doorframe.
     /// </remarks>
     /// <param name="walkable">
-    /// Дополнительная проверка тайла — обычно «видит ли его апстримовый навмеш».
+    /// An extra tile check — usually "does the upstream navmesh see it too."
     ///
     /// <para>
-    /// Без неё поиск врёт в одну сторону: карта <see cref="NavMapComponent"/> знает пол, стены и
-    /// шлюзы, но НЕ знает машин, мебели и всего прочего, что стоит на полу. Путь спокойно
-    /// прокладывался сквозь тайл, занятый оборудованием, локальный рулевой на нём вставал, а
-    /// перепланировка с того же места давала ровно тот же путь. На бою это выглядело так: робот
-    /// прошёл 27 тайлов из 47 и встал в чистом коридоре, где ни одной двери в четырёх тайлах.
+    /// Without it the search lies in one direction: the <see cref="NavMapComponent"/> map knows
+    /// floors, walls, and airlocks, but does NOT know about machines, furniture, or anything else
+    /// sitting on the floor. The path was happily laid straight through a tile occupied by
+    /// equipment, the local steering system stalled on it, and replanning from the same spot
+    /// produced the exact same path. In combat this looked like: the robot walked 27 of 47 tiles
+    /// and then stopped in an open corridor, with not a single door within four tiles.
     /// </para>
     /// <para>
-    /// С этой проверкой поиск идёт по ТОМУ ЖЕ графу, что и рулевой, и отличается от него ровно
-    /// одним — отсутствием потолка в 512 узлов, ради чего всё и затевалось.
+    /// With this check, the search runs over the SAME graph as the steering system, and differs
+    /// from it in exactly one way — the absence of the 512-node ceiling, which is the whole reason
+    /// this exists.
     /// </para>
     /// </param>
     public static List<Vector2i>? FindPath(NavMapComponent navMap, Vector2i start, Vector2i goal,
@@ -258,12 +264,12 @@ public static class BorgPathfinder
     }
 
     /// <summary>
-    /// Разрезать путь на ноги, которые по силам апстримовому рулевому.
+    /// Cut the path into legs the upstream steering system can handle.
     /// </summary>
     /// <remarks>
-    /// Каждая нога обязана укладываться в его <c>NodeLimit = 512</c> полигонов, поэтому берём
-    /// точку раз в <paramref name="every"/> тайлов. Последний тайл добавляется всегда: без него
-    /// робот останавливался бы за несколько шагов до цели.
+    /// Each leg has to fit within its <c>NodeLimit = 512</c> polygons, so we take a point every
+    /// <paramref name="every"/> tiles. The last tile is always added: without it the robot would
+    /// stop a few steps short of the goal.
     /// </remarks>
     public static List<Vector2i> ToLegs(List<Vector2i> path, int every = 6, Func<Vector2i, bool>? reachable = null)
     {
@@ -273,10 +279,10 @@ public static class BorgPathfinder
         {
             var tile = path[i];
 
-            // Пересадка должна стоять там, куда локальный рулевой умеет дойти. Наша карта знает
-            // пол, стены и шлюзы, но не знает мебели и машин: точка раз в шесть тайлов вполне
-            // может попасть на тайл, занятый столом, и тогда нога не пройдёт целиком. Если такое
-            // видно заранее — сдвигаемся на соседний тайл пути.
+            // A handoff point must be somewhere the local steering system can actually reach. Our
+            // map knows floors, walls, and airlocks, but not furniture and machines: a point every
+            // six tiles can easily land on a tile occupied by a table, and then the leg won't
+            // complete. If we can see that in advance, shift to a neighboring tile on the path.
             if (reachable != null && !reachable(tile))
             {
                 var shifted = false;

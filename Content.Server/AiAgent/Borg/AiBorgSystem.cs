@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Content.Server.AiAgent.Components;
 using Content.Server.AiAgent.Core;
+using Content.Server.AiAgent.Locale;
 using Content.Shared.DoAfter;
 using Robust.Shared.Containers;
 using Content.Server.GameTicking;
@@ -18,13 +19,14 @@ using Robust.Shared.Log;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Языковая модель в теле борга.
+/// The language model inside a borg body.
 ///
 /// <para>
-/// Второе тело агента и первое подвижное. Всё, что делает агента агентом — петля хода, диалог,
-/// компакция, память, маршрутизация моделей, — берётся готовым: система собирает
-/// <see cref="AgentBody"/> и отдаёт его хосту. Здесь живёт только то, чем борг отличается от
-/// неподвижного глаза: как он занимает тело, как ходит, как видит и что делает руками.
+/// The agent's second body, and its first mobile one. Everything that makes an agent an agent —
+/// the turn loop, dialogue, compaction, memory, model routing — comes ready-made: the system
+/// assembles an <see cref="AgentBody"/> and hands it to the host. What lives here is only what
+/// distinguishes a borg from a stationary eye: how it occupies a body, how it walks, how it sees,
+/// and what it does with its hands.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem : EntitySystem
@@ -41,7 +43,7 @@ public sealed partial class AiBorgSystem : EntitySystem
 
     private ISawmill _sawmill = default!;
 
-    /// <summary>Тела, которые мы уже занимаем. Ключ — сущность шасси.</summary>
+    /// <summary>Bodies we already occupy. Key is the chassis entity.</summary>
     private readonly Dictionary<EntityUid, AiBorgComponent> _claimed = new();
 
     public override void Initialize()
@@ -77,7 +79,7 @@ public sealed partial class AiBorgSystem : EntitySystem
 
     private void OnRoundCleanup(RoundRestartCleanupEvent ev)
     {
-        // Хост сам освобождает сессии; наше дело — не оставить за собой разумов-сирот.
+        // The host releases sessions itself; our job is not to leave orphaned minds behind.
         foreach (var uid in _claimed.Keys.ToList())
             ReleaseBody(uid, "перезапуск раунда");
 
@@ -85,16 +87,16 @@ public sealed partial class AiBorgSystem : EntitySystem
     }
 
     /// <summary>
-    /// Посадить агента в шасси.
+    /// Seat an agent into a chassis.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Порядок здесь не произвольный. <b>Разум ставится первым и он обязателен.</b>
-    /// <c>SharedBorgSystem.CanActivate</c> требует <c>TryGetMind</c>, и без разума шасси не
-    /// активируется: не встанут модули, не включится доступ по ID
-    /// (<c>SharedBorgSystem.OnMindAdded</c>), а скорость останется шаговой. Разум при этом
-    /// безголовый — <c>CreateMind(null)</c>, без игрока: <c>TransferTo</c> спотыкается только об
-    /// <c>ActorComponent</c>, которого у шасси нет.
+    /// The order here isn't arbitrary. <b>The mind is assigned first, and it's mandatory.</b>
+    /// <c>SharedBorgSystem.CanActivate</c> requires <c>TryGetMind</c>, and without a mind the
+    /// chassis won't activate: modules won't come up, ID-based access won't turn on
+    /// (<c>SharedBorgSystem.OnMindAdded</c>), and speed will stay at walking pace. The mind itself
+    /// is headless — <c>CreateMind(null)</c>, with no player: <c>TransferTo</c> only trips over an
+    /// <c>ActorComponent</c>, which the chassis doesn't have.
     /// </para>
     /// </remarks>
     public bool TryClaim(EntityUid borg, out string reason)
@@ -117,15 +119,15 @@ public sealed partial class AiBorgSystem : EntitySystem
             return false;
         }
 
-        // Идентификатор — раньше разума и раньше сессии, потому что именно он выбирает каталог,
-        // куда лягут журнал и файл диалога. Ошибиться здесь дороже всего: два робота с одним id
-        // не падают, а тихо пишут друг поверх друга.
+        // The identifier comes before the mind and before the session, because it's what picks
+        // the directory where the log and dialogue file will land. A mistake here is the most
+        // costly one: two robots with the same id don't crash, they quietly write over each other.
         if (!TryAssignAgentId(comp, out reason))
             return false;
 
         ApplyAgentName(comp);
 
-        // Разум — условие активации, а не украшение. См. remarks.
+        // The mind is a condition for activation, not decoration. See remarks.
         if (!_mind.TryGetMind(borg, out var existing, out _))
         {
             var mind = _mind.CreateMind(null, comp.AgentName);
@@ -137,18 +139,19 @@ public sealed partial class AiBorgSystem : EntitySystem
             comp.Mind = existing;
         }
 
-        // Маркер «здесь живёт LLM-агент». Назван по первому телу, но значит именно это, и боргу
-        // он нужен не для порядка: на пару (маркер, RadioReceiveEvent) повешен приём рации, и без
-        // него робот полностью ГЛУХ к эфиру. На бою это выглядело так — приказ ушёл в Common,
-        // Station AI ответил, борг взял ноль ходов и остался стоять в баре.
+        // The "an LLM agent lives here" marker. Named after the first body, but that's exactly
+        // what it means, and the borg needs it for more than tidiness: radio reception is hung off
+        // the pair (marker, RadioReceiveEvent), and without it the robot is completely DEAF to the
+        // airwaves. In combat this looked like: the order went out on Common, Station AI answered,
+        // the borg took zero turns and stayed standing in the bar.
         EnsureComp<LlmStationAiComponent>(borg);
 
-        // Имя из настроек агента, а не ванильный NameIdentifier.
+        // The name comes from the agent's settings, not the vanilla NameIdentifier.
         //
-        // Прототип выдаёт «Le Borgue (Si-6785)», и в эфир уходило бы именно оно, тогда как SOUL
-        // всю дорогу зовёт агента иначе. На обращение по своему настоящему имени модель тогда не
-        // отзывается: этого имени нет в её промпте нигде. Ровно та же причина, по которой мозг в
-        // ядре переименовывается при захвате.
+        // The prototype hands out "Le Borgue (Si-6785)", and that's exactly what would go out on
+        // the airwaves, while SOUL calls the agent something else the whole time. Addressed by its
+        // real name, the model then fails to respond: that name appears nowhere in its prompt.
+        // Exactly the same reason the core's brain gets renamed on claim.
         _metaData.SetEntityName(borg, comp.AgentName);
 
         if (!_host.StartSession(BuildBody(borg, comp), out reason))
@@ -159,7 +162,8 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         _claimed[borg] = comp;
 
-        // Тело поехало — значит начнёт входить в чужие зоны видимости. См. AiBorgSystem.Replication.cs.
+        // The body is on the move now — meaning it will start entering other people's sight ranges.
+        // See AiBorgSystem.Replication.cs.
         HideSubtree(borg);
         HoldInPvs(borg);
 
@@ -169,8 +173,9 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         if (!active)
         {
-            // Не отказ: борг без батареи ездит и говорит, просто без модулей. Но знать об этом
-            // надо сразу, иначе «руки не работают» будет расследоваться как баг инструментов.
+            // Not a failure: a borg without a battery still moves and talks, just without modules.
+            // But this needs to be known right away, or "hands don't work" will get investigated
+            // as a tool bug.
             _sawmill.Warning(
                 $"{ToPrettyString(borg)} не активировался — нет заряда или он в крите. " +
                 "Модули и доступ по ID будут недоступны, пока это не исправится.");
@@ -180,7 +185,7 @@ public sealed partial class AiBorgSystem : EntitySystem
         return true;
     }
 
-    /// <summary>Освободить тело и убрать за собой разум.</summary>
+    /// <summary>Release the body and clean up its mind.</summary>
     public void ReleaseBody(EntityUid borg, string why)
     {
         if (!_claimed.Remove(borg, out var comp))
@@ -204,26 +209,27 @@ public sealed partial class AiBorgSystem : EntitySystem
 
         comp.Mind = null;
 
-        // Разум заводился ради активации шасси и никому больше не принадлежит: игрока за ним нет.
-        // Оставить его — значит копить сущности на каждый раунд.
+        // The mind was created solely to activate the chassis and belongs to no one else: there's
+        // no player behind it. Leaving it around would mean accumulating entities every round.
         if (!TerminatingOrDeleted(mind))
             QueueDel(mind);
     }
 
     /// <summary>
-    /// Выдать роботу идентификатор агента, если прототип не назвал его явно.
+    /// Assign the robot an agent identifier if the prototype didn't name it explicitly.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Занятым считается id, который держит либо живая сессия, либо уже заклеймленный робот.
-    /// Второе условие нужно ровно для того случая, ради которого аллокатор и написан: правило
-    /// режима спавнит трёх боргов подряд, и первый из них к моменту выдачи id третьему может
-    /// ещё не иметь сессии — <c>StartSession</c> идёт позже по этому же методу.
+    /// An id counts as taken if it's held either by a live session or by an already-claimed
+    /// robot. The second condition exists for exactly the case the allocator was written for: a
+    /// game-mode rule spawns three borgs in a row, and by the time the third one is assigned an
+    /// id, the first may not yet have a session — <c>StartSession</c> runs later in this same
+    /// method.
     /// </para>
     /// <para>
-    /// Явно заданный и уже занятый id — ОТКАЗ, а не молчаливое наложение. Это единственное место,
-    /// где ошибку в прототипе ещё видно; дальше она выглядит как «робот почему-то помнит чужую
-    /// смену».
+    /// An explicitly set id that's already taken is a REJECTION, not a silent override. This is
+    /// the one place where a mistake in the prototype is still visible; past this point it looks
+    /// like "the robot somehow remembers someone else's shift."
     /// </para>
     /// </remarks>
     private bool TryAssignAgentId(AiBorgComponent comp, out string reason)
@@ -261,18 +267,18 @@ public sealed partial class AiBorgSystem : EntitySystem
     }
 
     /// <summary>
-    /// Выбрать имя по номеру тела: <c>combat-3</c> получает третье имя из
+    /// Pick a name by body number: <c>combat-3</c> gets the third name from
     /// <see cref="AiBorgComponent.AgentNames"/>.
     ///
     /// <para>
-    /// Номер берётся из уже выданного идентификатора, а не из отдельного счётчика, — иначе два
-    /// источника нумерации разошлись бы на первом же освободившемся теле, и робот с каталогом
-    /// <c>combat-3</c> отзывался бы на чужое имя.
+    /// The number is taken from the already-assigned identifier, not a separate counter — otherwise
+    /// the two numbering sources would drift apart the first time a body is freed up, and a robot
+    /// with the directory <c>combat-3</c> would answer to someone else's name.
     /// </para>
     /// <para>
-    /// Имён меньше, чем тел, — берём с конца списка по кругу и дописываем номер: шесть «Клинов»
-    /// это поломка, а «Клин-2» — всего лишь некрасиво. Список пуст — остаётся то, что стоит в
-    /// прототипе, то есть прежнее поведение.
+    /// If there are fewer names than bodies, we wrap around from the end of the list and append a
+    /// number: six "Blade"s is a breakage, while "Blade-2" is merely ugly. If the list is empty, we
+    /// keep whatever's in the prototype, i.e. the previous behavior.
     /// </para>
     /// </summary>
     private void ApplyAgentName(AiBorgComponent comp)
@@ -293,7 +299,7 @@ public sealed partial class AiBorgSystem : EntitySystem
         comp.AgentName = lap == 0 ? name : $"{name}-{lap + 1}";
     }
 
-    /// <summary>Идентификаторы, которые уже кем-то заняты: живыми сессиями и заклеймленными телами.</summary>
+    /// <summary>Identifiers already taken by someone: live sessions and claimed bodies.</summary>
     private HashSet<string> TakenAgentIds()
     {
         var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -312,26 +318,27 @@ public sealed partial class AiBorgSystem : EntitySystem
 
 
     /// <summary>
-    /// Описание тела «шасси борга».
+    /// Description of the "borg chassis" body.
     /// </summary>
     /// <remarks>
-    /// <c>Announce</c> оставлен <c>null</c> намеренно: общестанционное объявление у Station AI
-    /// работает через встроенную <c>CommunicationsConsoleComponent</c>, которой у шасси нет. Это
-    /// отсутствие органа, а не недоделка — предупреждение о компакции хост в этом случае
-    /// произносит вслух.
+    /// <c>Announce</c> is deliberately left <c>null</c>: Station AI's station-wide announcement
+    /// works through a built-in <c>CommunicationsConsoleComponent</c>, which the chassis doesn't
+    /// have. This is a missing organ, not an oversight — the host speaks the compaction warning
+    /// aloud in this case instead.
     /// </remarks>
     private AgentBody BuildBody(EntityUid borg, AiBorgComponent comp)
     {
-        // Режим инструментов фиксируется здесь, при сборке тела, и дальше не меняется. Иначе
-        // промпт и провод могли бы разъехаться: провод собирается один раз на старте сессии, а
-        // промпт пересобирается ещё и на компакции.
+        // Tool mode is fixed right here, when the body is assembled, and never changes after that.
+        // Otherwise the prompt and the wire could drift apart: the wire is assembled once at
+        // session start, while the prompt is also reassembled on compaction.
         var scripted = _cfg.GetCVar(AiCVars.ScriptMode);
+        var lang = AgentLangUtil.Parse(_cfg.GetCVar(AiCVars.Language));
 
-        // Своя файловая система у каждого робота. Справочник в ней общий с ядром одним
-        // экземпляром, а записи, заметки о людях и память — свои: раньше борг таскал в префиксе
-        // двадцать килобайт библиотеки Станционного ИИ, включая досье на экипаж, которые ему
-        // нечем применить.
-        var vfs = _host.BuildVfs(comp.AgentId);
+        // Each robot has its own filesystem. The reference section in it is shared with the core
+        // as a single instance, while records, notes about people, and memory are its own: the
+        // borg used to carry twenty kilobytes of the Station AI's library in its prefix, including
+        // crew dossiers it had no use for.
+        var vfs = _host.BuildVfs(comp.AgentId, lang);
 
         return new AgentBody
         {
@@ -343,7 +350,8 @@ public sealed partial class AiBorgSystem : EntitySystem
             Eye = () => borg,
             Alive = () => Exists(borg) && !TerminatingOrDeleted(borg) && !_mobState.IsDead(borg),
             ScriptMode = scripted,
-            BuildPrompt = () => BuildBorgPrompt(borg, comp, scripted, vfs),
+            Language = lang,
+            BuildPrompt = () => BuildBorgPrompt(borg, comp, scripted, vfs, lang),
             SelfLine = s => BorgSelfLine(s, borg),
             BeforeObservation = s => PushSightDelta(s, borg),
             RegisterTools = (s, r) => RegisterBorgTools(s, r, comp),
@@ -351,9 +359,9 @@ public sealed partial class AiBorgSystem : EntitySystem
             Speak = _host.SpeakUntooledAsync,
             ChannelsFor = _ => comp.Channels,
 
-            // Разбор отрезка боргу выключен (решение владельца 01.09.2026): он стоил до минуты
-            // молчания на каждую свёртку, а свёрток у четырёх агентов много. Подробнее — в
-            // AgentBody.Curate.
+            // Segment curation is disabled for the borg (owner's decision, 2026-09-01): it cost up
+            // to a minute of silence on every compaction, and with four agents there are a lot of
+            // compactions. More details in AgentBody.Curate.
             Curate = false,
             LlmChain = string.IsNullOrWhiteSpace(comp.LlmChain) ? null : comp.LlmChain,
         };

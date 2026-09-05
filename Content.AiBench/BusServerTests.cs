@@ -36,7 +36,7 @@ public sealed class BusServerTests
     // ASCII: the token travels in an Authorization header, and headers are ASCII-only.
     private const string Token = "socket-test-token";
 
-    /// <summary>Та же таблица монтирований, что у живого агента, но без справочника.</summary>
+    /// <summary>The same mount table a live agent has, but with no directory.</summary>
     private static Vfs NewVfs(string dir) => new VfsBuilder(Sawmill)
         .AddFolder(Path.Combine(dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
         .AddNotes(dir, "players", VfsAccess.Write, "заметки о людях", () => "[раунд 1 · 01.01]")
@@ -61,7 +61,8 @@ public sealed class BusServerTests
 
         var router = new AgentDebugRouter(
             bus, Token,
-            // Пустая витрина: тела никто не занял. Проверяется транспорт, а не агенты.
+            // An empty roster: nobody has claimed a body. What's under test is the transport, not
+            // the agents.
             new AgentDirectory(),
             () => vfs,
             () => 7,

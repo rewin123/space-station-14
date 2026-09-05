@@ -1,16 +1,16 @@
 import type { AgentMessage, AgentToolCall } from '../api/types'
 
 /**
- * Состояние сопоставления вызова с результатом.
+ * State of matching a call with its result.
  *
- * Три, а не два, и «неоднозначно» рисуется явно: именно там парный вид врёт, и именно тогда
- * отладчик и нужен.
+ * Three states, not two, and "ambiguous" is drawn explicitly: that's exactly where the paired
+ * view lies, and exactly why the debugger exists.
  */
 export type PairState = 'paired' | 'pending' | 'ambiguous'
 
 export interface PairedCall {
   call: AgentToolCall
-  /** Сообщение с результатом, если оно уже пришло. */
+  /** The message with the result, if it has already arrived. */
   result: AgentMessage | null
   state: PairState
 }
@@ -18,25 +18,26 @@ export interface PairedCall {
 export interface ConversationRow {
   key: string
   message: AgentMessage
-  /** Вызовы этого assistant-сообщения вместе с их результатами. */
+  /** This assistant message's calls together with their results. */
   calls: PairedCall[]
-  /** Результат, который не забрал ни один вызов, — протокольная странность, прятать нельзя. */
+  /** A result that no call claimed — a protocol oddity that must not be hidden. */
   orphanResult: boolean
 }
 
 /**
- * Собрать ленту, вложив результаты под их вызовы.
+ * Assembles the stream by nesting results under their calls.
  *
- * <b>Сопоставление обратным сканированием, а НЕ глобальной картой по id.</b> Это не стилистика:
- * `NextCallId` в сервере используется только в тестах, а настоящие идентификаторы приходят от
- * модели (`LlamaClient`, `idEl.GetString() ?? ""`). Если сервер модели их не прислал, все вызовы
- * хода получат пустую строку — и глобальная карта свяжет все результаты с первым вызовом, молча
- * спрятав остальные. Плюс идентификаторы повторяются после восстановления из снапшота: счётчик
- * вызовов не сохраняется, а тело возвращается со старыми номерами.
+ * <b>Matching is done by scanning backward, NOT by a global map keyed on id.</b> This isn't a
+ * stylistic choice: `NextCallId` on the server is used only in tests, while the real
+ * identifiers come from the model (`LlamaClient`, `idEl.GetString() ?? ""`). If the model's
+ * server didn't send them, every call in the turn gets an empty string — and a global map would
+ * link all the results to the first call, silently hiding the rest. On top of that, identifiers
+ * repeat after restoring from a snapshot: the call counter isn't persisted, but the body comes
+ * back with the old numbers.
  *
- * Поэтому id — только подсказка. От результата идём назад к ближайшему assistant-сообщению со
- * свободным слотом и берём слот по id, а если он пуст или уже занят — по порядку, помечая
- * `ambiguous`.
+ * So the id is only a hint. From a result we walk backward to the nearest assistant message
+ * with a free slot and take the slot by id, and if it's empty or already taken, by position,
+ * marking it `ambiguous`.
  */
 export function pairConversation(messages: AgentMessage[], epoch: number): ConversationRow[] {
   const rows: ConversationRow[] = []
@@ -49,8 +50,8 @@ export function pairConversation(messages: AgentMessage[], epoch: number): Conve
       calls: (message.tool_calls ?? []).map((call) => ({
         call,
         result: null,
-        // Вызов без результата — норма посреди хода, а не ошибка. Отдельное состояние, чтобы
-        // «ждём» не выглядело как «сломалось».
+        // A call without a result is normal mid-turn, not an error. It gets its own state so
+        // that "waiting" doesn't look like "broken".
         state: 'pending' as PairState,
       })),
       orphanResult: false,
@@ -76,25 +77,25 @@ export function pairConversation(messages: AgentMessage[], epoch: number): Conve
     slot.pair.state = slot.byId ? 'paired' : 'ambiguous'
   }
 
-  // Результаты показываются вложенными, поэтому из плоской ленты их надо убрать — кроме сирот,
-  // которые иначе исчезли бы совсем.
+  // Results are shown nested, so they must be removed from the flat stream — except for
+  // orphans, which would otherwise disappear entirely.
   return rows.filter((row) => row.message.role !== 'tool' || row.orphanResult)
 }
 
 interface Slot {
   pair: PairedCall
-  /** Нашли по идентификатору, а не позиционно. */
+  /** Found by identifier, not positionally. */
   byId: boolean
 }
 
-/** Ближайший назад assistant со свободным слотом. */
+/** The nearest preceding assistant message with a free slot. */
 function findSlot(rows: ConversationRow[], result: AgentMessage): Slot | null {
   const at = rows.findIndex((r) => r.message.index === result.index)
 
   for (let i = at - 1; i >= 0; i--) {
     const row = rows[i]
 
-    // Дошли до предыдущего user-сообщения — это граница хода, дальше искать нечего.
+    // Reached the previous user message — that's the turn boundary, nothing further to search.
     if (row.message.role === 'user' && row.calls.length === 0)
       return null
 
@@ -108,7 +109,7 @@ function findSlot(rows: ConversationRow[], result: AgentMessage): Slot | null {
         return { pair: exact, byId: true }
     }
 
-    // Идентификатор пуст, повторяется или уже израсходован — падаем на порядок внутри хода.
+    // The identifier is empty, repeats, or is already spent — fall back to order within the turn.
     const free = row.calls.find((c) => c.result === null)
     if (free)
       return { pair: free, byId: false }

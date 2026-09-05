@@ -179,7 +179,7 @@ public sealed class ToolTests
         Assert.That(result.Ok, Is.True, result.ToJson());
     }
 
-    // ------------------------------------------------------------ ничего не делать
+    // ------------------------------------------------------------ doing nothing
 
     [Test]
     public async Task Noop_WorksInEveryMode()
@@ -388,14 +388,14 @@ public sealed class ToolTests
         Assert.That(bolted, Is.False, "в режиме dry_run мир меняться не должен");
     }
 
-    // ------------------------------------------------------------ заметки о людях
+    // ------------------------------------------------------------ notes about people
 
     [Ignore("Проверяют инструменты read_player_related_memory / edit_player_related_memory, снесённые рефактором памяти агента 31.08.2026: заметки о людях переехали в файловую систему (sh, write_file, edit_file). Поведение, которое здесь описано, по-прежнему нужно — переписать под новые инструменты, а не удалять.")]
     [Test]
     public async Task PlayerNote_ToolsRoundTripThroughTheRealDispatcher()
     {
-        // Через настоящий диспетчер: это проверяет регистрацию, схему, разбор аргументов и то, что
-        // хендлер не маршалится на игровой поток.
+        // Through the real dispatcher: this checks registration, the schema, argument parsing, and
+        // that the handler is not marshalled onto the game thread.
         await using var w = await AiWorld.Create();
 
         var written = await w.Invoke("edit_player_related_memory",
@@ -433,7 +433,8 @@ public sealed class ToolTests
     [Test]
     public async Task PlayerNote_SearchOnGarbage_IsSuccessNotFailure()
     {
-        // «Никого похожего нет» — законный ответ. Отказ научил бы модель, что искать было ошибкой.
+        // "Nobody similar exists" is a legitimate answer. A failure would teach the model that
+        // searching was a mistake.
         await using var w = await AiWorld.Create();
         await w.Invoke("edit_player_related_memory", """{"name":"Иван Петров","new":"Инженер."}""");
 
@@ -447,8 +448,9 @@ public sealed class ToolTests
     [Test]
     public async Task PlayerNote_ToolsWorkDuringReviewAndWhileCarded()
     {
-        // Это то, что делает возможной работу куратора: он разбирает отрезок в режиме Review, и
-        // если кто-нибудь припишет тулам GameAction, разбор молча перестанет записывать людей.
+        // This is what makes the curator's job possible: it reviews a segment in Review mode, and
+        // if somebody tags the tools with GameAction, the review would silently stop recording
+        // people.
         await using var w = await AiWorld.Create();
 
         await w.Post(() => w.System.GetSession(w.Brain)!.Mode = Content.Server.AiAgent.AgentMode.Review);

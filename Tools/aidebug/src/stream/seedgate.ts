@@ -1,43 +1,47 @@
 import type { AgentEventFrame } from '../api/types'
 
 /**
- * Состояние одного «слайса» — агента или процессных хранилищ.
+ * State of one "slice" — an agent or the process-level stores.
  *
- * - `absent` — снимка нет и не запрошен. Кадры отбрасываются.
- * - `seeding` — снимок в полёте. Кадры копятся в буфере, не применяются.
- * - `live` — кадр применяется тогда и только тогда, когда `frame.seq > seededAt`.
+ * - `absent` — no snapshot, and none requested. Frames are dropped.
+ * - `seeding` — a snapshot is in flight. Frames accumulate in a buffer, not applied.
+ * - `live` — a frame is applied if and only if `frame.seq > seededAt`.
  */
 export type SeedPhase = 'absent' | 'seeding' | 'live'
 
-/** Сколько кадров держим, пока летит снимок. Столько же, сколько кольцо на сервере. */
+/** How many frames we keep while a snapshot is in flight. The same as the server's ring. */
 export const PENDING_LIMIT = 2048
 
 /**
- * Ворота досева: единственное по-настоящему хитрое место в клиенте.
+ * The seed gate: the one genuinely tricky spot in the client.
  *
- * <b>Задача.</b> Лента одна на процесс, а снимки качаются поштучно и в произвольные моменты.
- * Значит, между «попросили снимок агента» и «снимок приехал» лента продолжает идти, и надо
- * решить, что делать с кадрами этого агента в промежутке.
+ * <b>The problem.</b> There's one stream per process, but snapshots are downloaded one at a
+ * time and at arbitrary moments. So between "an agent's snapshot was requested" and "the
+ * snapshot arrived" the stream keeps moving, and we must decide what to do with that agent's
+ * frames in the meantime.
  *
- * <b>Правило.</b> Снимок, приехавший на `seq = S`, ставит курсор ЭТОГО слайса в `S`; дальше
- * применяются только кадры с `frame.seq > S`. Общий курсор ленты при досеве не двигается никогда,
- * и кадры остальных слайсов идут своим чередом.
+ * <b>The rule.</b> A snapshot that arrives at `seq = S` sets THIS slice's cursor to `S`; from
+ * then on only frames with `frame.seq > S` are applied. The stream's shared cursor never moves
+ * during a seed, and other slices' frames proceed as usual.
  *
- * <b>Почему `> S`, а не `>= S`.</b> Сервер читает `bus.Seq` ПЕРВЫМ (см. комментарий в
- * `AgentDebugState.CaptureGlobal`), поэтому гарантия односторонняя: всё с `seq <= S` в снимке
- * заведомо есть, а кое-что с `seq > S` могло попасть туда тоже. То есть правило может продублировать
- * кадр из окна съёмки — и это допустимо: все виды, кроме `message.appended`, идемпотентны, а он
- * ловится проверкой `body_epoch`/`index` и превращает дубль в пересев ОДНОГО агента.
+ * <b>Why `> S` and not `>= S`.</b> The server reads `bus.Seq` FIRST (see the comment in
+ * `AgentDebugState.CaptureGlobal`), so the guarantee is one-sided: everything with `seq <= S` is
+ * guaranteed to be in the snapshot, while something with `seq > S` might have made it in too.
+ * In other words, the rule can duplicate a frame from the capture window — and that's
+ * acceptable: every kind except `message.appended` is idempotent, and that one is caught by the
+ * `body_epoch`/`index` check, turning the duplicate into a reseed of ONE agent.
  *
- * <b>Почему буфер, а не остановка петли.</b> Снимок может вернуться на `S`, меньшем текущего
- * курсора ленты `P`: пока он летел, лента ушла вперёд. Кадры из промежутка `(S, P]` к этому моменту
- * уже проехали, и слайс, не бывший `live`, их отбросил — то есть после посадки на `S` он не увидит
- * их НИКОГДА, и история застынет молча. Остановка петли на время снимка это лечит, но ценой
- * заморозки ленты всех четверых из-за одного медленного снимка. Буфер — единственный вариант,
- * который и не тормозит, и сходится.
+ * <b>Why a buffer and not stopping the loop.</b> A snapshot can come back at an `S` smaller than
+ * the stream's current cursor `P`: while it was in flight, the stream moved ahead. The frames in
+ * the `(S, P]` range have already gone by at that point, and a slice that wasn't `live` dropped
+ * them — meaning after landing at `S` it will NEVER see them, and the history freezes silently.
+ * Stopping the loop for the duration of the snapshot fixes this, but at the cost of freezing the
+ * stream for all four agents because of one slow snapshot. A buffer is the only option that
+ * neither stalls nor fails to converge.
  *
- * <b>Переполнение буфера не молчит.</b> Оно сбрасывает слайс обратно в запрос снимка, а не роняет
- * кадры: потерянная середина истории выглядит правдоподобно и потому опаснее видимой ошибки.
+ * <b>Buffer overflow isn't silent.</b> It resets the slice back to requesting a snapshot rather
+ * than dropping frames: a lost middle section of history looks plausible and is therefore more
+ * dangerous than a visible error.
  */
 export class SeedGate {
   private phase: SeedPhase = 'absent'
@@ -49,19 +53,19 @@ export class SeedGate {
     return this.phase
   }
 
-  /** Снимок этого слайса уже сажали. */
+  /** Whether this slice's snapshot has already been landed. */
   get seeded(): boolean {
     return this.phase === 'live'
   }
 
-  /** Пометить, что снимок запрошен. Кадры с этого момента копятся. */
+  /** Marks that a snapshot has been requested. Frames accumulate from this point on. */
   begin(): void {
     this.phase = 'seeding'
     this.pending = []
     this.overflowed = false
   }
 
-  /** Вернуть слайс в исходное: снимка нет, буфер пуст, кадры снова отбрасываются. */
+  /** Returns the slice to its initial state: no snapshot, empty buffer, frames dropped again. */
   reset(): void {
     this.phase = 'absent'
     this.seededAt = 0
@@ -70,10 +74,10 @@ export class SeedGate {
   }
 
   /**
-   * Предложить кадр.
+   * Offers a frame.
    *
-   * `apply` — применить прямо сейчас; `buffer` — отложен, вызывающему делать нечего;
-   * `drop` — слайс не сеян, кадр не наш.
+   * `apply` — apply it right now; `buffer` — deferred, nothing for the caller to do;
+   * `drop` — the slice isn't seeded, this frame isn't ours.
    */
   offer(frame: AgentEventFrame): 'apply' | 'buffer' | 'drop' {
     if (this.phase === 'absent')
@@ -81,7 +85,8 @@ export class SeedGate {
 
     if (this.phase === 'seeding') {
       if (this.pending.length >= PENDING_LIMIT) {
-        // Не молча: буфер очищается, а слайс остаётся в seeding — снимок будет перезапрошен.
+        // Not silently: the buffer is cleared, but the slice stays in seeding — the snapshot
+        // will be re-requested.
         this.overflowed = true
         this.pending = []
         return 'buffer'
@@ -95,10 +100,10 @@ export class SeedGate {
   }
 
   /**
-   * Снимок приехал на `seq = S`.
+   * The snapshot arrived at `seq = S`.
    *
-   * Возвращает кадры, которые надо доиграть по возрастанию `seq`. Пустой массив с
-   * `overflowed = true` означает «буфер переполнялся, снимок надо взять заново».
+   * Returns the frames that need to be replayed, in ascending `seq` order. An empty array with
+   * `overflowed = true` means "the buffer overflowed, the snapshot needs to be fetched again".
    */
   land(seq: number): { replay: AgentEventFrame[]; overflowed: boolean } {
     const overflowed = this.overflowed

@@ -4,57 +4,59 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Настройка резервного питания под конкретную станцию. Ключ — id прототипа <c>gameMap</c>
+/// Backup power tuning for a specific station. Keyed by the <c>gameMap</c> prototype id
 /// (<c>Packed</c>, <c>Box</c>, <c>Bagel</c>…).
 ///
 /// <para>
-/// <b>Данные, а не правка карты.</b> Карты (<c>Resources/Maps/*.yml</c>) — апстримовые файлы, и
-/// форк их не трогает. Поэтому «патч под станцию» здесь означает таблицу чисел, которую читает
-/// <see cref="BackupPowerSystem"/>, а не отредактированную карту. Побочная выгода важнее самой
-/// правки: такая таблица переживает любое обновление карты, тогда как вписанные в неё генераторы
-/// исчезли бы при первом же ребейзе.
+/// <b>Data, not a map edit.</b> Maps (<c>Resources/Maps/*.yml</c>) are upstream files, and the
+/// fork does not touch them. So a "per-station patch" here means a table of numbers read by
+/// <see cref="BackupPowerSystem"/>, not an edited map. The side benefit outweighs the patch
+/// itself: a table like this survives any map update, whereas generators baked into the map would
+/// vanish at the very first rebase.
 /// </para>
 /// <para>
-/// <b>Записи может не быть, и это нормальный путь, а не ошибка.</b> Апстрим добавляет карты, и
-/// новая появится в ротации раньше, чем кто-нибудь заведёт ей строку здесь. Тогда система берёт
-/// мощность из <c>ai.backup_power_watts</c> и ищет место общим способом — рядом с любым SMES
-/// станции. Таблица нужна лишь затем, чтобы на известных картах числа были не средние, а свои.
+/// <b>A missing entry is a normal path, not an error.</b> Upstream adds maps, and a new one will
+/// enter rotation before anyone gets around to giving it a row here. In that case the system takes
+/// the power figure from <c>ai.backup_power_watts</c> and finds a spot the generic way — next to
+/// any SMES on the station. The table only exists so that on known maps the numbers are specific
+/// to that station rather than an average.
 /// </para>
 /// </summary>
-// Без явного имени: RA0042 сообщает, что "aiBackupPower" и так выводится из имени класса,
-// а дублировать его значит завести второе место, где оно может разойтись с первым.
+// No explicit name: RA0042 reports that "aiBackupPower" is already derived from the class name,
+// and duplicating it would create a second place for it to drift out of sync with the first.
 [Prototype]
 public sealed partial class AiBackupPowerPrototype : IPrototype
 {
-    /// <summary>Id прототипа <c>gameMap</c>, для которого эта настройка.</summary>
+    /// <summary>Id of the <c>gameMap</c> prototype this tuning applies to.</summary>
     [IdDataField]
     public string ID { get; private set; } = default!;
 
     /// <summary>
-    /// Суммарная мощность резервного контура на этой станции, ватты.
+    /// Total backup circuit power for this station, watts.
     ///
-    /// Считалась как «число APC × 1200 Вт», округлённо, и это **прокси, а не замер**: APC примерно
-    /// соответствует одному запитанному помещению, а 1200 Вт — грубая оценка нагрузки помещения на
-    /// малолюдной смене. Настоящее потребление меряется в бою командой <c>powerstat</c>; пока замера
-    /// нет, эти числа хотя бы соразмерны станции, а не одинаковы для всех.
+    /// Computed as "number of APCs x 1200W", roughly, and this is a **proxy, not a measurement**:
+    /// an APC roughly corresponds to one powered room, and 1200W is a rough estimate of a room's
+    /// load during a low-population shift. Real consumption is measured live with the
+    /// <c>powerstat</c> command; until that measurement exists, these numbers are at least
+    /// proportionate to the station, rather than the same for all of them.
     /// </summary>
     [DataField]
     public int Watts;
 
     /// <summary>
-    /// Названия навигационных маяков, рядом с которыми генератор смотрится на месте — обычно
-    /// инженерный отсек.
+    /// Names of navigation beacons near which a generator looks natural — usually the engineering
+    /// bay.
     ///
     /// <para>
-    /// Мягкое предпочтение, а не адрес. Система всё равно ставит генератор только на тайл с
-    /// высоковольтным кабелем рядом с SMES (иначе он не подключится вовсе), а список лишь решает,
-    /// какой из SMES выбрать первым: тот, что ближе к названному маяку. Пустой список или
-    /// ненайденное имя ничего не ломают — порядок просто останется произвольным.
+    /// A soft preference, not an address. The system still only places a generator on a tile with a
+    /// high-voltage cable next to an SMES (otherwise it would not connect at all), and the list
+    /// only decides which SMES gets picked first: the one closest to a named beacon. An empty list
+    /// or a name that is not found breaks nothing — the order simply stays arbitrary.
     /// </para>
     /// <para>
-    /// Маяки, а не координаты тайлов, сознательно. Координата ломается от любой правки карты молча;
-    /// имя маяка либо находится, либо честно не находится, и во втором случае мы всё равно ставим
-    /// генератор, просто без предпочтения.
+    /// Beacons rather than tile coordinates, deliberately. A coordinate breaks silently on any map
+    /// edit; a beacon's name either is found or is honestly not found, and in the second case we
+    /// still place the generator, just without a preference.
     /// </para>
     /// </summary>
     [DataField]

@@ -574,8 +574,8 @@ python3 Tools/vfs/migrate.py            # lays the reference library out into ai
 
 Write `ai_data/SOUL.md` (personality; optional, the agent runs on the base prompt without it)
 and `ai_data/CURATOR.md` (the self-review prompt; a built-in fallback is used, loudly, if it is
-missing). Prompts, speech and the library are in Russian; the agent speaks the language of its
-prompt.
+missing). Prompts, speech and the library default to Russian; `cvar ai.language en` switches
+the agent's prompt and replies to English. The agent speaks the language of its prompt.
 
 **3. Pick a model.** Either use a profile from `llm_profiles.yml` and put its key in
 `ai_data/<keyFile>`, or add your own profile in `ai_data/config.d/10-endpoints.yml`. For a
@@ -783,8 +783,9 @@ These are the rules the code is written to, and the tests enforce most of them.
   guarantee.
 - **State that outlives a turn lives in `AgentState`** and rides in the snapshot: timers, mode,
   recent speech. A server restart mid-shift must not erase a promise made on the radio.
-- **Russian is the language of the prompt.** Tags are English (`RADIO`, `OBSERVED`, `SELF`),
-  content is Russian; the library, the personalities and the speech follow.
+- **The prompt language is a mode.** Default Russian; `cvar ai.language en` switches Station AI
+  and cyborg prompts, observations and tool replies to English. Frozen at session start. Tags
+  stay English (`RADIO`, `OBSERVED`, `SELF`) in both modes.
 
 ---
 

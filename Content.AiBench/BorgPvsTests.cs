@@ -13,17 +13,18 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Тонкий мир: чужому клиенту не приезжает то, что он всё равно не рисует.
+/// Thin world: a foreign client is not sent something it wouldn't draw anyway.
 ///
 /// <para>
-/// Разбор — <c>AiBorgSystem.Replication.cs</c> и <c>docs/problems.md</c> №19. Коротко: дельта
-/// сущности, которой у клиента нет, стоит ему полного состояния на 250 КБ, а ванильный клиент
-/// подтверждает буфер, а не применение мира — то есть сервер об этой дыре не узнаёт. Лечится
-/// составом мира: внутренности занятого робота чужому экрану не нужны никогда.
+/// Background — <c>AiBorgSystem.Replication.cs</c> and <c>docs/problems.md</c> #19. In short: a
+/// delta for an entity the client doesn't have costs it a full 250 KB state, and the vanilla
+/// client acknowledges the buffer, not the world application — meaning the server never learns
+/// about this hole. The fix is in world composition: the innards of an occupied robot should
+/// never be needed on a foreign screen.
 /// </para>
 /// <para>
-/// <b>Корень шасси при этом остаётся видимым.</b> Это половина требования, а не оговорка: по
-/// спрятанному роботу нельзя щёлкнуть, ударить его, заговорить с ним или дать ему предмет.
+/// <b>The chassis root stays visible, though.</b> That's half the requirement, not an oversight:
+/// a hidden robot must still be clickable, hittable, speakable-to, and able to receive an item.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -31,13 +32,14 @@ namespace Content.AiBench;
 public sealed class BorgPvsTests
 {
     /// <summary>
-    /// Захват вешает <see cref="VisibilityFlags.Internal"/> на детей и не вешает на само шасси.
+    /// Claiming sets <see cref="VisibilityFlags.Internal"/> on the children and not on the chassis itself.
     /// </summary>
     /// <remarks>
-    /// Проверка серверная, по маске видимости, а не по клиенту, и это осознанно: маска — то самое,
-    /// на что смотрит <c>PvsSystem.ToSendSet</c>, а поднимать подключённого клиента вместе с
-    /// настоящим захватом значит тащить в тест про PVS ещё и петлю хода с моделью. Что маска
-    /// действительно убирает сущность у клиента, проверяет <see cref="BorgPvsClientTests"/>.
+    /// The check is server-side, against the visibility mask, not against the client, and that's
+    /// deliberate: the mask is exactly what <c>PvsSystem.ToSendSet</c> looks at, while spinning up a
+    /// connected client alongside a real claim would drag the turn loop and the model into a test
+    /// that's supposed to be about PVS. That the mask actually removes the entity on the client is
+    /// checked by <see cref="BorgPvsClientTests"/>.
     /// </remarks>
     [Test]
     public async Task Claim_HidesTheInsides_ButNotTheChassis()
@@ -74,8 +76,8 @@ public sealed class BorgPvsTests
                 "встроенный лазер по-прежнему уезжает чужому клиенту");
         });
 
-        // Освобождение возвращает шасси в обычное состояние: незанятый корпус ничем не отличается
-        // от любого другого предмета на станции, и прятать его внутренности незачем.
+        // Releasing returns the chassis to its normal state: an unoccupied body is no different
+        // from any other item on the station, so there's no reason to keep its innards hidden.
         await w.Post(() => w.Pair.Server.System<AiBorgSystem>().ReleaseBody(borg, "конец теста"));
         await w.Pair.Server.WaitRunTicks(5);
 
@@ -90,12 +92,12 @@ public sealed class BorgPvsTests
     }
 
     /// <summary>
-    /// Сервер по-прежнему видит ствол в слоте: прячется чужой PVS, а не мир.
+    /// The server still sees the gun in its slot: what's hidden is a foreign client's PVS, not the world.
     /// </summary>
     /// <remarks>
-    /// Отдельным тестом от <see cref="Claim_HidesTheInsides_ButNotTheChassis"/>, потому что это
-    /// другой вопрос и другой способ упасть. Сокрытие, сделанное через удаление или через
-    /// <c>Undetachable</c>, прошло бы проверку масок и сломало бы <c>shoot</c>.
+    /// A separate test from <see cref="Claim_HidesTheInsides_ButNotTheChassis"/>, because it's a
+    /// different question and a different way to fail. Hiding done via deletion or via
+    /// <c>Undetachable</c> would pass the mask check and would break <c>shoot</c>.
     /// </remarks>
     [Test]
     public async Task Hiding_DoesNotBlindTheServer()
@@ -120,29 +122,29 @@ public sealed class BorgPvsTests
 }
 
 /// <summary>
-/// То же требование, но с настоящим подключённым клиентом.
+/// The same requirement, but with a real connected client.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Отдельная фикстура, а не тест рядом: <see cref="AiStation"/> поднимает пару БЕЗ подключённого
-/// клиента, и спросить «что доехало» там просто некому.
+/// A separate fixture rather than a test alongside it: <see cref="AiStation"/> spins up a pair
+/// WITHOUT a connected client, and there's simply no one there to ask "what arrived".
 /// </para>
 /// <para>
-/// Захват здесь не зовётся — только само сокрытие через
-/// <c>AiBorgSystem.SetSubtreeHiddenForTest</c>. Захват требует включённой <c>ai.enabled</c> и живой
-/// модели; проверять здесь ещё и его значило бы валить тест про состав пакета на любой заминке
-/// петли хода. Что захват сокрытие включает — предмет <see cref="BorgPvsTests"/>.
+/// Claiming is not invoked here — only the hiding itself, via
+/// <c>AiBorgSystem.SetSubtreeHiddenForTest</c>. Claiming requires <c>ai.enabled</c> turned on and a
+/// live model; checking it here too would make a test about packet composition fail on any hiccup
+/// in the turn loop. That claiming does turn on the hiding is the subject of <see cref="BorgPvsTests"/>.
 /// </para>
 /// </remarks>
 [TestFixture]
 public sealed class BorgPvsClientTests : GameTest
 {
     /// <summary>
-    /// Настоящая станция с настоящим клиентом — как у <c>PvsResyncTests</c>.
+    /// A real station with a real client — same as <c>PvsResyncTests</c>.
     /// </summary>
     /// <remarks>
-    /// Карта обязана быть настоящей: на пустой в зоне видимости десяток сущностей, и вопрос «что
-    /// доехало» не имеет смысла.
+    /// The map must be a real one: an empty map has a dozen entities in view range, and the
+    /// question "what arrived" wouldn't mean anything.
     /// </remarks>
     public override PoolSettings PoolSettings => new()
     {
@@ -153,20 +155,20 @@ public sealed class BorgPvsClientTests : GameTest
     };
 
     /// <summary>
-    /// Спрятанное поддерево уходит у клиента из PVS, а шасси остаётся.
+    /// A hidden subtree leaves the client's PVS while the chassis stays.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <c>net.pvs</c> включается руками: пул тестов ставит его в <c>false</c>
-    /// (<c>Robust.UnitTesting/Pool/PoolManager.cs</c>), а с выключенным PVS сервер шлёт всё всем
-    /// через <c>GetAllEntityStates</c> — маску видимости никто не спрашивает, и тест был бы
-    /// красным при исправном коде.
+    /// <c>net.pvs</c> is turned on by hand: the test pool sets it to <c>false</c>
+    /// (<c>Robust.UnitTesting/Pool/PoolManager.cs</c>), and with PVS off the server sends
+    /// everything to everyone via <c>GetAllEntityStates</c> — nobody consults the visibility
+    /// mask, and the test would be red even with correct code.
     /// </para>
     /// <para>
-    /// Уход из PVS — это <b>отсоединение</b>, а не удаление: клиент оставляет сущность у себя и
-    /// ставит ей <c>MetaDataFlags.Detached</c> (см. апстримовый <c>ActionPvsDetachTest</c>).
-    /// Поэтому проверяется флаг, а не <c>TryGetEntity</c>: дельты и полные состояния на
-    /// отсоединённую сущность не уходят, а это и есть цель.
+    /// Leaving PVS is a <b>detachment</b>, not a deletion: the client keeps the entity around and
+    /// sets <c>MetaDataFlags.Detached</c> on it (see the upstream <c>ActionPvsDetachTest</c>).
+    /// That's why the flag is checked rather than <c>TryGetEntity</c>: deltas and full states for
+    /// a detached entity don't get sent, and that's exactly the goal.
     /// </para>
     /// </remarks>
     [Test]
@@ -180,8 +182,8 @@ public sealed class BorgPvsClientTests : GameTest
         await OverrideCVar(Side.Server, CVars.NetMaxUpdateRange, 25f);
         await pair.RunTicksSync(20);
 
-        // Рядом с игроком, а не где придётся: сущность за пределами дальности PVS не доедет и без
-        // всякого сокрытия, и тест мерил бы собственную небрежность.
+        // Next to the player, not wherever happens: an entity outside PVS range wouldn't arrive
+        // even without any hiding, and the test would just be measuring its own carelessness.
         EntityUid borg = default;
         EntityUid laser = default;
 
@@ -222,8 +224,8 @@ public sealed class BorgPvsClientTests : GameTest
                 "вместе с внутренностями спрятался и корень шасси — по роботу больше не щёлкнуть");
         });
 
-        // Возврат. Незанятое шасси обязано снова быть обычным предметом, иначе освобождённый
-        // корпус навсегда остаётся половинчатым.
+        // Revert. An unoccupied chassis must once again be an ordinary item, otherwise a released
+        // body stays permanently half-hidden.
         await server.WaitPost(() =>
             server.System<AiBorgSystem>().SetSubtreeHiddenForTest(borg, false));
         await pair.RunTicksSync(10);
@@ -234,7 +236,7 @@ public sealed class BorgPvsClientTests : GameTest
     }
 
     /// <summary>
-    /// Держит ли клиент сущность в поле зрения — то есть не отсоединена ли она.
+    /// Whether the client keeps the entity in view — i.e. whether it is not detached.
     /// </summary>
     private bool IsInPvs(NetEntity netEntity)
     {

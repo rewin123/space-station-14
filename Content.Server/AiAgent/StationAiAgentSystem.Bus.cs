@@ -27,14 +27,15 @@ public sealed partial class StationAiAgentSystem
     /// <b>An HTTP thread must never look a session up itself.</b> <c>_sessions</c> is a plain
     /// <c>Dictionary</c> mutated from the main thread, and a <c>TryGetValue</c> that lands on a
     /// resize does not throw — it can spin forever inside the bucket chain, and the symptom is a
-    /// server that reports a live agent and quietly stops ticking. So the main thread публикует
-    /// хендлы в витрину при захвате и снимает их при освобождении, а путь отладки читает только её.
+    /// server that reports a live agent and quietly stops ticking. So the main thread publishes
+    /// handles into the directory when a body is claimed and removes them when it is released, and
+    /// the debug path only ever reads that directory.
     /// </summary>
     private readonly AgentDirectory _agents = new();
 
     private AgentDebugServer? _debugServer;
 
-    /// <summary>Витрина агентов, какой её видит HTTP-поток. Пуста, пока никто не захватил тело.</summary>
+    /// <summary>The agent directory as the HTTP thread sees it. Empty until someone claims a body.</summary>
     public AgentDirectory DebugAgents => _agents;
 
     /// <summary>The live bus, or null when <c>ai.debug_enabled</c> is off.</summary>
@@ -62,8 +63,9 @@ public sealed partial class StationAiAgentSystem
             _bus,
             _cfg.GetCVar(AiCVars.DebugToken),
             _agents,
-            // Библиотека ядра. Может быть null до первой сессии — отладчик поднимается раньше
-            // тела, и отдать пустой снимок честнее, чем отложить старт эндпоинта.
+            // The core's library. Can be null until the first session — the debugger comes up before
+            // the body does, and handing back an empty snapshot is more honest than delaying the
+            // endpoint's start.
             () => CoreVfs,
             CurrentRoundId,
             ChangeMemory,
@@ -91,13 +93,13 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Новый агент занял тело. Только главный поток.
+    /// A new agent has taken over a body. Main thread only.
     /// </summary>
     /// <remarks>
-    /// <b>Порядок здесь — контракт.</b> Сначала хендл встаёт на витрину, и только потом уходит
-    /// кадр <c>session.started</c>. Клиент реагирует на этот кадр запросом снимка агента, и при
-    /// обратном порядке получил бы <c>null</c> — то есть «агент не запустился» ровно про того,
-    /// кто только что запустился.
+    /// <b>The order here is a contract.</b> The handle goes into the directory first, and only then
+    /// does the <c>session.started</c> frame go out. The client reacts to that frame by requesting an
+    /// agent snapshot, and in the reverse order it would get <c>null</c> — i.e. "the agent didn't
+    /// start" about the very agent that just started.
     /// </remarks>
     private void AttachDebugSession(AgentSession session)
     {
@@ -120,8 +122,8 @@ public sealed partial class StationAiAgentSystem
 
         if (!_agents.Add(handle))
         {
-            // Не молча: совпадение идентификаторов означает общий каталог памяти и общий файл
-            // диалога у двух агентов, и витрина — единственное место, где это вообще заметно.
+            // Not silently: a matching identifier means two agents share a memory directory and a
+            // conversation file, and the directory is the only place where that is even noticeable.
             _sawmill.Warning($"агент {id} уже на витрине отладки — второй с тем же идентификатором не показан");
         }
 
@@ -142,11 +144,11 @@ public sealed partial class StationAiAgentSystem
     /// </summary>
     private void DetachDebugSession(AgentSession session, string why)
     {
-        // Снимаем с витрины ДО публикации: после кадра session.ended запрос снимка обязан
-        // вернуть null, а не картинку сессии, которую вот-вот отменят.
+        // Removed from the directory BEFORE publishing: after the session.ended frame, a snapshot
+        // request must return null, not a picture of a session that's about to be cancelled.
         //
-        // Снимается только свой хендл, по ссылке. Безусловное удаление по идентификатору снесло бы
-        // с витрины НОВОГО агента, если борга переклеймили в том же тике.
+        // Only this handle is removed, by reference. An unconditional removal by id would knock the
+        // NEW agent off the directory if the borg got reclaimed in the same tick.
         foreach (var handle in _agents.All)
         {
             if (handle.Id == session.Body.Id)
@@ -163,19 +165,19 @@ public sealed partial class StationAiAgentSystem
     private float _sinceRoster;
 
     /// <summary>
-    /// Обновить живость на витрине и подмести хендлы без сессий. Только главный поток.
+    /// Refresh liveness in the directory and sweep out handles without a session. Main thread only.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Раз в секунду, а не каждый тик: <c>Alive</c> у ядра — это <c>IsPlayable</c>, то есть
-    /// обращение к миру, и делать его тридцать раз в секунду ради индикатора не за что.
-    /// <b>Отсюда и ограничение: значение годится только для индикатора.</b> Логику на нём строить
-    /// нельзя — первую секунду после смерти оно врёт.
+    /// Once a second, not every tick: <c>Alive</c> for the core is <c>IsPlayable</c>, i.e. a call
+    /// into the world, and there's no reason to make it thirty times a second for an indicator.
+    /// <b>Hence the limitation: the value is only good as an indicator.</b> Logic must not be built
+    /// on it — it lies for the first second after death.
     /// </para>
     /// <para>
-    /// Подметание — страховка от утечки. Появись когда-нибудь путь, убирающий сессию мимо
-    /// <c>Release</c>, хендл остался бы жить со ссылкой на закрытую петлю, и снимок агента упёрся
-    /// бы в отменённый токен.
+    /// The sweep is insurance against a leak. Should a path ever appear that removes a session
+    /// without going through <c>Release</c>, the handle would keep living with a reference to a
+    /// closed loop, and an agent snapshot would run into a cancelled token.
     /// </para>
     /// </remarks>
     private void RefreshAgentDirectory(float frameTime)
@@ -199,7 +201,7 @@ public sealed partial class StationAiAgentSystem
         _agents.RetainOnly(_sessions.Values.Select(s => s.Body.Id).ToList());
     }
 
-    // ------------------------------------------------------------ входящие команды
+    // ------------------------------------------------------------ inbound commands
 
     /// <summary>
     /// Queue a user message for the agent's next turn.
@@ -222,7 +224,7 @@ public sealed partial class StationAiAgentSystem
         return ok;
     }
 
-    /// <summary>Положить сообщение в ящик конкретной сессии. Любой поток: у ящика свой замок.</summary>
+    /// <summary>Put a message into a specific session's inbox. Any thread: the inbox has its own lock.</summary>
     private static bool Deliver(AgentSession session, string text, out string reason)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -266,20 +268,20 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Правка записи агента снаружи. Та же оговорка про диск против префикса.
+    /// Edit an agent's skill entry from outside. Same caveat about disk versus prefix.
     /// </summary>
     /// <remarks>
-    /// <paramref name="name"/> — путь внутри <c>/skills</c>, например <c>питание/смес</c>. Это
-    /// изменение формата: раньше имена были плоскими. Старое плоское имя по-прежнему работает и
-    /// означает файл в корне <c>/skills</c>.
+    /// <paramref name="name"/> is a path inside <c>/skills</c>, e.g. <c>питание/смес</c>. This is a
+    /// format change: names used to be flat. An old flat name still works and refers to a file at
+    /// the root of <c>/skills</c>.
     /// </remarks>
     public SkillResult ChangeSkill(string name, string? when, string? body, string? match, string? replacement)
     {
         if (CoreVfs?.Skills is not { } skills)
             return new SkillResult(false, "агент ещё не запускался, библиотека не смонтирована");
 
-        // Две формы одной команды: (name, when, body) пишет файл целиком, (name, match,
-        // replacement) правит фрагмент. Повторяет два инструмента, которые есть у самой модели.
+        // Two forms of the same command: (name, when, body) writes the whole file, (name, match,
+        // replacement) edits a fragment. Mirrors the two tools the model itself has.
         var result = match != null || replacement != null
             ? skills.Edit(name, match ?? "", replacement ?? "")
             : skills.Write(name, name, when ?? "", body ?? "");

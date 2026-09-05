@@ -8,11 +8,12 @@ using Robust.Shared.Map;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Консоль управления ИИ-боргом.
+/// Console for controlling an AI borg.
 ///
 /// <para>
-/// Отдельная команда, а не подкоманда <c>aiagent</c>: та адресует агента в ядре, и смешивать в ней
-/// два тела значило бы, что каждая её подкоманда обязана сначала выяснить, о ком речь.
+/// A separate command, not a subcommand of <c>aiagent</c>: that one addresses the agent in the
+/// core, and mixing two bodies into it would mean every one of its subcommands would first have to
+/// figure out which one is meant.
 /// </para>
 /// </summary>
 [AdminCommand(AdminFlags.Debug)]
@@ -126,9 +127,9 @@ public sealed class AiBorgCommand : IConsoleCommand
                     return;
                 }
 
-                // Адресуем ИМЕННО борга. Общая aiagent tool берёт первого попавшегося из словаря
-                // сессий, и с двумя агентами это лотерея: команда «иди на мостик» могла уехать
-                // мозгу в ядре, у которого такого инструмента нет.
+                // Address the BORG specifically. The generic aiagent tool picks whichever session
+                // comes first out of the dictionary, and with two agents that's a lottery: a "go to
+                // the bridge" command could end up going to the core brain, which has no such tool.
                 var agentId = FirstBorgAgentId(entMan);
                 if (agentId == null)
                 {
@@ -147,8 +148,9 @@ public sealed class AiBorgCommand : IConsoleCommand
 
             case "path":
             {
-                // Почему поиск не нашёл дороги. Без этого «дороги нет» неотличимо от «цель в
-                // стене», «старт в стене» и «отсеки не связаны» — а лечатся они по-разному.
+                // Why the search didn't find a path. Without this, "no path" is indistinguishable
+                // from "target is in a wall," "start is in a wall," and "compartments aren't
+                // connected" — and each is fixed differently.
                 if (args.Length < 2)
                 {
                     shell.WriteError("aiborg path <маяк>");
@@ -204,14 +206,14 @@ public sealed class AiBorgCommand : IConsoleCommand
                     var xform = entMan.GetComponent<TransformComponent>(uid);
                     var line = $"{entMan.ToPrettyString(uid)} → {xform.Coordinates}";
 
-                    // Состояние рулевого — единственный способ отличить «идёт медленно» от
-                    // «упёрся и стоит»: в игре это выглядит одинаково.
+                    // Steering state is the only way to tell "moving slowly" apart from "stuck and
+                    // standing still": in-game these look identical.
                     if (entMan.TryGetComponent<Content.Shared.Movement.Components.InputMoverComponent>(uid, out var mover))
                         line += $" | CanMove={mover.CanMove}";
 
-                    // Стоит ли робот на навмеше. Если нет — путепоиск не построит маршрут даже
-                    // на соседний тайл, и «не нашёл дороги» означает не «дороги нет», а
-                    // «пути не существует даже из-под ног».
+                    // Whether the borg is standing on the navmesh. If not, pathfinding won't build
+                    // a route even to a neighboring tile, and "no path found" doesn't mean "there's
+                    // no path" but "no path exists even from right under its feet."
                     var pathfinding = entMan.System<Content.Server.NPC.Pathfinding.PathfindingSystem>();
                     var poly = pathfinding.GetPoly(xform.Coordinates);
                     line += $" | навмеш={(poly == null ? "НЕТ" : "есть")}";

@@ -6,25 +6,25 @@ using Content.Server.AiAgent.Skills;
 namespace Content.Server.AiAgent.Vfs.Mounts;
 
 /// <summary>
-/// Заметки о людях как папка. Под ней — нетронутый <see cref="PlayerNoteStore"/>.
+/// Notes about people as a folder. An untouched <see cref="PlayerNoteStore"/> sits underneath.
 ///
 /// <para>
-/// Переходник, а не замена. В сторе живут вещи, которые из файловой системы не видны и которые
-/// потерять нельзя: штамп <c>[раунд N · дата]</c>, который ставит сервер, а не модель; слаг из
-/// белого списка символов вместо пути; лимит на одну заметку, а не на всё хранилище; правка
-/// фрагментом. Всё это остаётся ровно там, где было.
+/// An adapter, not a replacement. Things that aren't visible from the filesystem and mustn't be
+/// lost live in the store: the <c>[round N · date]</c> stamp, set by the server, not the model; a
+/// slug from a character whitelist instead of a path; a limit per note rather than on the whole
+/// store; fragment-based editing. All of that stays exactly where it was.
 /// </para>
 /// <para>
-/// Один файл на человека, поэтому вложенности здесь нет: <c>ls</c> отдаёт плоский список, а
-/// <c>grep</c> ищет по телу записей. Имя файла — слаг, но в описании стоит настоящее имя, потому
-/// что показывать модели «иван-петров» вместо «Иван Петров» незачем.
+/// One file per person, so there's no nesting here: <c>ls</c> returns a flat list, and <c>grep</c>
+/// searches entry bodies. The file name is a slug, but the description carries the real name,
+/// because there's no reason to show the model "ivan-petrov" instead of "Ivan Petrov".
 /// </para>
 /// </summary>
 public sealed class NotesMount : VfsMount
 {
     public required PlayerNoteStore Store { get; init; }
 
-    /// <summary>Штамп раунда. Ставит сервер: дата и номер смены — не то, что модель должна помнить.</summary>
+    /// <summary>Round stamp. Set by the server: the date and shift number aren't something the model should remember.</summary>
     public required Func<string> Stamp { get; init; }
 
     public override IReadOnlyList<VfsEntry> List(VfsPath relative, out string error)
@@ -107,11 +107,12 @@ public sealed class NotesMount : VfsMount
     public override void Reload() => Store.LoadFromDisk();
 
     /// <summary>
-    /// Запись новой заметки. Штамп проставляется здесь, «содержимое» становится одной записью.
+    /// Writing a new note. The stamp is applied here, "content" becomes a single entry.
     /// </summary>
     /// <remarks>
-    /// Целиком переписать заметку нельзя — и это не упущение переходника, а правило стора.
-    /// Заметки датированы по раундам, и «перезапись» затёрла бы чужую смену одним движением.
+    /// A note can't be rewritten wholesale — and that's not an oversight of the adapter, it's the
+    /// store's rule. Notes are dated by round, and a "rewrite" would erase someone else's shift in
+    /// one move.
     /// </remarks>
     public override VfsWrite Write(VfsPath relative, string desc, string content)
     {
@@ -140,8 +141,8 @@ public sealed class NotesMount : VfsMount
         var hasMatch = !string.IsNullOrWhiteSpace(match);
         var hasNew = !string.IsNullOrWhiteSpace(replacement);
 
-        // Тот же контракт, что у остальной записи: пусто в match — дописать, пусто в replacement —
-        // удалить. Пустое и то и другое означает «ничего не сказано», а не «сотри всё».
+        // The same contract as the rest of writing: empty match means append, empty replacement
+        // means remove. Both empty means "nothing was said", not "erase everything".
         var result = (hasMatch, hasNew) switch
         {
             (false, true) => Store.Add(relative.Name, replacement, Stamp()),
@@ -163,8 +164,9 @@ public sealed class NotesMount : VfsMount
         if (!Writable)
             return Denied();
 
-        // Заметку целиком не сносим: у записей стоят штампы разных смен, и удаление файла — это
-        // потеря чужого раунда. Устаревшую запись выбрасывают фрагментом, через edit_file.
+        // We don't tear down a note wholesale: its entries carry stamps from different shifts, and
+        // deleting the file means losing someone else's round. An outdated entry is thrown out as
+        // a fragment, via edit_file.
         return VfsWrite.No(
             "заметку целиком удалить нельзя: в ней записи разных смен. Выбрось устаревшую запись " +
             "фрагментом — edit_file с пустым replacement");

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Skills;
 using Content.Server.AiAgent.Vfs.Mounts;
 using Robust.Shared.ContentPack;
@@ -10,7 +11,7 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent.Vfs;
 
 /// <summary>
-/// Единственный способ собрать файловую систему агента.
+/// The one and only way to assemble the agent's filesystem.
 ///
 /// <code>
 /// var vfs = new VfsBuilder(sawmill)
@@ -24,11 +25,11 @@ namespace Content.Server.AiAgent.Vfs;
 /// </code>
 ///
 /// <para>
-/// Глаголов пять, и каждый называет то, что за ним стоит, вместо того чтобы делать вид, будто за
-/// всеми монтированиями одна машинерия. За <see cref="AddNotes"/> и <see cref="AddMemory"/> стоят
-/// нетронутые сторы со штампами раунда и лимитами; за <see cref="AddGuidebook"/> — прототипы, у
-/// которых вообще нет каталога на диске. Один общий <c>AddFolder(путь, точка, права)</c> заставил
-/// бы каждого читателя гадать, что именно произойдёт с его файлами.
+/// There are five verbs, and each names what stands behind it, instead of pretending all mounts
+/// share one machinery. Behind <see cref="AddNotes"/> and <see cref="AddMemory"/> stand untouched
+/// stores with round stamps and limits; behind <see cref="AddGuidebook"/> stand prototypes that
+/// have no on-disk directory at all. One shared <c>AddFolder(path, point, access)</c> would force
+/// every reader to guess what actually happens to their files.
 /// </para>
 /// </summary>
 public sealed class VfsBuilder
@@ -36,23 +37,23 @@ public sealed class VfsBuilder
     private readonly ISawmill _sawmill;
     private readonly List<VfsMount> _mounts = new();
 
-    /// <summary>Противоречия в самой таблице. Собираются все разом и роняют <see cref="Build"/>.</summary>
+    /// <summary>Contradictions in the mount table itself. Collected all at once and fail <see cref="Build"/>.</summary>
     private readonly List<string> _problems = new();
 
     /// <summary>
-    /// Беды с содержимым: пустой справочник, нечитаемый каталог.
+    /// Content troubles: an empty reference library, an unreadable directory.
     ///
     /// <para>
-    /// Отдельно от <see cref="_problems"/> намеренно. Кривая таблица монтирований — ошибка
-    /// программиста, и падать на ней правильно. Пустая вика — беда развёртывания, и падать на ней
-    /// НЕЛЬЗЯ: исключение при сборке тела означает, что агент на станции не появится вовсе, то
-    /// есть раунд без ИИ вместо раунда с ИИ, который не знает справочника. Второе хуже, но первое
-    /// катастрофичнее.
+    /// Deliberately separate from <see cref="_problems"/>. A malformed mount table is a programmer
+    /// error, and failing on it is correct. An empty wiki is a deployment problem, and failing on
+    /// it is NOT ALLOWED: an exception while assembling the body means the agent won't appear on
+    /// the station at all — a round with no AI instead of a round with an AI that doesn't know the
+    /// reference library. The second is worse, but the first is catastrophic.
     /// </para>
     /// <para>
-    /// Молчать при этом тоже нельзя — «агент разучился» без единой строки в логе разбирают
-    /// сутками. Поэтому громко: <c>Error</c> в саймилл и список на самой
-    /// <see cref="Vfs.Complaints"/>, где его видно тестам и отладчику.
+    /// Staying silent about it isn't allowed either — "the agent forgot how" gets debugged for days
+    /// with not a single line in the log. So it's loud: an <c>Error</c> to the sawmill and a list on
+    /// <see cref="Vfs.Complaints"/> itself, where tests and the debugger can see it.
     /// </para>
     /// </summary>
     private readonly List<string> _complaints = new();
@@ -62,9 +63,9 @@ public sealed class VfsBuilder
         _sawmill = sawmill;
     }
 
-    // --------------------------------------------------------------- монтирования
+    // --------------------------------------------------------------- mounts
 
-    /// <summary>Дерево статей на диске. Общий случай: и справочник, и личные записи агента.</summary>
+    /// <summary>Tree of articles on disk. The general case: both the reference library and the agent's own notes.</summary>
     public VfsBuilder AddFolder(string diskPath, string point, VfsAccess access, string description)
     {
         var tree = new DocTree(diskPath, _sawmill);
@@ -87,12 +88,12 @@ public sealed class VfsBuilder
     }
 
     /// <summary>
-    /// Уже готовое дерево, общее для всех агентов.
+    /// An already-built tree, shared across all agents.
     ///
     /// <para>
-    /// Разделяется ЭКЗЕМПЛЯР, а не каталог. Справочник весит полтора мегабайта; копия на каждое из
-    /// четырёх тел — это вчетверо больше памяти и вчетверо больше обходов диска на каждой
-    /// перестройке префикса, причём внутри ритуала компакции.
+    /// It's the INSTANCE that's shared, not the directory. The reference library weighs a megabyte
+    /// and a half; a copy per each of the four bodies would be four times the memory and four times
+    /// the disk traversals on every prefix rebuild, and that's inside the compaction ritual.
     /// </para>
     /// </summary>
     public VfsBuilder AddShared(DocTree tree, string point, VfsAccess access, string description)
@@ -111,11 +112,11 @@ public sealed class VfsBuilder
     }
 
     /// <summary>
-    /// Заметки о людях: под монтированием нетронутый <see cref="PlayerNoteStore"/>.
+    /// Notes about people: an untouched <see cref="PlayerNoteStore"/> underneath the mount.
     /// </summary>
     /// <param name="agentDir">
-    /// Каталог АГЕНТА, а не папка заметок: стор сам дописывает к нему «people», и передавать
-    /// готовый путь значило бы завести второй способ вычислять тот же самый.
+    /// The AGENT's directory, not the notes folder: the store appends "people" to it itself, and
+    /// passing an already-built path would mean introducing a second way to compute the same thing.
     /// </param>
     public VfsBuilder AddNotes(
         string agentDir,
@@ -139,11 +140,12 @@ public sealed class VfsBuilder
         });
     }
 
-    /// <summary>Долгая память: под монтированием нетронутый <see cref="MemoryStore"/>.</summary>
-    /// <param name="agentDir">Каталог агента: стор сам дописывает к нему «memory».</param>
+    /// <summary>Long-term memory: an untouched <see cref="MemoryStore"/> underneath the mount.</summary>
+    /// <param name="agentDir">The agent's directory: the store appends "memory" to it itself.</param>
     /// <param name="limit">
-    /// Потолок памяти в символах. Параметром, а не свойством после сборки: у стора он объявлен
-    /// <c>init</c>, и это правильно — потолок, который можно подвинуть на ходу, не потолок.
+    /// The memory ceiling in characters. Taken as a parameter, not a property set after assembly:
+    /// the store declares it <c>init</c>, and rightly so — a ceiling that can be moved on the fly
+    /// isn't a ceiling.
     /// </param>
     public VfsBuilder AddMemory(
         string agentDir,
@@ -168,11 +170,11 @@ public sealed class VfsBuilder
     }
 
     /// <summary>
-    /// Уже собранное общее монтирование — вика игры, например.
+    /// An already-assembled shared mount — the game's wiki, for example.
     ///
-    /// Экземпляр общий на процесс: у <see cref="Mounts.GuidebookMount"/> дерево строится из
-    /// прототипов и от тела не зависит, а строить его заново на каждого из четырёх агентов значило
-    /// бы четыре обхода всех прототипов вики вместо одного.
+    /// The instance is shared per process: <see cref="Mounts.GuidebookMount"/> builds its tree from
+    /// prototypes and doesn't depend on the body, and rebuilding it for each of the four agents
+    /// would mean four traversals of all the wiki prototypes instead of one.
     /// </summary>
     public VfsBuilder AddShared(VfsMount mount)
     {
@@ -182,7 +184,7 @@ public sealed class VfsBuilder
         return Add(mount);
     }
 
-    /// <summary>Вика игры: дерево и имена берутся у прототипов, диска у неё нет.</summary>
+    /// <summary>The game's wiki: the tree and names come from prototypes, it has no disk.</summary>
     public VfsBuilder AddGuidebook(
         IPrototypeManager proto,
         IResourceManager res,
@@ -201,7 +203,7 @@ public sealed class VfsBuilder
         return Add(mount);
     }
 
-    /// <summary>Один текстовый файл без разбора на «когда» и тело.</summary>
+    /// <summary>A single text file with no split into "when" and body.</summary>
     public VfsBuilder AddText(string file, string point, VfsAccess access, string description) =>
         Add(new TextMount
         {
@@ -211,17 +213,17 @@ public sealed class VfsBuilder
             File = file,
         });
 
-    // -------------------------------------------------------------------- сборка
+    // -------------------------------------------------------------------- assembly
 
     /// <summary>
-    /// Собрать. Падает на противоречивой таблице, а не подстраивается под неё.
+    /// Assemble. Fails on a contradictory table rather than adapting to it.
     ///
     /// <para>
-    /// Ошибки собираются все разом и сообщаются одним исключением. Падать на первой значило бы
-    /// заставить чинить таблицу по одной строке за перезапуск сервера.
+    /// Errors are collected all at once and reported as a single exception. Failing on the first
+    /// one would mean fixing the table one line per server restart.
     /// </para>
     /// </summary>
-    public Vfs Build()
+    public Vfs Build(AgentLang lang = AgentLang.Ru)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -247,7 +249,7 @@ public sealed class VfsBuilder
         foreach (var complaint in _complaints)
             _sawmill.Error($"файловая система: {complaint}");
 
-        return new Vfs(_mounts, _complaints);
+        return new Vfs(_mounts, _complaints, lang);
     }
 
     private VfsBuilder Add(VfsMount mount)
@@ -257,12 +259,12 @@ public sealed class VfsBuilder
     }
 
     /// <summary>
-    /// Завести каталог под запись заранее.
+    /// Create a directory ahead of time, for writing.
     ///
     /// <para>
-    /// Первый борг приходит на станцию с пустым каталогом, и первая же его запись иначе упиралась
-    /// бы в отсутствующую папку — то есть в отказ, который выглядит как «агент не умеет писать».
-    /// Создать пустой каталог дешевле, чем объяснять это в промпте.
+    /// The first borg arrives on the station with an empty directory, and its very first write
+    /// would otherwise run into a missing folder — that is, into a failure that looks like "the
+    /// agent can't write". Creating an empty directory is cheaper than explaining this in the prompt.
     /// </para>
     /// </summary>
     private void Ensure(string path)

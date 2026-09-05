@@ -1,39 +1,41 @@
 /**
- * Зеркало DTO из Content.Server/AiAgent/Bus/AgentStateSnapshot.cs.
+ * Mirror of the DTOs from Content.Server/AiAgent/Bus/AgentStateSnapshot.cs.
  *
- * Один файл, один источник: всё, что клиент знает о форме данных, живёт здесь. Генератора нет
- * намеренно — DTO меняются раз в несколько недель, а тянуть кодогенерацию из C# в проект, где
- * до сих пор не было ни одного package.json, дороже, чем держать полсотни строк руками.
+ * One file, one source: everything the client knows about the shape of the data lives here.
+ * There's deliberately no generator — the DTOs change once every few weeks, and pulling C#
+ * codegen into a project that until now didn't have a single package.json costs more than
+ * keeping fifty lines by hand.
  */
 
-// ---------------------------------------------------------------- снимок
+// ---------------------------------------------------------------- snapshot
 
 /**
- * Процессный снимок: то, что общее на всех агентов.
+ * Process snapshot: what's shared across all agents.
  *
- * Сессии здесь нет намеренно. Память, навыки и заметки принадлежат процессу и весят десятки
- * килобайт; системный промпт и переписка принадлежат агенту и весят мегабайты. Слитый воедино
- * ответ заставлял бы качать четыре истории, чтобы посмотреть на одну.
+ * There's deliberately no session here. Memory, skills, and notes belong to the process and
+ * weigh tens of kilobytes; the system prompt and the conversation belong to the agent and weigh
+ * megabytes. A merged response would force downloading four histories to look at one.
  */
 export interface AgentStateSnapshot {
   instance: string
   seq: number
   round: number
-  /** Кто сейчас жив. Дешёвые строки: ни промпта, ни истории. */
+  /** Who's currently alive. Cheap rows: no prompt, no history. */
   agents: AgentRosterEntry[]
   memory: AgentMemory
   skills: AgentSkill[]
   notes: AgentPlayerNote[]
-  /** Потолок ОДНОЙ заметки в символах — общий на хранилище. */
+  /** Ceiling for a SINGLE note in characters — shared across the whole store. */
   note_limit: number
 }
 
 /**
- * Снимок ОДНОГО агента.
+ * Snapshot of ONE agent.
  *
- * `agent: null` приходит со статусом 200, а не 404: агент мог уйти между кадром `session.started`
- * и запросом. Это штатная гонка, и обрабатывать её надо как «слайс опустел», а не как ошибку —
- * 404 у нас терминален и навсегда останавливает петлю опроса.
+ * `agent: null` comes back with status 200, not 404: the agent may have left between the
+ * `session.started` frame and the request. This is a normal race, and it must be handled as
+ * "the slice went empty", not as an error — a 404 is terminal for us and permanently stops the
+ * polling loop.
  */
 export interface AgentSessionSnapshot {
   instance: string
@@ -42,10 +44,10 @@ export interface AgentSessionSnapshot {
 }
 
 /**
- * Строка ростера: столько, сколько нужно на вкладку с индикатором.
+ * A roster row: just enough for a tab with an indicator.
  *
- * `started_seq` отличает «тот же агент» от «тот же id, новая сессия после переклейма»: номер
- * раунда посреди раунда не меняется и для этого не годится.
+ * `started_seq` distinguishes "the same agent" from "the same id, a new session after a
+ * respawn": the round number doesn't change mid-round and isn't fit for this purpose.
  */
 export interface AgentRosterEntry {
   id: string
@@ -72,14 +74,14 @@ export interface AgentSession {
   prefix_hash: string
   system_prompt: string
   tools_json: string
-  /** Растёт при каждой перенумерации тела. Индекс сообщения имеет смысл только внутри эпохи. */
+  /** Increments on every body renumbering. A message index only makes sense within an epoch. */
   body_epoch: number
   messages: AgentMessage[]
   stats: AgentStats
   last_turn: AgentTurn | null
 }
 
-/** Живые записи и замороженный текст зоны 0 — они расходятся по устройству. */
+/** Live entries and the frozen text of zone 0 — they diverge by design. */
 export interface AgentMemory {
   memory_live: string[]
   memory_frozen: string
@@ -93,13 +95,13 @@ export interface AgentSkill {
 }
 
 /**
- * Заметка об одном человеке.
+ * A note about one person.
  *
- * Замороженного двойника, в отличие от памяти, нет: заметки в системный промпт не вклеиваются
- * вовсе — агент узнаёт о них строкой NOTE и читает инструментом. Показывать здесь нечего, кроме
- * живого содержимого.
+ * Unlike memory, there's no frozen counterpart: notes are never spliced into the system prompt
+ * at all — the agent learns about them via a NOTE line and reads them with a tool. There's
+ * nothing to show here besides the live content.
  *
- * Ключ — `slug`, а не `name`: два написания одного имени дают один файл.
+ * The key is `slug`, not `name`: two spellings of the same name yield one file.
  */
 export interface AgentPlayerNote {
   slug: string
@@ -115,7 +117,7 @@ export interface AgentMessage {
   tool_call_id: string | null
 }
 
-/** `arguments` — сырая строка ровно как её выдала модель, специально не нормализованная. */
+/** `arguments` is the raw string exactly as the model produced it, deliberately not normalized. */
 export interface AgentToolCall {
   id: string
   name: string
@@ -126,7 +128,7 @@ export interface AgentStats {
   turns: number
   conv_turns: number
   untooled_replies: number
-  /** Ходы, закрытые явным noop: молчание по решению, а не по поломке. */
+  /** Turns closed by an explicit noop: silence by decision, not by breakage. */
   idle_turns: number
   consecutive_failures: number
   broken_promises: number
@@ -158,13 +160,13 @@ export interface AgentTurn {
   radio_channel: string | null
   addressed: boolean
   forced: boolean
-  /** Дословный вход хода вместе со строкой SELF. */
+  /** The turn's verbatim input together with the SELF line. */
   perception: string
 }
 
-// ---------------------------------------------------------------- события
+// ---------------------------------------------------------------- events
 
-/** Имена с провода — выводятся на сервере из enum, так что список закрыт. */
+/** Names off the wire — derived server-side from an enum, so the list is closed. */
 export type AgentEventType =
   | 'session.started'
   | 'session.ended'
@@ -181,7 +183,7 @@ export type AgentEventType =
 export interface AgentEventFrame {
   seq: number
   type: AgentEventType
-  /** Пусто у процессных сторов (память, скиллы) — они переживают сессию. */
+  /** Empty for process-level stores (memory, skills) — they outlive the session. */
   session: string
   payload: unknown
 }
@@ -189,20 +191,21 @@ export interface AgentEventFrame {
 export interface AgentEventsResponse {
   instance: string
   seq: number
-  /** Курсор непригоден: другой процесс, из будущего, или кольцо уже перезаписало. */
+  /** The cursor is unusable: a different process, from the future, or the ring already overwrote it. */
   resync: boolean
   /**
-   * Ростер едет вместе с лентой, но КАДРОМ НЕ ЯВЛЯЕТСЯ.
+   * The roster rides along with the stream, but it is NOT A FRAME.
    *
-   * К нему не относятся ни курсор, ни resync; снимается он в момент возврата долгого опроса и
-   * может отставать от запроса на все двадцать пять секунд. Сеять агента по ростеру поэтому
-   * нельзя — только по кадру `session.started` или по выбору оператора.
+   * Neither the cursor nor resync apply to it; it is captured at the moment the long poll
+   * returns and can lag the request by the full twenty-five seconds. Seeding an agent from the
+   * roster is therefore not allowed — only from a `session.started` frame or an operator's
+   * choice.
    */
   agents: AgentRosterEntry[]
   events: AgentEventFrame[]
 }
 
-// Формы payload по видам.
+// Payload shapes by kind.
 
 export interface SessionStartedPayload {
   brain: number
@@ -242,7 +245,7 @@ export interface SkillsReloadedPayload {
   skills: AgentSkill[]
 }
 
-/** Пустой `entries` — надгробие: заметки больше нет, ключ надо удалить. */
+/** An empty `entries` is a tombstone: the note is gone, the key must be removed. */
 export type PlayerNoteUpdatedPayload = AgentPlayerNote
 
 export interface PlayerNotesReloadedPayload {
@@ -251,7 +254,7 @@ export interface PlayerNotesReloadedPayload {
 
 export type StatsPayload = AgentStats
 
-// ---------------------------------------------------------------- здоровье
+// ---------------------------------------------------------------- health
 
 export interface AgentHealth {
   ok: boolean
@@ -260,11 +263,11 @@ export interface AgentHealth {
   ring: number
   ring_used: number
   round: number
-  /** Поля session и pending_input убраны: первое было константой, второе теперь у каждого своё. */
+  /** The session and pending_input fields are gone: the former was constant, the latter is now per-agent. */
   agents: AgentRosterEntry[]
 }
 
-// ---------------------------------------------------------------- команды
+// ---------------------------------------------------------------- commands
 
 export type AgentCommand =
   | { type: 'message.send'; agent: string; text: string }
@@ -281,14 +284,14 @@ export interface AgentCommandResult {
   ok: boolean
   message?: string
   usage?: string
-  /** Куда правка легла: `next_turn` для сообщения, `disk` для памяти и скиллов. */
+  /** Where the change landed: `next_turn` for a message, `disk` for memory and skills. */
   applied?: string
-  /** Когда её увидит МОДЕЛЬ — это не то же самое, что «применено». */
+  /** When the MODEL will see it — that's not the same thing as "applied". */
   visible_to_model?: string
   seq?: number
-  /** Кому ушло сообщение. Есть только у message.send. */
+  /** Who the message went to. Present only for message.send. */
   agent?: string
-  /** `process` у памяти и скиллов: они общие на всех агентов. */
+  /** `process` for memory and skills: they're shared across all agents. */
   scope?: string
   error?: string
 }

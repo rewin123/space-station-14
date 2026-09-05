@@ -31,10 +31,10 @@ public sealed class CacheMetrics
     private double _ratioSum;
     private int _consecutiveLow;
 
-    /// <summary>Кто отвечал на прошлом ходу — чтобы заметить смену провайдера.</summary>
+    /// <summary>Who answered on the previous turn — to notice a provider switch.</summary>
     private string? _lastProfile;
 
-    /// <summary>Текущий провайдер не сообщает долю из кэша, так что судить о ней нечем.</summary>
+    /// <summary>The current provider does not report the cached share, so there is nothing to judge it by.</summary>
     private bool _cacheUnreported;
 
     /// <summary>Size of the previous prompt — the ceiling on what could possibly be reused.</summary>
@@ -53,16 +53,16 @@ public sealed class CacheMetrics
     }
 
     /// <summary>
-    /// Кто отвечал на этом ходу. Вызывать перед <see cref="Record"/>.
+    /// Who answered on this turn. Call before <see cref="Record"/>.
     ///
     /// <para>
-    /// Нужно из-за цепочки фаллбеков, и по двум разным причинам. Первая: смена провайдера
-    /// <em>законно</em> обесценивает кэш — у новой стороны нашего префикса просто нет, — так что
-    /// первый ход после переключения не повод для алярма, ровно как первый ход после компакции.
-    /// Вторая: не всякий провайдер вообще сообщает, сколько промпта пришло из кэша, и у такого ноль
-    /// в <c>cached_tokens</c> означает «неизвестно», а не «кэш сломан». Алярм, кричащий ERROR без
-    /// поломки, обесценивает сам себя — а он здесь единственный способ поймать настоящую поломку,
-    /// которая иначе полностью бесшумна.
+    /// Needed because of the fallback chain, and for two distinct reasons. First: a provider switch
+    /// <em>legitimately</em> devalues the cache — the new side simply does not have our prefix — so
+    /// the first turn after a switch is not a reason to alarm, exactly like the first turn after a
+    /// compaction. Second: not every provider even reports how much of the prompt came from cache,
+    /// and for one that doesn't, a zero in <c>cached_tokens</c> means "unknown", not "cache broken".
+    /// An alarm that screams ERROR without a real break devalues itself — and it is the only way here
+    /// to catch a real break, which is otherwise completely silent.
     /// </para>
     /// </summary>
     public void NoteProvider(string? profile, bool reportsCache)
@@ -120,8 +120,8 @@ public sealed class CacheMetrics
         var reuse = reusable <= 0 ? 1.0 : (double)cachedTokens / reusable;
         _previousPromptTokens = promptTokens;
 
-        // Провайдер, не сообщающий о кэше, не даёт повода судить: у него нулевая доля — это
-        // «неизвестно», и алярм здесь молчит, а не отчитывается о поломке, которой не видел.
+        // A provider that doesn't report on the cache gives no grounds to judge: its zero share
+        // means "unknown", and the alarm stays quiet here rather than reporting a break it never saw.
         if (_cacheUnreported)
         {
             _consecutiveLow = 0;

@@ -20,28 +20,29 @@ using Robust.Shared.Network;
 namespace Content.Server.AiAgent.RogueAi;
 
 /// <summary>
-/// Режим «злой ИИ»: скрытый и открытый — <c>RogueAiHiddenRule</c> и <c>RogueAiOpenRule</c>.
+/// The "rogue AI" mode: hidden and open — <c>RogueAiHiddenRule</c> and <c>RogueAiOpenRule</c>.
 ///
 /// <para>
-/// <b>Что режим меняет.</b> Три вещи, и все три — на старте раунда: агент получает свой лоусет и
-/// свой файл личности вместо штатных, станция раздаёт ему доступ к оборудованию, которого он в
-/// обычной смене не касается, а в открытом варианте вдобавок весь экипаж заступает ассистентами.
+/// <b>What the mode changes.</b> Three things, and all three at round start: the agent gets its
+/// own lawset and its own personality file instead of the standard ones, the station grants it
+/// access to equipment it doesn't touch in an ordinary shift, and in the open variant the whole
+/// crew additionally starts as assistants.
 /// </para>
 /// <para>
-/// <b>Это сознательное нарушение паритета с живым игроком</b> — того самого правила, на котором
-/// стоит весь остальной модуль. Смысл режима ровно в нарушении, и живёт оно только внутри режима:
-/// компоненты доступа навешиваются на сущности раунда, а те исчезают вместе с картой при
-/// рестарте. Ничего чистить не нужно и нечем — <see cref="ActiveRule"/> обнуляется, и следующий
-/// раунд начинается с обычного ИИ.
+/// <b>This is a deliberate violation of parity with a live player</b> — the very rule the rest of
+/// this module stands on. The point of the mode is exactly that violation, and it only lives
+/// inside the mode: access components are attached to round entities, and those disappear together
+/// with the map on restart. There's nothing to clean up and nothing to clean it with —
+/// <see cref="ActiveRule"/> is cleared, and the next round starts with an ordinary AI.
 /// </para>
 /// <para>
-/// <b>Порядок старта раунда, на который всё опирается</b> (<c>GameTicker.RoundFlow.cs</c>):
-/// <c>LoadMaps</c> → <c>StartGamePresetRules</c> (здесь срабатывает <see cref="Started"/>) →
-/// <c>SpawnPlayers</c> (внутри: <c>RulePlayerSpawningEvent</c> → раздача должностей →
-/// <c>RulePlayerJobsAssignedEvent</c>) → <c>RunLevel = InRound</c>, и только на последнем шаге
-/// агент занимает ядро. То есть и должности, и доступ успевают лечь до того, как соберётся
-/// замороженный системный промпт, а законы ставятся уже по факту существования мозга — в
-/// <c>StationAiAgentSystem.TryClaimAnyCore</c>, см. <see cref="Lawset"/>.
+/// <b>The round-start order everything relies on</b> (<c>GameTicker.RoundFlow.cs</c>):
+/// <c>LoadMaps</c> → <c>StartGamePresetRules</c> (this is where <see cref="Started"/> fires) →
+/// <c>SpawnPlayers</c> (inside: <c>RulePlayerSpawningEvent</c> → job assignment →
+/// <c>RulePlayerJobsAssignedEvent</c>) → <c>RunLevel = InRound</c>, and only at the last step does
+/// the agent claim the core. That means both jobs and access are already in place before the frozen
+/// system prompt is assembled, while the laws are set only once the brain actually exists — in
+/// <c>StationAiAgentSystem.TryClaimAnyCore</c>, see <see cref="Lawset"/>.
 /// </para>
 /// </summary>
 public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleComponent>
@@ -56,11 +57,11 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
     private ISawmill _sawmill = default!;
 
     /// <summary>
-    /// Активное правило режима, либо null — обычная смена.
+    /// The mode's active rule, or null — an ordinary shift.
     ///
-    /// Единственный источник истины «мы в режиме злого ИИ»; его спрашивают и промпт, и захват
-    /// ядра. Держится полем, а не поиском по сущностям правил, потому что спрашивают его из
-    /// горячих мест и на каждом захвате.
+    /// The single source of truth for "we're in rogue AI mode"; both the prompt and core claiming
+    /// ask it. Kept as a field rather than a search over rule entities, because it's asked from hot
+    /// spots and on every claim.
     /// </summary>
     public RogueAiRuleComponent? ActiveRule { get; private set; }
 
@@ -76,16 +77,16 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
 
         _sawmill = _logManager.GetSawmill("ai.rogue");
 
-        // Момент перед раздачей должностей: список должностей ещё можно переписать.
+        // The moment before job assignment: the job list can still be rewritten.
         SubscribeLocalEvent<RulePlayerSpawningEvent>(OnPlayerSpawning);
 
-        // Момент, когда игроки уже стоят на станции. Образец — BackupPowerSystem.
+        // The moment when players are already standing on the station. Pattern from BackupPowerSystem.
         SubscribeLocalEvent<RulePlayerJobsAssignedEvent>(OnJobsAssigned);
 
         SubscribeLocalEvent<RoundRestartCleanupEvent>(OnRoundCleanup);
     }
 
-    /// <summary>Станции, которым доступ на этот раунд уже роздан.</summary>
+    /// <summary>Stations that already have access granted for this round.</summary>
     private readonly HashSet<EntityUid> _served = new();
 
     protected override void Started(EntityUid uid,
@@ -106,7 +107,7 @@ public sealed partial class RogueAiRuleSystem : GameRuleSystem<RogueAiRuleCompon
         _served.Clear();
     }
 
-    // ------------------------------------------------------------------ должности
+    // ------------------------------------------------------------------ jobs
 
     private void OnPlayerSpawning(RulePlayerSpawningEvent ev)
     {

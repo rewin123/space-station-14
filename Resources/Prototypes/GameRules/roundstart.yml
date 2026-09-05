@@ -180,11 +180,12 @@
   id: Traitor
   components:
   - type: GameRule
-    # FORK PATCH К5 (docs/upstream-patches.md).
-    # Апстримовые 5 на этом сервере означали «предателей не бывает никогда»: онлайн 0-4,
-    # SecretRuleSystem отсеивал Traitor до броска кубика, и все раунды 11-16 августа шли
-    # как Survival — без единого антага. 2 готовых игрока при PlayerRatio 10 и Range.Min 1
-    # дают ровно одного предателя. Возвращать апстрим — minPlayers: 5.
+    # FORK PATCH K5 (docs/upstream-patches.md).
+    # Upstream's 5 on this server meant "traitors never happen": with 0-4 players online,
+    # SecretRuleSystem filtered out Traitor before the dice roll, and every round from
+    # August 11-16 ran as Survival — without a single antag. 2 ready players with
+    # PlayerRatio 10 and Range.Min 1 yield exactly one traitor. Reverting to upstream means
+    # minPlayers: 5.
     minPlayers: 2
     delay:
       min: 240
@@ -356,19 +357,19 @@
   components:
   - type: GameRule
     minPlayers: 5
-    # FORK PATCH К6 (docs/upstream-patches.md).
-    # ДОБАВЛЕНО 2026-08-16. Без этой строки правило наследует умолчание true
-    # (GameRuleComponent.cs:31) и при нехватке игроков не отключается само, а
-    # отменяет ВЕСЬ пресет. На онлайне 4 это ломало старт раунда целиком:
-    # Secret выкатывал Traitor, DummyNonAntagChance с вероятностью 0.3
-    # порождал это правило, оно требовало пятерых — и раунд падал в fallback.
-    # Хуже: порождённая сущность не убиралась при очистке, и тот же самый
-    # (3/n3, DummyNonAntag) валил подряд и Traitor, и Extended, после чего
-    # шёл «Restarting round!». Лог инцидента — 16:31:15, раунд 73.
+    # FORK PATCH K6 (docs/upstream-patches.md).
+    # ADDED 2026-08-16. Without this line the rule inherits the default of true
+    # (GameRuleComponent.cs:31), and when there aren't enough players it doesn't disable
+    # itself but cancels the ENTIRE preset. At an online count of 4 this broke round start
+    # entirely: Secret rolled Traitor, DummyNonAntagChance spawned this rule with
+    # probability 0.3, it required five players — and the round fell back. Worse: the
+    # spawned entity wasn't cleaned up on cleanup, and that same entity (3/n3,
+    # DummyNonAntag) knocked out both Traitor and Extended in a row, after which
+    # "Restarting round!" fired. Incident log — 16:31:15, round 73.
     #
-    # false — это то, что стоит у всех соседей по subgamemodes.yml (Thief,
-    # SubWizard, SubXenoborgs): «мало игроков — просто не участвую».
-    # Апстрим здесь её забыл, потому что при пяти игроках она не видна.
+    # false is what all its neighbors in subgamemodes.yml (Thief, SubWizard,
+    # SubXenoborgs) already have: "too few players — just don't participate."
+    # Upstream forgot it here because it's not visible with five players.
     cancelPresetOnTooFewPlayers: false
   - type: AntagSelection
     selectionTime: PrePlayerSpawn # Pre-selection before jobs; assignment doesn't really matter though, we only care about the pre-selection to block other antags.

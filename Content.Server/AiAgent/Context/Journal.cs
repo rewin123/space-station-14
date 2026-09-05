@@ -18,8 +18,8 @@ namespace Content.Server.AiAgent.Context;
 ///
 /// Written from the agent thread, never the main thread, and appended rather than held open: a
 /// line every few seconds does not justify a file handle that would have to be closed correctly on
-/// a shutdown path that does not reliably run — <c>EntitySystem.Shutdown()</c> на выделенном
-/// сервере не зовётся вовсе, см. комментарий у <c>AgentSession.Persist</c>.
+/// a shutdown path that does not reliably run — on a dedicated server <c>EntitySystem.Shutdown()</c>
+/// is never called at all, see the comment on <c>AgentSession.Persist</c>.
 /// </summary>
 public sealed class Journal
 {
@@ -40,12 +40,13 @@ public sealed class Journal
         _dir = logDir;
         _sawmill = sawmill;
 
-        // Каталог создаётся один раз здесь, а не на каждой строке в Write.
+        // The directory is created once here, not on every line in Write.
         //
-        // Стоил он один сисколл на событие — не тик, журнал пишется из потока агента, — но событий
-        // тысячи за смену, и все, кроме первого, заведомо холостые. Отказ здесь не фатален: Write
-        // всё равно обёрнут в try, и если каталог не создался, туда придёт та же жалоба, что и
-        // раньше, просто один раз за строку вместо одного раза за попытку.
+        // It would cost one syscall per event — not per tick, the journal writes from the agent
+        // thread — but there are thousands of events per shift, and all but the first are guaranteed
+        // to be pointless. Failure here is not fatal: Write is wrapped in try regardless, and if the
+        // directory never got created, the same complaint lands there, just once per line instead of
+        // once per attempt.
         if (_dir == null)
             return;
 

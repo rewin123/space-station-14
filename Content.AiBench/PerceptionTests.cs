@@ -92,8 +92,8 @@ public sealed class PerceptionTests
     [Test]
     public void Note_RendersTheNameAndWhereToOpenIt()
     {
-        // Путь, а не имя инструмента. Прежняя строка советовала инструмент и оставляла агенту
-        // угадывать, как записан человек; теперь напоминание сразу называет файл.
+        // A path, not a tool name. The old line suggested a tool and left the agent to guess how
+        // the person was recorded; now the reminder names the file directly.
         var line = ObservationFormatter.FormatLine(
             Observation.Note("Иван Петров", "иван-петров", 3, TimeSpan.FromMinutes(3)));
 
@@ -104,8 +104,8 @@ public sealed class PerceptionTests
     [Test]
     public void Arrival_WithoutAJob_LeavesNoEmptyBrackets()
     {
-        // Роль без должности в прототипе — не редкость, а пустые скобки читаются как «должность
-        // есть, но её от тебя скрыли», то есть выдуманный факт там, где данных просто нет.
+        // A role with no job title in the prototype is not rare, and empty brackets read as "there
+        // is a job, but it's being kept from you" — a fabricated fact where there is simply no data.
         var line = ObservationFormatter.FormatLine(
             Observation.Arrival("Иван Петров", "", TimeSpan.FromMinutes(3)));
 

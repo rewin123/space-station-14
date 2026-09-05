@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-Проверка ЖИВОГО моста: то, что нельзя проверить без сессии.
+Check of the LIVE bridge: things that can't be verified without a session.
 
-Разделение с test_assemble.py не формальное. Там — склейка потока, она проверяется на записанных
-кадрах и обязана быть зелёной всегда, хоть в CI, хоть без интернета. Здесь — четыре вопроса,
-ответы на которые известны только вендору, и каждый из них однажды менялся:
+The split from test_assemble.py isn't a formality. There, it's stream assembly, checked
+against recorded frames, and it must pass green always, whether in CI or offline. Here it's
+four questions whose answers only the vendor knows, and each of them has changed at least
+once before:
 
-  1. знает ли cli-chat-proxy запрошенную модель (grok-4.6 могло и не быть);
-  2. переживает ли он наш набор полей (tools, parallel_tool_calls, temperature);
-  3. возвращает ли вызов инструмента в том виде, в каком его ждёт LlamaClient;
-  4. сообщает ли он usage — без него `aiagent cost` покажет нули, и куда ушла недельная квота,
-     будет неизвестно.
+  1. does cli-chat-proxy know the requested model (grok-4.6 might not have existed);
+  2. does it survive our set of fields (tools, parallel_tool_calls, temperature);
+  3. does it return a tool call in the shape LlamaClient expects;
+  4. does it report usage — without it `aiagent cost` shows zeros, and there is no way to
+     know where the weekly quota went.
 
-Запуск: python3 selftest.py [--model grok-4.6]
-Тратит квоту подписки: два коротких хода.
+Run: python3 selftest.py [--model grok-4.6]
+Spends subscription quota: two short turns.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ def main(argv: list[str]) -> int:
 
     failures = 0
 
-    # --- 1. здоровье и срок сессии ----------------------------------------------------------
+    # --- 1. health and session lifetime -----------------------------------------------------
     health_url = args.base.rstrip("/").removesuffix("/v1") + "/health"
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -75,7 +76,7 @@ def main(argv: list[str]) -> int:
         print(f"[1/4] ПРОВАЛ: {health_url} не отвечает ({error})")
         return 1
 
-    # --- 2. простой ход ----------------------------------------------------------------------
+    # --- 2. simple turn ----------------------------------------------------------------------
     status, body = call(
         args.base,
         key,
@@ -105,7 +106,7 @@ def main(argv: list[str]) -> int:
         print("[3/4] ВНИМАНИЕ: вендор не прислал usage — `aiagent cost` покажет нули")
         failures += 1
 
-    # --- 4. вызов инструмента ----------------------------------------------------------------
+    # --- 4. tool call ------------------------------------------------------------------------
     status, body = call(
         args.base,
         key,

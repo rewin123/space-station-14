@@ -8,9 +8,9 @@ import NoSession from '../components/NoSession.vue'
 const agent = useAgent()
 
 /**
- * Парный вид лучше в подавляющем большинстве случаев, но когда модель не прислала идентификаторы
- * вызовов, он раскладывает результаты по порядку и может ошибиться. Линейный вид — это то, что
- * реально приехало по проводу, без единой догадки.
+ * The paired view is better in the vast majority of cases, but when the model didn't send call
+ * identifiers, it lays out results by order and can get it wrong. The linear view is exactly
+ * what actually arrived over the wire, without a single guess.
  */
 const paired = ref(true)
 

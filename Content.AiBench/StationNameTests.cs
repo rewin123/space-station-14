@@ -9,11 +9,11 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Имя станции: подмена на всех картах и то, что агент про него знает.
+/// Station name: the override across all maps, and what the agent knows about it.
 ///
-/// В ваниле имя собирает генератор из прототипа карты, поэтому оно меняется вместе с ротацией:
-/// «TG Box Station 14-Alpha», потом что-то ещё. Для сервера, где станция — часть его лица, это
-/// значит, что лица нет.
+/// In vanilla the name is assembled by a generator from the map prototype, so it changes with every
+/// rotation: "TG Box Station 14-Alpha", then something else. For a server where the station is part
+/// of its identity, that means it has none.
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
@@ -28,8 +28,8 @@ public sealed class StationNameTests
 
         await w.Post(() => cfg.SetCVar(AiCVars.StationName, "Аксиома"));
 
-        // Тот самый путь, которым имя приезжает на живом сервере: событие после инициализации
-        // станции. Тестовая станция создаётся напрямую, поэтому событие поднимаем сами.
+        // The exact path the name travels on a live server: an event after station init. The test
+        // station is created directly, so we raise the event ourselves.
         await w.Post(() =>
         {
             var ev = new StationPostInitEvent(
@@ -45,16 +45,18 @@ public sealed class StationNameTests
     [Test]
     public async Task EmptyCVarLeavesTheVanillaName()
     {
-        // Выключенная подмена — не «переименовать в пустую строку». Именно так работают бенчмарки
-        // и тесты, которым нужно ванильное поведение, и станция без имени сломала бы половину из них.
+        // A disabled override does not mean "rename to an empty string". That is exactly how the
+        // benchmarks and tests that need vanilla behaviour operate, and a nameless station would
+        // break half of them.
         await using var w = await AiWorld.Create();
         var cfg = w.Pair.Server.ResolveDependency<IConfigurationManager>();
         var ent = w.Ent;
 
         await w.Post(() => cfg.SetCVar(AiCVars.StationName, ""));
 
-        // Имя ставим сами: тестовая станция создаётся напрямую и генератор имён к ней не
-        // применялся, так что без этого «не изменилось» означало бы «как было пусто, так и есть».
+        // We set the name ourselves: the test station is created directly and the name generator
+        // was never applied to it, so without this "unchanged" would just mean "empty as it always
+        // was".
         const string vanilla = "TG Box Station 14-Alpha";
         await w.Post(() => ent.System<Content.Server.Station.Systems.StationSystem>()
             .RenameStation(w.Station, vanilla, loud: false));
@@ -75,9 +77,9 @@ public sealed class StationNameTests
     [Test]
     public async Task StationStatus_TellsTheAgentWhereItIs()
     {
-        // Экипаж зовёт станцию по имени постоянно — в объявлениях, по рации, в позывных
-        // Центрального командования. Узнать его агенту было неоткуда ни одним инструментом:
-        // он мог отработать смену, ни разу не поняв, что «Аксиома» — это где он находится.
+        // The crew calls the station by name constantly — in announcements, over the radio, in
+        // Central Command's callsigns. There was no tool that could tell the agent this: it could
+        // work a whole shift without ever realising that "Axiom" was where it was.
         await using var w = await AiWorld.Create();
         var cfg = w.Pair.Server.ResolveDependency<IConfigurationManager>();
         var ent = w.Ent;

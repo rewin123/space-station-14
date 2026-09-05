@@ -12,42 +12,47 @@ namespace Content.Server.AiAgent.Borg;
 
 public sealed partial class AiBorgSystem
 {
-    /// <summary>Долгое действие, начатое через <c>use</c>: его номер, цель и снимок до начала.</summary>
+    /// <summary>A long action started via <c>use</c>: its id, target, and the snapshot before it began.</summary>
     private readonly record struct PendingAction(ushort Id, EntityUid Target, TargetSnapshot Before);
 
     private readonly Dictionary<EntityUid, PendingAction> _pending = new();
 
-    /// <summary>Как часто спрашивать мир, кончилось ли дело. Полсекунды — четыре кадра на проверку.</summary>
+    /// <summary>How often to ask the world whether the action is done. Half a second — four frames per check.</summary>
     private static readonly TimeSpan PollEvery = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
-    /// Потолок ожидания. Не про паритет, а про то, чтобы застрявший скрипт всё-таки вернул
-    /// управление: переход через всю станцию укладывается в минуту, отжатие шлюза — в секунды.
+    /// The wait ceiling. Not about fairness — about making sure a stuck script still returns
+    /// control: crossing the whole station fits in a minute, forcing an airlock takes seconds.
     /// </summary>
     private static readonly TimeSpan WaitCap = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// Ждущие версии ходьбы и применения — те, что скрипт видит как <c>go</c> и <c>use</c>.
+    /// The waiting versions of walking and using — the ones a script sees as <c>go</c> and <c>use</c>.
     ///
     /// <para>
-    /// На проводе их нет и не будет (<see cref="AiTool.Wire"/> = false): модели, которая ходит
-    /// отдельными вызовами, ждать нечем — ход, висящий полминуты на переходе, это агент, глухой
-    /// весь переход. Скрипту наоборот: он исполняется на своём потоке, и «дойти и продолжить»
-    /// для него — обычная строка кода. Ровно здесь режим скрипта и окупается: цикл «дойти, взять,
-    /// донести, распаковать» перестаёт распадаться на четыре хода с ожиданием наблюдений между ними.
+    /// They are not on the wire and never will be (<see cref="AiTool.Wire"/> = false): a model that
+    /// walks via separate calls has nothing to wait for — a turn hanging for half a minute on
+    /// transit would leave the agent deaf for the whole transit. For a script it's the opposite: it
+    /// runs on its own thread, and "walk there and continue" is just an ordinary line of code. This
+    /// is exactly where script mode pays off: the "walk over, pick up, carry, unpack" cycle stops
+    /// splitting into four turns with observation waits in between.
     /// </para>
     /// <para>
-    /// Ожидание живёт здесь, а не в прелюдии на Lua, из-за счёта вызовов. Опрос из скрипта раз в
-    /// четверть секунды съел бы за минуту ходьбы двести сорок вызовов из четырёхсот разрешённых —
-    /// предохранитель от зацикливания сработал бы на честной работе.
+    /// The waiting lives here, not in the Lua prelude, because of call accounting. Polling from the
+    /// script every quarter second would burn two hundred forty of the four hundred allowed calls
+    /// over a minute of walking — the loop-guard would trip on legitimate work.
     /// </para>
     /// </summary>
     private void RegisterWaitingTools(AgentSession s, AiToolRegistry registry)
     {
+        var L = s.Locale;
+
         registry.Register(new AiTool
         {
             Name = "goto_wait",
-            Description = "Дойти и дождаться прибытия. В скрипте называется go.",
+            Description = L.T(
+                "Дойти и дождаться прибытия. В скрипте называется go.",
+                "Walk there and wait until you arrive. In a script it is called go."),
             SchemaJson =
                 """
                 {"type":"object","required":["to"],"additionalProperties":false,"properties":{
@@ -61,7 +66,9 @@ public sealed partial class AiBorgSystem
         registry.Register(new AiTool
         {
             Name = "use_wait",
-            Description = "Применить и дождаться конца долгого действия. В скрипте называется use.",
+            Description = L.T(
+                "Применить и дождаться конца долгого действия. В скрипте называется use.",
+                "Apply and wait until a long action finishes. In a script it is called use."),
             SchemaJson =
                 """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -75,7 +82,9 @@ public sealed partial class AiBorgSystem
         registry.Register(new AiTool
         {
             Name = "walk_status",
-            Description = "Иду ли я сейчас и чем кончилась прошлая ходьба.",
+            Description = L.T(
+                "Иду ли я сейчас и чем кончилась прошлая ходьба.",
+                "Whether I am walking now and how the last walk ended."),
             SchemaJson = """{"type":"object","additionalProperties":false,"properties":{}}""",
             Wire = false,
             Handler = (_, ct) => WalkStatusAsync(s, ct),
@@ -109,7 +118,7 @@ public sealed partial class AiBorgSystem
                     retry: "other_target");
             }
 
-            return ToolResult.Success(new Dictionary<string, object?> { ["итог"] = "дошёл" });
+            return ToolResult.Success(new Dictionary<string, object?> { [s.Locale.Outcome] = s.Locale.OutcomeArrived });
         }
 
         return ToolResult.Fail(ToolError.Timeout,
@@ -126,7 +135,7 @@ public sealed partial class AiBorgSystem
         if (!started.Ok)
             return started;
 
-        // Действие мгновенное — ждать нечего, отчёт уже готов.
+        // The action was instant — nothing to wait for, the report is already ready.
         if (!_pending.TryGetValue(borg, out var pending))
             return started;
 
@@ -148,16 +157,20 @@ public sealed partial class AiBorgSystem
 
         _pending.Remove(borg);
 
-        // Разница считается ЗАНОВО и по факту: то, что use увидел в первое мгновение, ещё ничего
-        // не значило — долгое действие на то и долгое.
+        // The diff is computed AGAIN, after the fact: what use saw in that first instant meant
+        // nothing yet — that's the whole point of a long action being long.
         return await _host.OnMainAsync(s, "use_wait", () =>
         {
             var report = new Dictionary<string, object?>();
 
             if (!Exists(pending.Target) || TerminatingOrDeleted(pending.Target))
             {
-                report["итог"] = "получилось";
-                report["изменилось"] = new List<string> { "цель исчезла — она превратилась во что-то другое" };
+                report[s.Locale.Outcome] = s.Locale.OutcomeOk;
+                report[s.Locale.Changed] = new List<string>
+                {
+                    s.Locale.T("цель исчезла — она превратилась во что-то другое",
+                        "the target is gone — it turned into something else"),
+                };
                 return ToolResult.Success(report);
             }
 
@@ -166,23 +179,27 @@ public sealed partial class AiBorgSystem
 
             if (status == DoAfterStatus.Cancelled)
             {
-                report["итог"] = "ПРЕРВАНО";
-                report["почему"] = "действие сорвалось — скорее всего ты сдвинулся с места или тебе помешали";
+                report[s.Locale.Outcome] = s.Locale.OutcomeInterrupted;
+                report[s.Locale.Why] = s.Locale.T(
+                    "действие сорвалось — скорее всего ты сдвинулся с места или тебе помешали",
+                    "the action was interrupted — you probably moved or something got in the way");
                 if (changes.Count > 0)
-                    report["изменилось"] = changes;
+                    report[s.Locale.Changed] = changes;
 
                 return ToolResult.Success(report);
             }
 
             if (changes.Count > 0)
             {
-                report["итог"] = "получилось";
-                report["изменилось"] = changes;
+                report[s.Locale.Outcome] = s.Locale.OutcomeOk;
+                report[s.Locale.Changed] = changes;
                 return ToolResult.Success(report);
             }
 
-            report["итог"] = "НЕ ПОЛУЧИЛОСЬ";
-            report["почему"] = "действие досчиталось до конца, но цель не изменилась";
+            report[s.Locale.Outcome] = s.Locale.OutcomeFailed;
+            report[s.Locale.Why] = s.Locale.T(
+                "действие досчиталось до конца, но цель не изменилась",
+                "the action ran to the end but the target did not change");
             return ToolResult.Success(report);
         }, ct).ConfigureAwait(false);
     }
@@ -192,14 +209,15 @@ public sealed partial class AiBorgSystem
         var borg = s.Brain;
 
         return _host.OnMainAsync(s, "walk_status",
-            () => ToolResult.Success(new Dictionary<string, object?> { ["статус"] = WalkStatus(borg) }), ct);
+            () => ToolResult.Success(new Dictionary<string, object?> { [s.Locale.Status] = WalkStatus(borg) }), ct);
     }
 
     /// <summary>
-    /// Прочитать одно значение с главного потока.
+    /// Read a single value from the main thread.
     ///
-    /// Локальная переменная под замыканием, а не поле: барьер памяти даёт сам await, а поле жило
-    /// бы между вызовами и стало бы общим для двух скриптов сразу.
+    /// A local variable captured by the closure, not a field: the memory barrier is provided by
+    /// the await itself, whereas a field would persist across calls and end up shared between two
+    /// scripts at once.
     /// </summary>
     private async Task<T> ReadAsync<T>(AgentSession s, string what, Func<T> read, CancellationToken ct)
     {

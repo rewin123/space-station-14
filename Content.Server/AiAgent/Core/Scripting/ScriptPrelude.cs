@@ -1,22 +1,22 @@
 namespace Content.Server.AiAgent.Core.Scripting;
 
 /// <summary>
-/// Код на Lua, который агент получает готовым — поверх инструментов, но ниже своего скрипта.
+/// Lua code the agent gets ready-made — on top of the tools, but below its own script.
 ///
 /// <para>
-/// Живёт исходником, а не набором C#-привязок, по одной причине: всё здесь выражается через уже
-/// существующие инструменты, и написанное на Lua видно модели ровно таким, каким она его зовёт.
-/// Привязка на C# добавила бы второе место, где может разойтись поведение, и ни одной строчки
-/// пользы.
+/// Lives as source, not as a set of C# bindings, for one reason: everything here is expressed
+/// through tools that already exist, and what's written in Lua is visible to the model exactly as
+/// it calls it. A C# binding would add a second place where behavior could diverge, and not a
+/// single line of benefit.
 /// </para>
 /// <para>
-/// Прелюдия исполняется до скрипта в той же клетке. Синтаксическая ошибка здесь — дефект сборки,
-/// а не поведения: она валит тест, а не оставляет агента без рук в бою.
+/// The prelude runs before the script, in the same sandbox. A syntax error here is a build defect,
+/// not a behavioral one: it fails a test rather than leaving the agent empty-handed in the field.
 /// </para>
 /// </summary>
 public static class ScriptPrelude
 {
-    /// <summary>Имена, которые прелюдия объявляет. Их обязан знать линтер опечаток.</summary>
+    /// <summary>Names the prelude declares. The typo linter must know about them.</summary>
     public static readonly string[] Names = { "find" };
 
     public const string Source = @"

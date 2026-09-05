@@ -10,38 +10,39 @@ using MoonSharp.Interpreter;
 namespace Content.Server.AiAgent.Core.Scripting;
 
 /// <summary>
-/// Граница между таблицей Lua и <see cref="JsonElement"/>, в обе стороны.
+/// The boundary between a Lua table and <see cref="JsonElement"/>, in both directions.
 ///
 /// <para>
-/// Зачем вообще JSON посередине. Инструмент агента принимает <c>JsonElement</c> и отдаёт
-/// <see cref="Tools.ToolResult"/> — этот контракт написан для модели и проверен тестами схем.
-/// Скрипт не заводит второй, параллельный: он переводится в тот же самый. Значит вызов из Lua
-/// проходит ровно те же разборы аргументов, те же ворота и те же коды ошибок, что и вызов
-/// tool call'ом, и разойтись эти два пути не могут в принципе.
+/// Why have JSON in the middle at all. An agent tool accepts <c>JsonElement</c> and returns
+/// <see cref="Tools.ToolResult"/> — this contract is written for the model and covered by schema
+/// tests. A script does not get a second, parallel one: it is translated into that same contract.
+/// So a call from Lua goes through exactly the same argument parsing, the same gates and the same
+/// error codes as a tool call does, and the two paths cannot diverge in principle.
 /// </para>
 /// <para>
-/// Числа пишутся целыми, когда они целые. В Lua всё число — <c>double</c>, и наивная запись дала бы
-/// <c>{"count":3.0}</c> там, где схема ждёт целое; половина инструментов на этом отказала бы с
-/// <c>bad_args</c>, а модель увидела бы отказ, в котором её код ни при чём.
+/// Numbers are written as integers when they are integers. In Lua every number is a <c>double</c>,
+/// and a naive write would produce <c>{"count":3.0}</c> where the schema expects an integer; half
+/// the tools would reject that with <c>bad_args</c>, and the model would see a rejection that has
+/// nothing to do with its code.
 /// </para>
 /// </summary>
 public static class LuaBridge
 {
     /// <summary>
-    /// Потолок вложенности. Он же — единственная защита от таблицы, ссылающейся на себя:
-    /// обход циклической структуры иначе не вернулся бы никогда, а скрипт исполняется на потоке,
-    /// который в этот момент держит вызов инструмента.
+    /// The nesting depth ceiling. It is also the only defense against a table that references
+    /// itself: walking a cyclic structure would otherwise never return, and the script executes on
+    /// the thread that currently holds the tool call.
     /// </summary>
     public const int MaxDepth = 12;
 
-    /// <summary>Аргументы вызова: таблица Lua → <see cref="JsonElement"/> для обработчика инструмента.</summary>
+    /// <summary>Call arguments: a Lua table → <see cref="JsonElement"/> for the tool handler.</summary>
     public static JsonDocument ToJson(DynValue value, string what)
     {
         var buffer = new MemoryStream();
         using (var w = new Utf8JsonWriter(buffer, LlmJson.WriterOptions))
         {
-            // Инструмент всегда ждёт объект. Голое nil — это вызов без аргументов, самый частый
-            // случай (drop(), laws()), и разворачивать его в отказ было бы враньём.
+            // A tool always expects an object. Bare nil is a call with no arguments, the most
+            // common case (drop(), laws()), and turning it into a rejection would be a lie.
             if (value.IsNilOrNan() || value.Type == DataType.Void)
             {
                 w.WriteStartObject();
@@ -56,7 +57,7 @@ public static class LuaBridge
         return JsonDocument.Parse(buffer.ToArray());
     }
 
-    /// <summary>Результат инструмента: <see cref="JsonElement"/> → таблица Lua.</summary>
+    /// <summary>Tool result: <see cref="JsonElement"/> → a Lua table.</summary>
     public static DynValue FromJson(Script script, JsonElement element)
     {
         switch (element.ValueKind)
@@ -71,7 +72,7 @@ public static class LuaBridge
             case JsonValueKind.Array:
             {
                 var table = new Table(script);
-                var index = 1; // Lua считает с единицы, и ipairs на нуле останавливается сразу.
+                var index = 1; // Lua counts from one, and ipairs stops immediately at zero.
                 foreach (var item in element.EnumerateArray())
                     table.Set(index++, FromJson(script, item));
                 return DynValue.NewTable(table);
@@ -90,11 +91,11 @@ public static class LuaBridge
     }
 
     /// <summary>
-    /// Значение, которое вернул скрипт, — в обычный объект .NET для поля <c>effect</c>.
+    /// The value a script returned, converted into a plain .NET object for the <c>effect</c> field.
     ///
-    /// Отдельно от <see cref="ToJson"/> потому, что <c>effect</c> сериализуется штатным
-    /// сериализатором позже: сунуть туда готовую строку JSON значило бы закодировать её дважды и
-    /// показать модели экранированную кашу вместо ответа её собственного скрипта.
+    /// Kept separate from <see cref="ToJson"/> because <c>effect</c> is serialized later by the
+    /// regular serializer: shoving a ready-made JSON string in there would encode it twice and show
+    /// the model an escaped mess instead of its own script's answer.
     /// </summary>
     public static object? ToObject(DynValue value, int depth = 0)
     {
@@ -147,7 +148,7 @@ public static class LuaBridge
     private static void Write(Utf8JsonWriter w, DynValue value, int depth, string what)
     {
         if (depth > MaxDepth)
-            throw new ScriptRuntimeException($"{what}: таблица вложена глубже {MaxDepth} уровней");
+            throw new ScriptRuntimeException($"{what}: table nested deeper than {MaxDepth} levels");
 
         switch (value.Type)
         {
@@ -169,7 +170,7 @@ public static class LuaBridge
                 break;
             default:
                 throw new ScriptRuntimeException(
-                    $"{what}: значение типа {value.Type} инструменту не передаётся — нужны строки, числа, булевы и таблицы");
+                    $"{what}: a value of type {value.Type} cannot be passed to a tool — strings, numbers, booleans and tables only");
         }
     }
 
@@ -180,7 +181,7 @@ public static class LuaBridge
         else if (double.IsFinite(number))
             w.WriteNumberValue(number);
         else
-            throw new ScriptRuntimeException("в аргументах inf или nan");
+            throw new ScriptRuntimeException("inf or nan in the arguments");
     }
 
     private static void WriteTable(Utf8JsonWriter w, Table table, int depth, string what)
@@ -203,7 +204,7 @@ public static class LuaBridge
                 DataType.String => key.String,
                 DataType.Number => key.Number.ToString(CultureInfo.InvariantCulture),
                 _ => throw new ScriptRuntimeException(
-                    $"{what}: ключом таблицы может быть только строка или число, а не {key.Type}"),
+                    $"{what}: a table key can only be a string or a number, not {key.Type}"),
             };
 
             w.WritePropertyName(name);
@@ -214,11 +215,11 @@ public static class LuaBridge
     }
 
     /// <summary>
-    /// Таблица считается массивом, только если её ключи — ровно 1..n без дыр.
+    /// A table counts as an array only if its keys are exactly 1..n with no gaps.
     ///
-    /// Список хендлов должен уехать массивом, иначе <c>ipairs</c> на той стороне не пойдёт; но
-    /// смешанная таблица (<c>{1,2,name='x'}</c>) обязана уехать объектом, иначе часть данных
-    /// потерялась бы молча.
+    /// A list of handles must go out as an array, or <c>ipairs</c> won't work on the other side;
+    /// but a mixed table (<c>{1,2,name='x'}</c>) must go out as an object, or part of the data
+    /// would be silently lost.
     /// </summary>
     private static bool IsArray(Table table, out int length)
     {

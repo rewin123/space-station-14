@@ -242,11 +242,12 @@ public sealed class ContractTests
     }
 
     /// <summary>
-    /// Заметок в зоне 0 быть не должно — ни одной.
+    /// There must be no notes in zone 0 — not a single one.
     ///
-    /// Это сторож против «услужливой» правки. У скиллов индекс в промпте есть, и на 167 файлах он
-    /// уже около 20 КБ замороженного префикса; персонажей за месяцы станет кратно больше, и такой
-    /// же индекс съел бы окно. Заметки поданы лениво именно поэтому.
+    /// This is a guard against a "helpful" edit. Skills have an index in the prompt, and at 167
+    /// files it is already about 20 KB of frozen prefix; over the months there will be many times
+    /// more characters, and the same kind of index would eat the window. This is exactly why notes
+    /// are served lazily.
     /// </summary>
     [Test]
     [Category("AiTools")]
@@ -271,11 +272,11 @@ public sealed class ContractTests
     }
 
     /// <summary>
-    /// Списка файлов в зоне 0 быть не должно — это и была вся болезнь.
+    /// There must be no file listing in zone 0 — that was the whole disease.
     ///
-    /// Прежний индекс скиллов занимал 16 425 символов замороженного префикса и рос от каждой
-    /// записи агента. Зеркало теста про заметки: у них такой индекс не завёлся, у скиллов завёлся
-    /// и жил, пока не съел заметную долю окна.
+    /// The old skills index took up 16,425 characters of frozen prefix and grew with every entry
+    /// the agent made. This mirrors the notes test: notes never grew such an index, while skills
+    /// did, and it lived on until it ate a noticeable share of the window.
     /// </summary>
     [Test]
     [Category("AiTools")]
@@ -289,12 +290,13 @@ public sealed class ContractTests
             Assert.That(prompt, Does.Contain("ФАЙЛОВАЯ СИСТЕМА"), "корень дерева обязан быть");
             Assert.That(prompt, Does.Contain("/wiki_ru"));
 
-            // Ни одной статьи справочника по имени: они открываются, а не перечисляются.
+            // Not a single reference article by name: they are opened, not enumerated.
             //
-            // Считается ЧИСЛО путей, а не наличие конкретного. Проверка на литерал
-            // «атмосфера/насосы» была красной с 31.08 и не по делу: ровно эта статья стоит в шапке
-            // как пример команды `cat`. Тест ловил собственный пример и выглядел как регрессия.
-            // Смысл здесь в перечислении, а перечисление — это МНОГО путей, а не один.
+            // What's counted is the NUMBER of paths, not whether a specific one is present. A
+            // check against the literal «атмосфера/насосы» had been red since 31.08 for the wrong
+            // reason: exactly that article sits in the header as the example for the `cat`
+            // command. The test was catching its own example and looked like a regression. The
+            // point here is enumeration, and enumeration means MANY paths, not one.
             var paths = prompt.Split("/wiki_ru/").Length - 1;
 
             Assert.That(paths, Is.LessThanOrEqualTo(1),
@@ -305,11 +307,11 @@ public sealed class ContractTests
     }
 
     /// <summary>
-    /// А вот ПАМЯТЬ из зоны 0 уезжать не должна — и это отдельный сторож, а не придирка.
+    /// But MEMORY must not leave zone 0 — and this is a separate guard, not nitpicking.
     ///
-    /// Индекс и память лежали рядом и подавались одинаково; убирая индекс, ровно так же легко
-    /// унести и память, а заметит это только живой раунд, на котором агент перестанет помнить
-    /// станцию.
+    /// The index and memory used to sit side by side and were served the same way; when removing
+    /// the index, it is just as easy to carry memory off with it, and only a live round would
+    /// notice — the one where the agent stops remembering the station.
     /// </summary>
     [Test]
     [Category("AiTools")]

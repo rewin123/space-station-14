@@ -7,13 +7,14 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Профили из <c>Resources/Prototypes/_AiAgent/llm_profiles.yml</c> разбираются и осмысленны.
+/// Profiles from <c>Resources/Prototypes/_AiAgent/llm_profiles.yml</c> parse and make sense.
 ///
 /// <para>
-/// Отдельно от <see cref="LlmRouterTests"/>, потому что здесь проверяются ДАННЫЕ, а не логика, и
-/// цена другая: нужен поднятый сервер, читающий настоящие прототипы. Без этого опечатка в YAML
-/// вылезла бы только при старте боевого сервера — и в худшем виде, потому что незагрузившийся
-/// профиль просто выпадает из цепочки, а `ai.llm_chain` продолжает выглядеть настроенным.
+/// Separate from <see cref="LlmRouterTests"/>, because this checks DATA, not logic, and the cost
+/// is different: it needs a live server reading real prototypes. Without this a typo in the YAML
+/// would only surface when the production server starts — and in the worst possible way, because
+/// a profile that fails to load simply drops out of the chain while `ai.llm_chain` keeps looking
+/// configured.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -26,14 +27,14 @@ public sealed class LlmProfileDataTests
         await using var w = await AiStation.Create();
         var protoMan = w.Pair.Server.ResolveDependency<IPrototypeManager>();
 
-        // Профили стенда отсеиваются, и это не косметика.
+        // Bench profiles are filtered out, and that is not cosmetic.
         //
-        // ConfigOverlayTests заводит профили через накладку ai_data/config.d/, то есть настоящим
-        // IPrototypeManager.LoadString, а серверы в этом прогоне переиспользуются пулом. Профиль,
-        // заведённый там, доживает до этого теста — и заведён он СПЕЦИАЛЬНО сломанным
-        // (compactHigh больше ctxLimit: именно это расхождение проверка эндпоинта обязана поймать).
-        // Здесь проверяются данные форка из Resources/, а не декорации соседнего теста; префикс
-        // bench- зарезервирован за ними.
+        // ConfigOverlayTests sets up profiles through the ai_data/config.d/ overlay, that is,
+        // through the real IPrototypeManager.LoadString, and servers in this run are reused from a
+        // pool. A profile set up there survives into this test — and it is set up DELIBERATELY
+        // broken (compactHigh greater than ctxLimit: exactly this mismatch is what the endpoint
+        // check must catch). This test checks the fork's own data from Resources/, not the
+        // neighboring test's decorations; the bench- prefix is reserved for those.
         var profiles = await w.Read(() =>
             protoMan.EnumeratePrototypes<AiLlmProfilePrototype>()
                 .Where(p => !p.ID.StartsWith("bench-", System.StringComparison.Ordinal))
@@ -50,8 +51,8 @@ public sealed class LlmProfileDataTests
                     $"{p.ID}: клиент дописывает /chat/completions к базовому адресу, так что /v1 должен быть здесь");
                 Assert.That(p.Model, Is.Not.Empty, $"{p.ID}: модель не названа");
 
-                // Запрос на loopback, ушедший в удалённый выход, просто зависает — и зависает
-                // молча, до самого таймаута хода.
+                // A request to loopback that goes out through a remote exit simply hangs — and
+                // hangs silently, all the way to the turn timeout.
                 var loopback = p.Endpoint.Contains("127.0.0.1") || p.Endpoint.Contains("localhost");
                 if (loopback)
                 {
@@ -59,8 +60,9 @@ public sealed class LlmProfileDataTests
                         $"{p.ID}: профиль на loopback не должен ходить через прокси");
                 }
 
-                // Спрашивать /props умеет только llama-server. У остальных это 404, и без своего
-                // ctxLimit порог компакции молча садится на печатный ai.compact_high.
+                // Only llama-server knows how to answer /props. For everyone else it is a 404, and
+                // without its own ctxLimit the compaction threshold silently falls back to the
+                // printed ai.compact_high.
                 if (p.CtxProbe == LlmCtxProbe.None)
                 {
                     Assert.That(p.CtxLimit, Is.GreaterThan(0),
@@ -73,9 +75,10 @@ public sealed class LlmProfileDataTests
                         $"{p.ID}: порог компакции не может быть больше окна");
                 }
 
-                // Объект thinking понимает только DeepSeek; всем остальным он приходит незнакомым
-                // полем. Диалект решает это сам, но профиль, где заявлено усилие и выбран диалект,
-                // который его не пошлёт, — это настройка, выглядящая рабочей и не делающая ничего.
+                // Only DeepSeek understands the thinking object; for everyone else it arrives as
+                // an unrecognized field. The dialect handles this on its own, but a profile that
+                // declares a reasoning effort while its chosen dialect will never send it is a
+                // setting that looks functional and does nothing.
                 if (!string.IsNullOrWhiteSpace(p.ReasoningEffort))
                 {
                     Assert.That(
@@ -94,12 +97,13 @@ public sealed class LlmProfileDataTests
     }
 
     /// <summary>
-    /// Локальная модель обязана быть среди профилей: она последний рубеж цепочки.
+    /// A local model must be among the profiles: it is the chain's last line of defense.
     /// </summary>
     /// <remarks>
-    /// Цепочка, целиком уехавшая в интернет, кончается вместе с интернетом — и кончается посреди
-    /// раунда. Профиль на llama-swap единственный, кто продолжит отвечать, когда упадёт мост или
-    /// пропадёт связь, поэтому его отсутствие в наборе стоит поймать здесь, а не в бою.
+    /// A chain that has moved entirely onto the internet ends together with the internet — and
+    /// ends mid-round. The llama-swap profile is the only one that keeps answering once the bridge
+    /// goes down or connectivity drops, so its absence from the set is worth catching here, not in
+    /// the field.
     /// </remarks>
     [Test]
     public async Task ThereIsALocalProfileToFallBackTo()

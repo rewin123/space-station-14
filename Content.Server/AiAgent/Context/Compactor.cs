@@ -105,7 +105,7 @@ public sealed class Compactor
     /// The <c>finally</c> is the part that did not exist. If the prefix rebuild threw, the body was
     /// already folded, the prefix was stale, arming was still true and the token reading was
     /// unchanged — so the very next turn tried to compact an already-folded body, and the cache
-    /// watchdog screamed "ПРЕФИКС ИЗМЕНИЛСЯ ВНЕ КОМПАКЦИИ" about a bug that was not there.
+    /// watchdog screamed "PREFIX CHANGED OUTSIDE A COMPACTION" about a bug that was not there.
     /// </summary>
     public async Task<bool> CompactAsync(
         AgentState state,

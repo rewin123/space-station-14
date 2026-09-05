@@ -58,11 +58,12 @@ public sealed class BusInboxTests
     }
 
     /// <summary>
-    /// Вставленный текст обязан быть помечен как внеигровой.
+    /// Injected text must be marked as out-of-character.
     ///
-    /// Формат строк наблюдения описан в системном промпте, а промпт лежит на той же отладочной
-    /// странице, что и кнопка отправки — то есть без метки подделать реплику капитана по рации
-    /// было вопросом копипасты, и модель не могла отличить её от эфира.
+    /// The format of observation lines is described in the system prompt, and the prompt lives on
+    /// the same debug page as the send button — meaning that without the marker, forging the
+    /// captain's radio line was a matter of copy-paste, and the model could not tell it apart from
+    /// the real airwaves.
     /// </summary>
     [Test]
     public void OperatorTextIsMarkedAsOutOfCharacter()

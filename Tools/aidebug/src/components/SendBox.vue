@@ -14,14 +14,16 @@ const bad = ref(false)
 const pending = ref(false)
 
 /**
- * Отправка сообщения агенту. Single-flight, и НИКОГДА не повторяется автоматически.
+ * Sends a message to the agent. Single-flight, and NEVER retried automatically.
  *
- * `AgentInbox.Enqueue` на сервере склеивает два сообщения через перевод строки, а не отвергает
- * второе, и ключа идемпотентности на проводе нет. Значит второй клик — или один автоматический
- * повтор запроса, который на самом деле дошёл, — даёт одно сообщение с текстом дважды.
+ * `AgentInbox.Enqueue` on the server glues two messages together with a newline instead of
+ * rejecting the second one, and there's no idempotency key on the wire. So a second click — or
+ * one automatic retry of a request that actually got through — produces one message with the
+ * text doubled.
  *
- * Отсюда же индикатор ожидания: между отправкой и появлением сообщения в ленте проходит до целого
- * тика (8-25 секунд). Без обратной связи оператор решит, что не отправилось, и нажмёт снова.
+ * That's also where the pending indicator comes from: up to a full tick (8-25 seconds) passes
+ * between sending and the message showing up in the stream. Without feedback the operator would
+ * conclude it didn't send and click again.
  */
 async function send(): Promise<void> {
   if (busy.value || !text.value.trim()) return
@@ -33,8 +35,8 @@ async function send(): Promise<void> {
   const endpoint = { baseUrl: settings.baseUrl, token: settings.token }
 
   try {
-    // Адресат обязателен: сообщение уходит в ящик конкретного мозга. Без него сервер отвечает
-    // 400 — и это правильно, «кому-нибудь» тут быть не должно.
+    // A recipient is mandatory: the message goes into a specific brain's inbox. Without one the
+    // server answers 400 — and rightly so, "to whoever" has no business here.
     const result = await postCommand(endpoint, {
       type: 'message.send',
       agent: agent.selected ?? '',
@@ -43,12 +45,12 @@ async function send(): Promise<void> {
     note.value = `${result.message} (${result.applied})`
     text.value = ''
 
-    // Сразу спрашиваем, встало ли оно в очередь: это единственный способ показать, что уехало.
+    // Immediately ask whether it landed in the queue: it's the only way to show that it went out.
     try {
       const health = await getHealth(endpoint)
       pending.value = health.agents.some((a) => a.id === agent.selected && a.pending_input)
     } catch {
-      // Здоровье не критично: сообщение уже принято.
+      // Health isn't critical here: the message has already been accepted.
     }
   } catch (e) {
     bad.value = true

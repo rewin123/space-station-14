@@ -151,11 +151,11 @@ public sealed class ChatRequestDto
     public float TopP { get; set; }
 
     /// <summary>
-    /// Сэмплер llama.cpp, не параметр OpenAI. Nullable именно поэтому.
+    /// llama.cpp's own sampler, not an OpenAI parameter. That's exactly why it's nullable.
     ///
-    /// Не-nullable значение <c>WhenWritingNull</c> выбросить не может, так что до появления
-    /// профилей <c>top_k</c> и <c>min_p</c> уходили в каждый запрос — включая те, что адресованы
-    /// строгой API, отвечающей на неизвестное поле кодом 400. Кто их получает, решает
+    /// <c>WhenWritingNull</c> can't drop a non-nullable value, so before profiles existed,
+    /// <c>top_k</c> and <c>min_p</c> went out on every request — including the ones addressed to a
+    /// strict API that answers an unknown field with a 400. Who receives them is decided by
     /// <see cref="LlmDialectRules.AllowsSamplerExtras"/>.
     /// </summary>
     [JsonPropertyName("top_k")]
@@ -178,8 +178,8 @@ public sealed class ChatRequestDto
     public int? MaxTokens { get; set; }
 
     /// <summary>
-    /// llama.cpp extension: reuse the slot's prefix KV cache. Null — не посылать вовсе, потому что
-    /// у всех остальных провайдеров это неизвестное поле.
+    /// llama.cpp extension: reuse the slot's prefix KV cache. Null — don't send it at all, because
+    /// for every other provider it's an unknown field.
     /// </summary>
     [JsonPropertyName("cache_prompt")]
     public bool? CachePrompt { get; set; }
@@ -205,27 +205,27 @@ public sealed class ChatRequestDto
     public int? IdSlot { get; set; }
 
     /// <summary>
-    /// Форма OpenAI для того же, что DeepSeek принимает объектом <see cref="Thinking"/>. Посылается
-    /// только строгому OpenAI-совместимому эндпоинту — два поля сразу означали бы двойную настройку
-    /// с непредсказуемым победителем.
+    /// OpenAI's shape for the same thing DeepSeek accepts as the <see cref="Thinking"/> object. Sent
+    /// only to a strict OpenAI-compatible endpoint — sending both fields at once would mean a double
+    /// setting with an unpredictable winner.
     ///
-    /// Стоит последним и потому не сдвигает ни одно существующее поле: пока значение null, байты
-    /// запроса к llama.cpp и к DeepSeek остаются в точности теми же, что были до появления
-    /// профилей, и префиксный кэш этого не замечает.
+    /// It's placed last, and so doesn't shift any existing field: as long as the value is null, the
+    /// request bytes to llama.cpp and to DeepSeek stay exactly what they were before profiles
+    /// existed, and the prefix cache doesn't notice.
     /// </summary>
     [JsonPropertyName("reasoning_effort")]
     public string? ReasoningEffort { get; set; }
 
     /// <summary>
-    /// Шаблон чата vLLM / Qwen: <c>enable_thinking: false</c> гасит размышление на модели,
-    /// у которой оно включено по умолчанию. Null — поле не уходит, байты чужих профилей
-    /// не меняются.
+    /// vLLM / Qwen chat template: <c>enable_thinking: false</c> switches off reasoning on a model
+    /// where it's enabled by default. Null — the field is omitted, and other profiles' bytes don't
+    /// change.
     /// </summary>
     [JsonPropertyName("chat_template_kwargs")]
     public ChatTemplateKwargsDto? ChatTemplateKwargs { get; set; }
 }
 
-/// <summary>Аргументы шаблона чата, которые понимает vLLM с Qwen3.</summary>
+/// <summary>Chat template arguments understood by vLLM with Qwen3.</summary>
 public sealed class ChatTemplateKwargsDto
 {
     [JsonPropertyName("enable_thinking")]
@@ -251,13 +251,14 @@ public sealed class ThinkingDto
 
 /// <summary>What the agent loop actually consumes from a completion.</summary>
 /// <param name="Profile">
-/// Кто ответил. Нужен в журнале: с цепочкой фаллбеков разобрать постфактум, чья это была выдача,
-/// иначе невозможно — а именно на плохих ходах и хочется знать, локальная модель это была или нет.
+/// Who answered. Needed in the log: with a fallback chain, there is otherwise no way to figure out
+/// after the fact whose output this was — and it's exactly on bad turns that you want to know
+/// whether it was the local model or not.
 /// </param>
 /// <param name="ReportsCache">
-/// Сообщает ли этот провайдер долю промпта из кэша. У того, кто не сообщает, нулевой
-/// <see cref="CachedTokens"/> означает «неизвестно», а не «кэш сломан», и алярм
-/// <see cref="Content.Server.AiAgent.Context.CacheMetrics"/> обязан промолчать.
+/// Whether this provider reports the share of the prompt served from cache. For one that doesn't
+/// report it, a zero <see cref="CachedTokens"/> means "unknown", not "cache broken", and the
+/// <see cref="Content.Server.AiAgent.Context.CacheMetrics"/> alarm must stay silent.
 /// </param>
 public sealed record LlmResponse(
     string? Content,

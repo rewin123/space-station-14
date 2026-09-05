@@ -5,19 +5,19 @@ import { connection, emptyDebugState, type ConnectionStatus, type DebugViewState
 import type { AgentEventFrame } from '../api/types'
 import { useSettings } from './settings'
 
-/** Сколько кадров держим в сыром логе «Шины». Столько же, сколько кольцо на сервере. */
+/** How many frames we keep in the "Bus" tab's raw log. The same as the server's ring. */
 const FRAME_LOG = 2048
 
-/** Где помним выбранного агента между перезагрузками страницы. */
+/** Where we remember the selected agent across page reloads. */
 const SELECTED_KEY = 'aidebug.agent'
 
-/** Заглушка «показывать нечего»: одна на всё приложение, чтобы не плодить объекты в computed. */
+/** The "nothing to show" placeholder: one for the whole app, so computed doesn't spawn objects. */
 const EMPTY = emptyAgent('')
 
 export const useAgent = defineStore('agent', () => {
-  // shallowRef: состояние — обычный объект, который правит машина вне Vue. Делать его глубоко
-  // реактивным значит платить прокси за каждое сообщение разговора; вместо этого дёргаем ссылку
-  // вручную, когда петля говорит, что что-то поменялось.
+  // shallowRef: the state is a plain object driven by the machine outside of Vue. Making it
+  // deeply reactive would mean paying a proxy cost for every conversation message; instead we
+  // bump the ref manually when the loop says something changed.
   const state = shallowRef<DebugViewState>(emptyDebugState())
 
   const status = ref<ConnectionStatus>('idle')
@@ -25,20 +25,20 @@ export const useAgent = defineStore('agent', () => {
   const frames = ref<AgentEventFrame[]>([])
   const resyncs = ref<{ at: number; reason: string }[]>([])
 
-  /** Кто сейчас жив, по данным сервера. Порядок задаёт сервер: ядро первым. */
+  /** Who's currently alive, per the server. The server sets the order: the core first. */
   const roster = computed(() => state.value.globals.roster)
 
-  /** Процессные хранилища: память, навыки, заметки. Общие на всех агентов. */
+  /** Process-level stores: memory, skills, notes. Shared across all agents. */
   const globals = computed(() => state.value.globals)
 
   const selected = computed(() => state.value.selected)
 
   /**
-   * Состояние выбранного агента.
+   * State of the selected agent.
    *
-   * Пустой агент вместо null — сознательно: вкладки читают из него десятки полей, и каждая
-   * проверка на null в шаблоне была бы ещё одним местом, где можно ошибиться. Признак «показывать
-   * нечего» — пустой `id`, ровно как раньше им был null в `sessionId`.
+   * An empty agent instead of null — deliberately: the tabs read dozens of fields from it, and
+   * every null check in the template would be one more place to get wrong. The "nothing to
+   * show" signal is an empty `id`, exactly as `sessionId` being null used to be.
    */
   const current = computed<AgentViewState>(() => {
     const id = state.value.selected
@@ -50,7 +50,7 @@ export const useAgent = defineStore('agent', () => {
     return slice?.gate.seeded ? slice.view : EMPTY
   })
 
-  /** Снимок выбранного агента в полёте. Отличается от «агента нет». */
+  /** The selected agent's snapshot is in flight. Distinct from "no such agent". */
   const loading = computed(() => {
     const id = state.value.selected
     if (!id)
@@ -61,7 +61,7 @@ export const useAgent = defineStore('agent', () => {
 
   const hasSession = computed(() => current.value.id !== '' && !current.value.ended)
 
-  /** Состояние слайса для чипа в шапке: не загружен / снимок / на связи / ушёл. */
+  /** Slice state for the header chip: not loaded / snapshotting / live / gone. */
   function sliceState(id: string): 'absent' | 'seeding' | 'live' | 'ended' {
     const slice = state.value.agents.get(id)
 
@@ -88,8 +88,8 @@ export const useAgent = defineStore('agent', () => {
   function connect(): void {
     const settings = useSettings()
 
-    // Новый объект состояния: старое принадлежало прошлому соединению, и переиспользовать его
-    // значит смешать два процесса в одной ленте.
+    // A new state object: the old one belonged to the previous connection, and reusing it would
+    // mean mixing two processes into one stream.
     state.value = emptyDebugState()
     state.value.selected = localStorage.getItem(SELECTED_KEY)
     frames.value = []
@@ -112,8 +112,9 @@ export const useAgent = defineStore('agent', () => {
           resyncs.value.push({ at: state.value.seq, reason })
         },
         onChanged() {
-          // Выбор по умолчанию: первый в ростере, то есть ядро. Здесь, а не в петле, потому что
-          // это решение интерфейса, а не протокола — петля не знает, на что смотрит человек.
+          // Default selection: the first in the roster, i.e. the core. Here, not in the loop,
+          // because this is a UI decision, not a protocol one — the loop doesn't know what the
+          // human is looking at.
           if (!state.value.selected && state.value.globals.roster.length > 0)
             select(state.value.globals.roster[0].id)
 

@@ -7,18 +7,19 @@ namespace Content.Server.AiAgent.Perception;
 /// Bounded buffer of perceived lines.
 ///
 /// <para>
-/// <b>Трогают её три потока, а не один.</b> Здесь раньше стояло «пишется с главного потока,
-/// вычитывается с главного потока — контенции нет»; это перестало быть правдой и вводило в
-/// заблуждение ровно там, где важно. Сегодня: <see cref="Push"/> — главный поток (обработчики
-/// событий, из-под клика игрока); <see cref="Drain"/> — тоже главный, внутри маршалированного
-/// вызова; а <see cref="PeekUnread"/> зовётся из <b>потока агента</b> на каждый результат
-/// инструмента, и <see cref="Count"/> читается ещё и с потока отладочного HTTP.
+/// <b>Three threads touch it, not one.</b> This used to say "written from the main thread, read from
+/// the main thread — no contention"; that stopped being true and was misleading exactly where it
+/// mattered. Today: <see cref="Push"/> is the main thread (event handlers, off a player's click);
+/// <see cref="Drain"/> is also main, inside a marshalled call; and <see cref="PeekUnread"/> is called
+/// from the <b>agent thread</b> on every tool result, while <see cref="Count"/> is also read from the
+/// debug HTTP thread.
 /// </para>
 /// <para>
-/// Всё под одним локом, поэтому корректно. Но «контенции нет» — ложная посылка, и из неё следовал
-/// вывод, что под локом можно делать что угодно: <c>PeekUnread</c> держал его через два полных
-/// обхода до шестисот элементов вместе со сборкой строк, а главный поток в это время ждал на
-/// <c>Push</c>. Держать лок дольше, чем нужно на выбор элементов, здесь нельзя.
+/// All of it under one lock, so it's correct. But "no contention" was a false premise, and it led to
+/// the conclusion that anything goes under the lock: <c>PeekUnread</c> used to hold it across two full
+/// passes over up to six hundred elements plus building the strings, while the main thread waited on
+/// <c>Push</c> the whole time. Holding the lock longer than it takes to pick the elements is not
+/// allowed here.
 /// </para>
 ///
 /// On overflow the <em>oldest</em> entries are dropped and the count is reported to the model as
@@ -30,9 +31,10 @@ public sealed class ObservationQueue
     private readonly object _lock = new();
 
     /// <summary>
-    /// Связный список, а не <c>Queue</c>, ради одной операции: выбросить старейшую строку
-    /// ОПРЕДЕЛЁННОЙ категории, не трогая остальные. У очереди такого действия нет вовсе — пришлось
-    /// бы пересобирать её целиком на каждый лишний элемент, а лишние элементы приходят потоком.
+    /// A linked list rather than a <c>Queue</c>, for the sake of one operation: dropping the oldest
+    /// line of a SPECIFIC category without touching the rest. A plain queue has no such operation at
+    /// all — it would have to be rebuilt from scratch for every excess element, and excess elements
+    /// arrive as a stream.
     /// </summary>
     private readonly LinkedList<Observation> _items = new();
 
@@ -42,19 +44,19 @@ public sealed class ObservationQueue
     public int Capacity { get; set; }
 
     /// <summary>
-    /// Сколько строк <see cref="ObsKind.Observed"/> очередь держит одновременно.
+    /// How many <see cref="ObsKind.Observed"/> lines the queue holds at once.
     ///
-    /// Отдельный потолок нужен потому, что общий выбрасывает СТАРЕЙШЕЕ безотносительно вида. Все
-    /// прочие категории — редкие сообщения, а эта приходит потоком: любое оживление в кадре
-    /// вытолкнуло бы из очереди реплику по рации, то есть агент переставал бы слышать просьбы ровно
-    /// в тот момент, когда их больше всего. Здесь подрезается старейшая OBSERVED, и только она.
+    /// A separate cap is needed because the overall one drops the OLDEST regardless of kind. Every
+    /// other category is a rare message, while this one arrives as a stream: any commotion in frame
+    /// would push a radio call out of the queue, i.e. the agent would stop hearing requests exactly
+    /// when there are the most of them. Here it's the oldest OBSERVED that gets trimmed, and only that.
     /// </summary>
     public int ObservedCapacity { get; set; }
 
     /// <param name="observedCapacity">
-    /// По умолчанию без потолка: голая очередь ведёт себя ровно как до появления наблюдений, и
-    /// тесты, которым нужна очередь как таковая, не обязаны знать про эту ручку. Живая сессия
-    /// значение задаёт всегда — см. <c>ai.observe_buffer</c>.
+    /// Uncapped by default: a bare queue behaves exactly as it did before observations existed, and
+    /// tests that just need a queue as such don't have to know about this knob. A live session always
+    /// sets a value — see <c>ai.observe_buffer</c>.
     /// </param>
     public ObservationQueue(int capacity, int observedCapacity = int.MaxValue)
     {
@@ -90,8 +92,9 @@ public sealed class ObservationQueue
             if (obs.Kind == ObsKind.Observed)
                 _observed++;
 
-            // Сначала свой потолок, потом общий. Порядок важен: если поток OBSERVED уже упёрся в
-            // свой лимит, до общего дело не дойдёт, и речь останется в очереди нетронутой.
+            // Its own cap first, then the overall one. Order matters: if the OBSERVED stream has
+            // already hit its own limit, the overall one never has to trigger, and speech stays in
+            // the queue untouched.
             while (_observed > ObservedCapacity && TrimOldest(ObsKind.Observed))
             {
             }
@@ -113,11 +116,12 @@ public sealed class ObservationQueue
     }
 
     /// <summary>
-    /// Выбросить самую старую строку заданного вида. Возвращает false, если такой в очереди нет.
+    /// Drop the oldest line of the given kind. Returns false if there is none of that kind in the
+    /// queue.
     ///
-    /// Считается в общий счётчик потерь, а не в свой: агенту сообщается «столько-то строк ты не
-    /// увидел», и делить эту потерю по видам ему незачем — вернуть их всё равно нечем. Вызывается
-    /// под уже взятым локом.
+    /// Counted into the overall loss counter, not a per-kind one: the agent is told "you missed this
+    /// many lines", and there is no reason to split that loss by kind — it can't get them back either
+    /// way. Called with the lock already held.
     /// </summary>
     private bool TrimOldest(ObsKind kind)
     {
@@ -163,12 +167,12 @@ public sealed class ObservationQueue
     /// radio copy is already in here, and this is how it recognises it.
     /// </summary>
     /// <summary>
-    /// Лежит ли в очереди событие ровно с этим текстом.
+    /// Is there an event in the queue with exactly this text?
     ///
-    /// Нужно ровно одному месту — периодическому напоминанию злому ИИ, — и именно затем, чтобы
-    /// напоминания не копились стопкой, пока агент занят долгим ходом. Сравнение по тексту, а не
-    /// по идентификатору, потому что текст напоминания и есть его идентичность: он задан одной
-    /// строкой в прототипе правила и второго такого в очереди быть не должно.
+    /// Needed by exactly one place — the periodic reminder to the evil AI — and specifically so that
+    /// reminders don't pile up while the agent is busy with a long turn. Compared by text rather than
+    /// by identifier, because the reminder's text is its identity: it's defined as a single line in
+    /// the rule prototype, and there should never be a second one like it in the queue.
     /// </summary>
     public bool HasEvent(string text)
     {

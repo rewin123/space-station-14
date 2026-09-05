@@ -7,13 +7,14 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Робот в режиме скрипта: то, ради чего режим и написан.
+/// A borg in script mode: what the mode was written for.
 ///
 /// <para>
-/// Замер боевого прогона: 37 ходов, 661 обращение к модели, 680 вызовов инструментов — ровно один
-/// круг через LLM на каждое элементарное действие, по 14 секунд и 41k промпт-токенов за «шагни на
-/// тайл». Здесь доказывается, что дорога до реактора и работа с пультом умещаются в ОДИН вызов, а
-/// не в десяток ходов, — и что <c>go</c> при этом действительно ждёт прибытия, а не отвечает «иду».
+/// A measurement from a live run: 37 turns, 661 calls to the model, 680 tool calls — exactly one
+/// round trip through the LLM for every elementary action, at 14 seconds and 41k prompt tokens per
+/// "step onto a tile". This proves that the walk to the reactor and working the console fit into
+/// ONE call, not a dozen turns — and that <c>go</c> genuinely waits for arrival instead of
+/// answering "on my way".
 /// </para>
 /// </summary>
 [TestFixture]
@@ -38,15 +39,16 @@ public sealed class BorgScriptTests
     [Test]
     public async Task BorgInScriptMode_LeavesTheCoreOnItsOwnToolset()
     {
-        // Ядро остаётся на классическом наборе в той же смене, где робот уже пишет скрипты, — и
-        // это нужно, чтобы было с чем сравнивать.
+        // The core stays on the classic toolset in the same shift where the borg is already
+        // writing scripts — this is needed so there is something to compare against.
         //
-        // Разделяет их НЕ прототип, а момент старта сессии: и ядро, и робот читают один и тот же
-        // `ai.script_mode` при сборке тела и дальше не перечитывают его никогда. Ядро заводится
-        // внутри Create, робот — после SetScriptMode(true), отсюда и разница. Стенд поэтому
-        // принудительно ставит cvar в false перед стартом (см. AiStation), а не полагается на
-        // боевое умолчание: с 20.08.2026 оно true, и без этой опоры тест ловил бы уже скриптовое
-        // ядро.
+        // What separates them is NOT the prototype but the moment the session starts: both the
+        // core and the borg read the same `ai.script_mode` when the body is assembled and never
+        // re-read it again afterward. The core is set up inside Create, the borg after
+        // SetScriptMode(true), hence the difference. That is why the bench forcibly sets the cvar
+        // to false before starting (see AiStation) rather than relying on the production default:
+        // as of 20.08.2026 it is true, and without this safeguard the test would already be
+        // catching a scripted core.
         await using var w = await AiStation.Create();
         await w.SetScriptMode(true);
         var borg = await SpawnAndClaim(w);
@@ -68,13 +70,14 @@ public sealed class BorgScriptTests
     [Test]
     public async Task Go_ReturnsOnlyAfterTheRobotHasArrived()
     {
-        // Разница между go и raw['goto'] — вся суть режима. Мгновенная версия отвечает «иду» и
-        // распускает работу на отдельные ходы с ожиданием наблюдения между ними; ждущая возвращает
-        // управление уже на месте, и следующая строка скрипта работает руками.
+        // The difference between go and raw['goto'] is the whole point of the mode. The instant
+        // version answers "on my way" and spreads the work across separate turns with an
+        // observation wait between them; the waiting version returns control only once arrived,
+        // and the next script line already has hands to work with.
         //
-        // Маршрут короткий намеренно. Проверяется семантика ожидания, а не дальность ходьбы:
-        // на длинных переходах апстримовая проходимость сама по себе не гарантирована, и тест
-        // падал бы на чужой проблеме.
+        // The route is deliberately short. What's tested is the wait semantics, not walking
+        // distance: on long routes, upstream pathability by itself is not guaranteed, and the test
+        // would fail on someone else's problem.
         await using var w = await AiStation.CreateOnMap("Packed");
         await w.SetScriptMode(true);
         await w.SetScriptForeground(120_000);
@@ -122,8 +125,8 @@ public sealed class BorgScriptTests
     [Test]
     public async Task OneScript_WalksToTheReactorAndWorksItsConsole()
     {
-        // Тот самый сценарий, который в классическом режиме стоил десятка ходов с ожиданием
-        // наблюдения между каждым: дойти через полстанции и прочитать пульт АМЭ.
+        // The very scenario that in classic mode cost a dozen turns with an observation wait
+        // between each one: walk across half the station and read the AME console.
         await using var w = await AiStation.CreateOnMap("Packed");
         await w.SetScriptMode(true);
         await w.SetScriptForeground(240_000);

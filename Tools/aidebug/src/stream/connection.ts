@@ -18,24 +18,25 @@ export type ConnectionStatus =
   | 'idle'
   | 'connecting'
   | 'live'
-  /** Курсор непригоден, идём за снимком. Штатное состояние, не ошибка. */
+  /** The cursor is unusable, fetching a snapshot. A normal state, not an error. */
   | 'resyncing'
   | 'retrying'
-  /** Терминально: токен неверен или клиент шлёт мусор. Повтор не поможет. */
+  /** Terminal: the token is invalid or the client is sending garbage. Retrying won't help. */
   | 'unauthorized'
   | 'broken'
 
-/** Один агент на стороне клиента: ворота досева плюс его состояние. */
+/** One agent on the client side: the seed gate plus its state. */
 export interface AgentSlice {
   gate: SeedGate
   view: AgentViewState
 }
 
 /**
- * Всё, что видит интерфейс.
+ * Everything the UI sees.
  *
- * Курсор `seq` принадлежит СОЕДИНЕНИЮ, а не агенту: лента одна на процесс, и второго курсора
- * здесь быть не должно — две ленты с двумя курсорами дают четыре режима рассинхрона вместо одного.
+ * The `seq` cursor belongs to the CONNECTION, not to the agent: there's one stream per process,
+ * and there must not be a second cursor here — two streams with two cursors would give four
+ * ways to drift apart instead of one.
  */
 export interface DebugViewState {
   instance: string
@@ -59,28 +60,29 @@ export function emptyDebugState(): DebugViewState {
 
 export interface ConnectionHooks {
   onStatus(status: ConnectionStatus, detail?: string): void
-  /** Каждый пришедший кадр, до применения — для сырого лога «Шины». */
+  /** Every incoming frame, before it's applied — for the "Bus" tab's raw log. */
   onFrame(frame: AgentEventFrame): void
   onResync(reason: string): void
   onChanged(): void
 }
 
 /**
- * Единственная петля опроса на всё приложение.
+ * The single polling loop for the whole app.
  *
- * <b>Живёт вне дерева компонентов, и это обязательное условие.</b> HMR в Vite перемонтирует
- * компоненты на каждое сохранение файла. Петля, запущенная в `onMounted`, при сохранении даст ВТОРУЮ
- * петлю с тем же курсором: обе прочитают seq=100, обе попросят события после 100, обе применят —
- * и каждое сообщение отрисуется дважды.
+ * <b>It lives outside the component tree, and that's a hard requirement.</b> Vite's HMR
+ * remounts components on every file save. A loop started in `onMounted` would spawn a SECOND
+ * loop with the same cursor on every save: both would read seq=100, both would ask for events
+ * after 100, both would apply them — and every message would render twice.
  *
- * Отсюда три вещи: модульный синглтон, счётчик поколения (результат запроса, выданного прошлым
- * поколением, отбрасывается) и `import.meta.hot.dispose`, останавливающий петлю перед заменой
- * модуля.
+ * Hence three things: a module-level singleton, a generation counter (the result of a request
+ * issued by a past generation is discarded), and `import.meta.hot.dispose`, which stops the
+ * loop before the module is replaced.
  *
- * Второе следствие — про сервер: оборванный запрос НЕ освобождает серверный слот. Роутер получает
- * токен остановки сервера, а не запроса, поэтому брошенный long-poll досиживает свои 25 секунд,
- * держа один из шестнадцати слотов. Отсюда же single-flight на досевах: вкладка, севшая четырёх
- * агентов разом, заняла бы пять слотов, а три такие вкладки положили бы эндпоинт целиком.
+ * The second consequence concerns the server: an aborted request does NOT free the server slot.
+ * The router receives a server-shutdown token, not a request one, so an abandoned long-poll
+ * sits out its full 25 seconds, holding one of the sixteen slots. That's also why seeding is
+ * single-flight: a tab that seeded four agents at once would occupy five slots, and three such
+ * tabs would take down the endpoint entirely.
  */
 class Connection {
   private generation = 0
@@ -91,7 +93,7 @@ class Connection {
   private state: DebugViewState | null = null
   private hooks: ConnectionHooks | null = null
 
-  /** Очередь досевов. Пустая строка — процессный снимок. */
+  /** Seed queue. An empty string means the process-level snapshot. */
   private queue: string[] = []
   private seeding = false
 
@@ -118,10 +120,11 @@ class Connection {
   }
 
   /**
-   * Показать агента: досеять, если его снимка ещё нет.
+   * Shows an agent: seeds it if it doesn't have a snapshot yet.
    *
-   * Уже сеянные продолжают набирать кадры в фоне, поэтому возврат к ним мгновенен и без дыр.
-   * Не сеянные не копят ничего — про них видно только строку ростера.
+   * Already-seeded agents keep accumulating frames in the background, so switching back to
+   * them is instant and gap-free. Unseeded ones accumulate nothing — only their roster row is
+   * visible.
    */
   select(id: string): void {
     const state = this.state
@@ -138,7 +141,7 @@ class Connection {
     this.hooks?.onChanged()
   }
 
-  /** Выгрузить агента из памяти вкладки: история одного мозга — это десятки мегабайт строк. */
+  /** Unloads an agent from the tab's memory: one brain's history is tens of megabytes of strings. */
   unload(id: string): void {
     const state = this.state
     if (!state)
@@ -188,11 +191,12 @@ class Connection {
 
     let attempt = 0
 
-    // Строго последовательно: снимок, потом петля. Не Promise.all.
+    // Strictly sequential: snapshot, then the loop. Not Promise.all.
     //
-    // И курсор после сидирования берётся ИЗ СНИМКА. Опрашивать с since=0 нельзя: `Read` считает
-    // самый старый кадр как `seq - count`, так что в начале жизни процесса since=0 будет честно
-    // обслужен повтором всего кольца, а не ожидаемым resync — и всё применится по второму разу.
+    // And after seeding, the cursor is taken FROM THE SNAPSHOT. Polling with since=0 is not
+    // allowed: `Read` computes the oldest frame as `seq - count`, so early in the process's
+    // life, since=0 would be honestly served with a replay of the whole ring instead of the
+    // expected resync — and everything would get applied a second time.
     while (this.alive(generation)) {
       try {
         if (state.instance === '' || state.seq === 0) {
@@ -208,9 +212,10 @@ class Connection {
           seedGlobals(state.globals, snapshot)
           state.globalsGate.land(snapshot.seq)
 
-          // Выбранного агента сеем сразу — на него смотрят прямо сейчас. Остальных не трогаем:
-          // четыре истории по сотне тысяч токенов в одной вкладке — это десятки мегабайт строк,
-          // и качать их за того, кто на них не смотрит, незачем.
+          // We seed the selected agent right away — it's being looked at right now. We leave
+          // the rest alone: four histories of a hundred thousand tokens each in one tab are
+          // tens of megabytes of strings, and there's no point downloading them on behalf of
+          // someone who isn't looking at them.
           if (state.selected)
             this.enqueue(state.selected)
 
@@ -250,9 +255,9 @@ class Connection {
         if (!this.alive(generation))
           return
 
-        // Терминальные ответы повторять бессмысленно: 401 не станет верным сам собой, а 400 —
-        // это баг клиента. Без этой развилки страница вечно долбит сервер и выглядит как
-        // «просто не работает».
+        // Retrying terminal responses is pointless: a 401 won't become valid on its own, and a
+        // 400 is a client bug. Without this branch the page hammers the server forever and
+        // looks like it "just doesn't work".
         if (error instanceof ApiError && error.terminal) {
           hooks.onStatus(error.status === 401 ? 'unauthorized' : 'broken', error.message)
           this.running = false
@@ -267,11 +272,11 @@ class Connection {
   }
 
   /**
-   * Разложить кадр по слайсам.
+   * Routes a frame to its slice.
    *
-   * Кадр с пустым `session` — процессный и относится ко ВСЕМ агентам сразу. Кадр незнакомого
-   * агента отбрасывается: на него никто не смотрит, и заводить под него слайс значит копить
-   * историю, которую никто не просил.
+   * A frame with an empty `session` is process-level and applies to ALL agents at once. A frame
+   * for an unfamiliar agent is dropped: nobody is looking at it, and creating a slice for it
+   * would mean accumulating history nobody asked for.
    */
   private route(state: DebugViewState, frame: AgentEventFrame, hooks: ConnectionHooks): void {
     if (frame.session === '' || isGlobalFrame(frame.type)) {
@@ -299,7 +304,7 @@ class Connection {
     }
   }
 
-  /** Забрать один снимок из очереди. Строго по одному: см. про слоты сервера выше. */
+  /** Pulls one snapshot from the queue. Strictly one at a time: see the note on server slots above. */
   private async drainSeeds(generation: number): Promise<void> {
     const { endpoint, state, hooks } = this
     if (!endpoint || !state || !hooks || this.seeding)
@@ -348,8 +353,9 @@ class Connection {
 
       const slice = this.slice(state, id)
 
-      // Агент ушёл, пока снимок летел. Штатная гонка: слайс возвращается в исходное, кадры снова
-      // отбрасываются, а строка ростера сама исчезнет со следующим ответом ленты.
+      // The agent left while the snapshot was in flight. A normal race: the slice goes back to
+      // its initial state, frames get dropped again, and the roster row will disappear on its
+      // own with the next stream response.
       if (snapshot.agent === null) {
         slice.gate.reset()
         hooks.onChanged()
@@ -376,10 +382,11 @@ class Connection {
   }
 
   /**
-   * Пересев СОЕДИНЕНИЯ: другой процесс или курсор непригоден.
+   * Reseeds the CONNECTION: a different process, or the cursor is unusable.
    *
-   * Выбор агента сохраняется, все слайсы возвращаются в исходное. Заново сеется только выбранный —
-   * остальные лениво, при переключении, чтобы не устраивать шторм из четырёх снимков.
+   * The agent selection is kept, all slices go back to their initial state. Only the selected
+   * one gets reseeded right away — the rest lazily, on switching, to avoid a storm of four
+   * snapshots.
    */
   private dropEverything(state: DebugViewState): void {
     state.instance = ''
@@ -395,5 +402,5 @@ class Connection {
 
 export const connection = new Connection()
 
-// Перед заменой модуля петля обязана остановиться, иначе старая продолжит жить рядом с новой.
+// The loop must stop before the module is replaced, or the old one keeps living alongside the new one.
 import.meta.hot?.dispose(() => connection.stop())

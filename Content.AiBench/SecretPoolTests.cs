@@ -10,20 +10,21 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Секретный пул «Аксиомы»: его состав, и то, что каждый режим в нём действительно достижим.
+/// The Aksioma secret pool: its composition, and that every mode in it is actually reachable.
 ///
 /// <para>
-/// Проверяются ДАННЫЕ, а не рулетка. Сама рулетка апстримовая
-/// (<c>SecretRuleSystem.TryPickPreset</c>) и при равных весах честна — но она молча прощает
-/// ровно те ошибки, которые здесь и ловятся: опечатку в имени пресета (в лог уйдёт
-/// «Invalid preset», а режим просто никогда не выпадет) и незамеченный <c>minPlayers</c> у
-/// одного из правил пресета, из-за которого режим исчезает на низком онлайне.
+/// What's checked here is the DATA, not the roulette. The roulette itself is upstream's
+/// (<c>SecretRuleSystem.TryPickPreset</c>) and is fair given equal weights — but it silently forgives
+/// exactly the mistakes caught here: a typo in a preset name (the log gets "Invalid preset" and the
+/// mode simply never comes up) and an overlooked <c>minPlayers</c> on one of the preset's rules, which
+/// makes the mode disappear at low population.
 /// </para>
 /// <para>
-/// Вторая ошибка коварнее первой. Порог считается как МАКСИМУМ по всем правилам пресета
-/// (<c>GameTicker.GetMinimumPlayerCount</c>), то есть его втаскивает любое добавленное правило —
-/// не только антагонистическое. Добавив однажды в наш пресет чужое правило с <c>minPlayers: 10</c>,
-/// мы получили бы вечер, в котором режим ИИ не выпадает ни разу, и ни строки об этом в журнале.
+/// The second mistake is sneakier than the first. The threshold is computed as the MAXIMUM across all
+/// of the preset's rules (<c>GameTicker.GetMinimumPlayerCount</c>), meaning it gets dragged up by any
+/// added rule — not just an antagonist one. Adding a borrowed rule with <c>minPlayers: 10</c> to our
+/// preset one day would give us an evening where the AI mode never once comes up, and not a line about
+/// it in the log.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -32,15 +33,15 @@ public sealed class SecretPoolTests
 {
     private const string Pool = "SecretAksioma";
 
-    /// <summary>Режимы ИИ форка — и те, что в пуле, и те, что запускаются вручную.</summary>
+    /// <summary>The fork's AI modes — both the ones in the pool and the ones launched manually.</summary>
     private static readonly string[] AiPresets = { "AiPeaceful", "RogueAiHidden", "RogueAiOpen" };
 
     /// <summary>
-    /// Состав пула на 02.09.2026: предатель и мирный ИИ.
+    /// The pool's composition as of 02.09.2026: traitor and peaceful AI.
     /// </summary>
     /// <remarks>
-    /// Список сверяется целиком, а не «содержит»: молча выпавший из пула режим и молча
-    /// добавленный — одинаково незаметны в игре и одинаково меняют вечер.
+    /// The list is checked for exact equality, not "contains": a mode silently dropped from the pool
+    /// and one silently added are equally invisible in-game and equally change the evening.
     /// </remarks>
     [Test]
     public async Task Pool_HoldsTwoReachablePresets()
@@ -65,8 +66,8 @@ public sealed class SecretPoolTests
             }
         });
 
-        // Каждое правило каждого пресета обязано существовать: пресет с несуществующим правилом
-        // выпадет, но соберётся не целиком — например, без нашего RogueAiRule, то есть без ИИ.
+        // Every rule of every preset must exist: a preset with a missing rule will still come up, but
+        // will not be assembled whole — for example, without our RogueAiRule, meaning without the AI.
         await w.Read(() =>
         {
             foreach (var id in weights.Keys)
@@ -92,21 +93,22 @@ public sealed class SecretPoolTests
                 $"«AiPeaceful» требует {minimums["AiPeaceful"]} готовых игроков. Это единственный режим пула " +
                 "без порога, и с порогом пул на пустом сервере не выберет ничего");
 
-            // Предатель — единственный, кому порог положен: в одиночку он не играется. Проверяется
-            // не «ровно 2», а «больше нуля»: точное число — балансное решение и меняется.
+            // Traitor is the only one entitled to a threshold: it can't be played solo. What's checked
+            // is not "exactly 2" but "greater than zero": the exact number is a balance decision and changes.
             Assert.That(minimums["Traitor"], Is.GreaterThan(0),
                 "у предателя пропал порог по игрокам — он начнёт выпадать на пустом сервере");
         });
     }
 
     /// <summary>
-    /// Режимы, выведенные из пула, остаются запускаемыми вручную.
+    /// Modes taken out of the pool remain launchable manually.
     /// </summary>
     /// <remarks>
-    /// 02.09.2026 злые режимы убрали из ротации, а не из форка: `forcepreset RogueAiOpen` обязан
-    /// работать, и вернуть их в пул должно быть правкой одной строки, а не восстановлением
-    /// удалённых прототипов. Без этого теста «убрать из пула» и «удалить» через месяц станут
-    /// одним и тем же — пресет, который никогда не выпадает, никто не проверяет.
+    /// On 02.09.2026 the hostile modes were removed from rotation, not from the fork: `forcepreset
+    /// RogueAiOpen` must still work, and putting them back in the pool should be a one-line change,
+    /// not a restoration of deleted prototypes. Without this test, "removed from the pool" and
+    /// "deleted" would become the same thing within a month — a preset that never comes up is a
+    /// preset nobody checks.
     /// </remarks>
     [Test]
     public async Task PresetsOutOfThePool_AreStillLaunchable()
@@ -133,12 +135,12 @@ public sealed class SecretPoolTests
     }
 
     /// <summary>
-    /// На пустом сервере пул не вырождается в пустоту.
+    /// On an empty server the pool does not degenerate into emptiness.
     /// </summary>
     /// <remarks>
-    /// Именно этот случай и был причиной завести свой пул вместо апстримового: там почти у всех
-    /// режимов есть порог, и на онлайне 0-1 не выпадает ничего. У нас на низком онлайне обязаны
-    /// оставаться три режима ИИ — они и есть сервер.
+    /// This exact case was the reason for setting up our own pool instead of upstream's: there,
+    /// almost every mode has a threshold, and at a population of 0-1 nothing comes up at all. For us,
+    /// at low population, three AI modes must remain — they ARE the server.
     /// </remarks>
     [Test]
     public async Task Pool_StaysPickableOnAnEmptyServer()

@@ -1,32 +1,35 @@
 #!/usr/bin/env python3
-"""Разложить плоскую библиотеку скиллов в дерево файловой системы агента.
+"""Break a flat library of skills apart into the agent's file-system tree.
 
-Зачем
+Why
 -----
-`ai_data/skills/` — это 232 файла в одной папке, и 229 из них не скиллы, а вычитанный справочник:
-168 написаны руками, 61 снят с внутренней вики игры. Их индекс занимал 16 425 символов
-замороженного системного промпта и был единственным способом узнать, что статья существует.
+`ai_data/skills/` is 232 files in one folder, and 229 of them aren't skills but a proofread
+reference library: 168 were written by hand, 61 were pulled from the game's internal wiki.
+Their index took up 16,425 characters of the frozen system prompt and was the only way to
+find out that an article existed.
 
-Теперь справочник живёт деревом в `ai_data/wiki_ru/`, только на чтение, а `ai_data/skills/`
-остаётся под то, что агент пишет сам. Карта префиксов взята из `Tools/wiki/link.py`, чтобы
-разделы совпадали с теми, по которым справочник уже собран.
+Now the reference library lives as a tree in `ai_data/wiki_ru/`, read-only, and
+`ai_data/skills/` stays for what the agent writes itself. The prefix map is taken from
+`Tools/wiki/link.py`, so the sections match the ones the reference library was already built
+around.
 
-Что делает
+What it does
 ----------
 1. `атмосфера-насосы.md`      -> `wiki_ru/атмосфера/насосы.md`
-2. `справочник-атмосфера.md`  -> `wiki_ru/атмосфера/_index.md`   (описание и обзор раздела)
+2. `справочник-атмосфера.md`  -> `wiki_ru/атмосфера/_index.md`   (section description and overview)
 3. `справочник.md`            -> `wiki_ru/_index.md`
-4. `словарь-*.md`             -> `wiki_ru/словарь-*.md`          (своего раздела не заслуживает)
-5. Переписывает 1466 ссылок `[[имя]]` в пути. **Каждая неразрешившаяся попадает в отчёт**:
-   мёртвая ссылка в справочнике хуже отсутствующей, и молча оставлять её нельзя.
-6. Переписывает вызовы снятых инструментов внутри статей. Иначе справочник учит агента звать
-   `skill_view`, которого больше нет, — и тратит ход на каждый такой совет.
-7. Выбрасывает мусор от тестов, оставляет настоящие записи агента в `skills/`.
+4. `словарь-*.md`             -> `wiki_ru/словарь-*.md`          (doesn't deserve its own section)
+5. Rewrites 1466 `[[name]]` links into paths. **Every unresolved one goes into the report**:
+   a dead link in a reference library is worse than a missing one, and it can't be left silent.
+6. Rewrites calls to retired tools inside articles. Otherwise the reference library teaches
+   the agent to call `skill_view`, which no longer exists, wasting a turn on every such piece
+   of advice.
+7. Discards junk left by tests, keeps the agent's real entries in `skills/`.
 
-Использование
+Usage
 -------------
-    python3 Tools/vfs/migrate.py --dry     # напечатать план, ничего не трогая
-    python3 Tools/vfs/migrate.py           # выполнить, сделав резервную копию
+    python3 Tools/vfs/migrate.py --dry     # print the plan, touch nothing
+    python3 Tools/vfs/migrate.py           # run it, making a backup first
 """
 
 from __future__ import annotations
@@ -44,41 +47,43 @@ DATA = ROOT / "ai_data"
 SRC = DATA / "skills"
 WIKI = DATA / "wiki_ru"
 
-# Префикс имени -> раздел. Тот же список, что в Tools/wiki/link.py: разделы уже собраны по нему,
-# и заводить второй значило бы получить два разных справочника.
+# Name prefix -> section. Same list as in Tools/wiki/link.py: the sections are already built
+# around it, and keeping a second one would produce two different reference libraries.
 SECTIONS = [
     "антаг", "атмосфера", "виды", "должности", "закон", "мед", "наука", "питание",
     "правила", "сб", "связь", "сервис", "силикон", "снабжение", "события", "строй", "химия",
 ]
 
-# Своего раздела не имеют и не заслуживают: это не отдел станции, а то, что читают до отделов.
+# Have no section of their own and don't deserve one: not a station department, but what gets
+# read before the departments.
 FLAT = ["словарь"]
 
-# Мусор от прогонов: имена с отметкой времени и пробные записи.
+# Junk from test runs: timestamped names and trial entries.
 JUNK = re.compile(r"^(проба-|после-перезапуска-)")
 
-# Настоящие записи агента — остаются в skills/.
+# The agent's real entries — stay in skills/.
 KEEP_IN_SKILLS = {"restore-core-power"}
 
 LINK = re.compile(r"\[\[([^\]]+)\]\]")
 
-# Многоточие вместо имени — не ссылка, а место для нужной статьи: «открой химия-...».
-# Такие переписываются в путь раздела, а не считаются битыми.
+# An ellipsis instead of a name is not a link but a placeholder for the intended article:
+# "open chemistry-...". These are rewritten to the section path rather than counted as broken.
 PLACEHOLDER = re.compile(r"^(?P<section>[^-]+)-?[.\u2026]{2,}$")
 SKILL_VIEW = re.compile(r"""skill_view\s*\{\s*["']name["']\s*:\s*["']([^"']+)["']\s*\}""")
 
 
 def flatten(name: str) -> str:
-    """Схлопнуть перенос строки внутри ссылки.
+    """Collapse a line break inside a link.
 
-    В тексте статьи ссылка законно разрывается по ширине колонки: «[[химия-\nнаркотики]]».
-    Без этого две такие ссылки числились бы битыми, хотя целы.
+    In an article's text a link can legitimately wrap at the column width:
+    "[[химия-\nнаркотики]]". Without this, two such links would count as broken even though
+    they're intact.
     """
     return re.sub(r"\s+", "", name)
 
 
 def target_of(stem: str) -> str | None:
-    """Куда ложится файл. None — значит остаётся в skills/ или выбрасывается."""
+    """Where the file goes. None means it stays in skills/ or is discarded."""
     if stem == "справочник":
         return "_index"
 
@@ -106,7 +111,7 @@ def main() -> int:
         return 1
 
     files = sorted(SRC.glob("*.md"))
-    plan: dict[str, str] = {}      # старое имя без .md -> новый путь внутри wiki_ru
+    plan: dict[str, str] = {}      # old name without .md -> new path inside wiki_ru
     stays: list[str] = []
     junk: list[str] = []
 
@@ -124,17 +129,19 @@ def main() -> int:
         target = target_of(stem)
 
         if target is None:
-            # Молча оставить незнакомый префикс в skills/ нельзя: так статья справочника
-            # попала бы в личные записи агента и стала бы доступной ему на запись.
+            # An unrecognized prefix can't be silently left in skills/: that would put a
+            # reference-library article among the agent's personal entries and make it
+            # writable by the agent.
             print(f"НЕ РАЗЛОЖЕНО: {stem} — нет раздела под этот префикс", file=sys.stderr)
             stays.append(stem)
             continue
 
         plan[stem] = target
 
-    # ---------------------------------------------------------------- ссылки
+    # ---------------------------------------------------------------- links
 
-    # Ссылка ведёт на раздел, если целью был его хаб: cat по папке отдаёт её оглавление.
+    # A link points to the section if its target was the section's hub: cat on the folder
+    # returns its table of contents.
     link_map: dict[str, str] = {}
 
     for stem, target in plan.items():
@@ -146,7 +153,7 @@ def main() -> int:
             link_map[stem] = "/wiki_ru/" + target
 
     def placeholder_path(name: str) -> str | None:
-        """«химия-...» — это не имя статьи, а указание на раздел. Ведём в раздел."""
+        """"chemistry-..." is not an article name, it's a pointer to a section. Route to the section."""
         match = PLACEHOLDER.match(name)
 
         if match is None:
@@ -202,7 +209,7 @@ def main() -> int:
 
         return text
 
-    # ------------------------------------------------------------------ отчёт
+    # ------------------------------------------------------------------ report
 
     print(f"файлов в {SRC.relative_to(ROOT)}: {len(files)}")
     print(f"  в справочник: {len(plan)}")
@@ -216,13 +223,14 @@ def main() -> int:
     for section, count in sorted(by_section.items(), key=lambda kv: -kv[1]):
         print(f"    {section:<14} {count}")
 
-    # Прогон переписывания на всех телах — и в сухом режиме тоже, чтобы отчёт о битых
-    # ссылках был доступен ДО того, как что-то тронуто.
+    # The rewrite pass runs over all bodies — in dry mode too, so that the report on broken
+    # links is available BEFORE anything is touched.
     def retitle(text: str, target: str) -> str:
-        """Заголовок — имя в новом дереве, а не старое плоское.
+        """The heading is the name in the new tree, not the old flat one.
 
-        Папка уже несёт раздел, и «# атмосфера-насосы» внутри /wiki_ru/атмосфера/насосы повторяет
-        его дважды. У оглавления заголовком становится сам раздел.
+        The folder already carries the section, and "# атмосфера-насосы" inside
+        /wiki_ru/атмосфера/насосы would repeat it twice. For a hub, the heading becomes the
+        section itself.
         """
         if target == "_index":
             name = "справочник"
@@ -264,7 +272,7 @@ def main() -> int:
         print("\n--dry: ничего не изменено")
         return 1 if broken else 0
 
-    # ------------------------------------------------------------- выполнение
+    # ------------------------------------------------------------- execution
 
     backup = SRC.with_name(f"skills.bak-{datetime.now():%Y%m%d-%H%M%S}")
     shutil.copytree(SRC, backup)

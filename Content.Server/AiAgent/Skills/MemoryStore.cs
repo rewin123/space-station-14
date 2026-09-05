@@ -28,11 +28,12 @@ public sealed record MemoryResult(bool Ok, string Message, IReadOnlyList<string>
 /// memory locks up permanently — which happened for real on the mcbot deployment when a limit was
 /// lowered and the accumulated text became unfixable.
 ///
-/// <b>Только про станцию и мир.</b> Раньше рядом жил второй файл, <c>CREW.md</c>, под людей своей
-/// смены, и он стирался на разборе раунда. Замысел был против метагейминга, а вышло наоборот:
-/// агент перестал писать в стираемый файл и сложил людей сюда, в тот, что переживает раунды, —
-/// и этот упёрся в свой лимит и перестал принимать что-либо вообще. Люди теперь живут в
-/// <see cref="PlayerNoteStore"/>, по файлу на человека, со штампом раунда у каждой записи.
+/// <b>Only about the station and the world.</b> A second file used to live alongside this one,
+/// <c>CREW.md</c>, for the people of the current shift, and it got wiped at the round review. The
+/// intent was anti-metagaming, and it backfired: the agent stopped writing to the file that gets
+/// wiped and piled people in here instead, into the one that survives rounds — and that one hit its
+/// limit and stopped accepting anything at all. People now live in <see cref="PlayerNoteStore"/>,
+/// one file per person, with a round stamp on every entry.
 /// </summary>
 public sealed class MemoryStore
 {
@@ -155,7 +156,7 @@ public sealed class MemoryStore
     /// Write the live entries out. Returns false — and says why — rather than swallowing the error.
     ///
     /// Swallowing it is the worst available failure mode for this particular store. The tool would
-    /// answer <c>{"ok":true,"result":"записано"}</c>, the curator would take that as done and never
+    /// answer <c>{"ok":true,"result":"written"}</c>, the curator would take that as done and never
     /// retry, and the lesson would vanish at the next reload. A self-evolving memory that confidently
     /// loses what it learned is worse than one that admits it could not write. Every caller rolls the
     /// in-memory edit back on failure, so live state and disk never disagree.

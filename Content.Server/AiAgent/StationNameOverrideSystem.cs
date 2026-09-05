@@ -5,21 +5,22 @@ using Robust.Shared.Configuration;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Одно имя станции на все карты — <c>ai.station_name</c>.
+/// One station name across all maps — <c>ai.station_name</c>.
 ///
-/// В ваниле имя собирает <see cref="StationNameSystem"/> из шаблона в прототипе карты:
-/// «TG Box Station 14-Alpha», и меняется оно с каждой картой в ротации. Для сервера, где имя
-/// станции — часть его лица, это значит, что лица нет: экипаж каждую смену прилетает куда-то
-/// ещё, а объявления Центрального командования адресованы каждый раз новому месту.
+/// In vanilla, the name is assembled by <see cref="StationNameSystem"/> from a template in the map
+/// prototype: "TG Box Station 14-Alpha", and it changes with every map in the rotation. For a server
+/// where the station's name is part of its face, that means there is no face: the crew flies in
+/// somewhere different every shift, and Central Command's announcements are addressed to a new
+/// place each time.
 ///
-/// Правится здесь, а не в прототипах карт, по правилу форка: ни одного изменённого файла
-/// апстрима. Иначе пришлось бы трогать каждую карту в пуле и заново трогать любую новую.
+/// Patched here rather than in the map prototypes, per the fork's rule: no upstream file gets
+/// modified. Otherwise every map in the pool would need touching, and again for any new one.
 ///
-/// Пустое значение отключает подмену целиком, и это важнее, чем кажется: так ведут себя
-/// бенчмарки и тесты, которым ванильное поведение и нужно.
+/// An empty value disables the override entirely, and that matters more than it looks: that's the
+/// behaviour benchmarks and tests rely on, since they need vanilla behaviour.
 /// </summary>
-// partial — требование анализатора RA0049 для типов с [Dependency]. В Debug это
-// предупреждение, в Release оно ошибка: без него сборка боевой конфигурации не проходит вовсе.
+// partial — required by the RA0049 analyzer for types with [Dependency]. In Debug it's a warning,
+// in Release it's an error: without it, the release-configuration build doesn't compile at all.
 public sealed partial class StationNameOverrideSystem : EntitySystem
 {
     [Dependency] private IConfigurationManager _cfg = default!;
@@ -36,8 +37,8 @@ public sealed partial class StationNameOverrideSystem : EntitySystem
         if (string.IsNullOrWhiteSpace(name))
             return;
 
-        // loud: false — иначе первым, что услышит экипаж на брифинге, будет объявление
-        // «станция X переименована в Y» про станцию, которой ни одной секунды не существовало.
+        // loud: false — otherwise the first thing the crew hears at the briefing would be an
+        // announcement "station X renamed to Y" about a station that never existed for a second.
         _station.RenameStation(ev.Station, name.Trim(), loud: false);
     }
 }

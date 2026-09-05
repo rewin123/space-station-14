@@ -27,8 +27,8 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id']
 const tab = ref<TabId>('conversation')
 
-// Подключаемся сразу: за обратным прокси токен подставляет он сам, а при неверном токене петля
-// терминально встаёт и говорит об этом — молчать было бы хуже.
+// Connect right away: behind a reverse proxy the token is supplied by the proxy itself, and
+// with a wrong token the loop stops terminally and says so — staying silent would be worse.
 onMounted(() => agent.connect())
 
 const SLICE_TEXT: Record<string, string> = {
@@ -85,14 +85,15 @@ const STATUS_TEXT: Record<string, string> = {
     </header>
 
     <!--
-      Переключатель мозгов.
+      Brain switcher.
 
-      Порядок задаёт СЕРВЕР (ядро первым, дальше по алфавиту) — здесь ростер не пересортировывается
-      нарочно: две независимые сортировки разъехались бы, и вкладка по умолчанию прыгала бы.
+      The order is set by the SERVER (the core first, then alphabetically) — the roster is
+      deliberately not re-sorted here: two independent sortings would drift apart, and the
+      default tab would keep jumping.
 
-      Кадры уже открытых агентов продолжают применяться в фоне, поэтому возврат к ним мгновенен.
-      Не открытые не копят ничего: четыре истории по сотне тысяч токенов в одной вкладке — это
-      десятки мегабайт строк.
+      Frames for already-opened agents keep applying in the background, so switching back to
+      them is instant. Unopened ones accumulate nothing: four histories of a hundred thousand
+      tokens each in one tab would be tens of megabytes of strings.
     -->
     <div v-if="agent.roster.length" class="agents">
       <button

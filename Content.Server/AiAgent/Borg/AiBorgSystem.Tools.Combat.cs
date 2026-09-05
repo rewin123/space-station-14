@@ -16,18 +16,19 @@ using Content.Shared.Weapons.Ranged.Systems;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Применение силы: удар и выстрел.
+/// The application of force: hitting and shooting.
 ///
 /// <para>
-/// Отдельным файлом, а не строчкой среди рук, по той же причине, по которой у режима злого ИИ
-/// отдельный лоусет: это единственные два инструмента, которые причиняют вред, и их стоит уметь
-/// прочитать целиком, не выискивая среди подбора предметов.
+/// A separate file rather than a line among the hand tools, for the same reason the evil-AI mode
+/// has a separate loadset: these are the only two tools that inflict harm, and they deserve to be
+/// readable in full, not hunted down among item-handling code.
 /// </para>
 /// <para>
-/// <b>Оба идут тем же путём, что штатные NPC</b> — <c>AttemptLightAttack</c> и
-/// <c>AttemptShoot</c>. Это не деталь реализации: оба метода внутри проверяют перезарядку,
-/// дистанцию, боеприпас и все подписки вроде «оружие отказывается стрелять в своих», то есть
-/// робот подчиняется ровно тем же правилам, что и всё остальное живое на станции.
+/// <b>Both go through the same path as regular NPCs</b> — <c>AttemptLightAttack</c> and
+/// <c>AttemptShoot</c>. This isn't an implementation detail: both methods internally check
+/// cooldown, range, ammunition, and every subscription like "this weapon refuses to fire on its
+/// own side," meaning the borg obeys exactly the same rules as everything else alive on the
+/// station.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -38,16 +39,17 @@ public sealed partial class AiBorgSystem
     [Dependency] private SharedGunSystem _gun = default!;
     [Dependency] private ItemSlotsSystem _itemSlots = default!;
 
-    /// <summary>Слот встроенного лазера на боевом шасси. Имя совпадает с YAML <c>gun_slot</c>.</summary>
+    /// <summary>The built-in laser slot on a combat chassis. Name matches the YAML <c>gun_slot</c>.</summary>
     private const string BuiltInGunSlot = "gun_slot";
 
     /// <summary>
-    /// Дальше этого не стреляем.
+    /// We don't shoot past this.
     ///
     /// <para>
-    /// Не про баланс оружия, а про паритет: цели приезжают в промпт из <c>look</c>, который
-    /// видит дальше, чем человек различает силуэт в коридоре. Без потолка модель открывала бы
-    /// огонь по хендлу, который для живого игрока — точка на другом конце палубы.
+    /// This isn't about weapon balance, it's about parity: targets arrive in the prompt from
+    /// <c>look</c>, which sees farther than a human can make out a silhouette in a corridor.
+    /// Without a cap, the model would open fire on a handle that, to a living player, is just a
+    /// dot at the other end of the deck.
     /// </para>
     /// </summary>
     private const float ShootRangeTiles = 12f;
@@ -63,18 +65,18 @@ public sealed partial class AiBorgSystem
 
             var name = Identity.Name(target, EntityManager);
 
-            // Замах, а не клик.
+            // A swing, not a click.
             //
-            // Раньше здесь стоял _interaction.UserInteraction, и это была ошибка, молчавшая до
-            // первого вооружённого робота: SharedInteractionSystem спрашивает боевой режим
-            // только затем, чтобы решить, пускать ли взаимодействие рукой, а сам удар живёт в
-            // MeleeWeaponSystem и поднимается событием от клиента. То есть робот честно
-            // «взаимодействовал» с человеком и не наносил ему ничего, а инструмент отвечал
-            // «ударил» — отличить это от промаха было нельзя ни по одному признаку.
+            // This used to be _interaction.UserInteraction, and that was a bug that stayed silent
+            // until the first armed borg: SharedInteractionSystem only checks combat mode to
+            // decide whether to allow a hand interaction, while the actual hit lives in
+            // MeleeWeaponSystem and is raised as an event from the client. So the borg would
+            // honestly "interact" with a person and deal no damage, while the tool reported
+            // "hit" — there was no signal by which to tell that apart from a miss.
             //
-            // AttemptLightAttack — публичный вход, которым бьют штатные NPC
-            // (NPCCombatSystem.Melee, NPCSteeringSystem.Obstacles). Он же берёт на себя
-            // перезарядку, дистанцию и все подписки на попытку удара.
+            // AttemptLightAttack is the public entry point regular NPCs attack through
+            // (NPCCombatSystem.Melee, NPCSteeringSystem.Obstacles). It also takes care of
+            // cooldown, range, and every attack-attempt subscription.
             var weapon = ActiveMeleeWeapon(borg);
 
             if (!TryComp<MeleeWeaponComponent>(weapon, out var melee))
@@ -83,26 +85,28 @@ public sealed partial class AiBorgSystem
                     "нечем бить: ни в руке, ни у корпуса нет боевого модуля");
             }
 
-            // Боевой режим включается на один замах и тут же гасится.
+            // Combat mode gets switched on for one swing and immediately switched back off.
             //
-            // AttemptAttack отказывает вне боевого режима молча (SharedMeleeWeaponSystem, первая
-            // же проверка после перезарядки), а у робота нет клавиши, которой его переключает
-            // живой игрок. Оставить режим включённым нельзя: под ним InteractionSystem перестаёт
-            // пускать взаимодействие рукой (CombatModeCanHandInteract), то есть робот с
-            // занесённым оружием не смог бы ни взять предмет, ни нажать кнопку — и понял бы это
-            // как «инструмент use сломался».
-            // ПРОМАХ — ЭТО НЕ УСПЕХ, И ЭТО ПРИХОДИТСЯ ПРОВЕРЯТЬ САМИМ.
+            // AttemptAttack refuses silently outside combat mode (SharedMeleeWeaponSystem, the
+            // very first check after the cooldown check), and a borg has no key with which a
+            // living player toggles it. Leaving the mode on isn't an option: under it,
+            // InteractionSystem stops allowing hand interaction (CombatModeCanHandInteract),
+            // meaning a borg with its weapon raised couldn't pick up an item or press a button —
+            // and would read that as "the use tool is broken."
+            // A MISS IS NOT A SUCCESS, AND WE HAVE TO CHECK THAT OURSELVES.
             //
-            // AttemptLightAttack возвращает true на сам факт замаха, а не на попадание: если цель
-            // вне досягаемости, апстрим честно пишет в админ-лог «melee attacked (light) … and
-            // missed» и на этом всё. Инструмент при этом отвечал «ударил», модель считала работу
-            // сделанной и била снова — и снова. В раунде 305 это выглядело как замершие киборги:
-            // Обух за минуту сделал больше тридцати замахов подряд по цели, до которой не доставал,
-            // и ни один не попал. Со стороны — робот стоит и ничего не делает.
+            // AttemptLightAttack returns true for the mere fact of the swing, not for a hit: if
+            // the target is out of reach, upstream honestly writes "melee attacked (light) ...
+            // and missed" to the admin log and leaves it at that. The tool would still report
+            // "hit," the model would consider the job done and swing again — and again. In round
+            // 305 this looked like frozen cyborgs: Obukh made over thirty swings in a row in one
+            // minute at a target it couldn't reach, and not one landed. From the outside, the
+            // borg just stands there doing nothing.
             //
-            // Проверка повторяет серверную MeleeWeaponSystem.InRange для случая без сессии
-            // (у агента её нет): InRangeUnobstructed на дальность оружия. Плюс Damageable —
-            // апстрим считает промахом и удар по тому, кому нечего повреждать.
+            // The check mirrors the server-side MeleeWeaponSystem.InRange for the sessionless
+            // case (the agent has no session): InRangeUnobstructed at the weapon's range. Plus
+            // Damageable — upstream also counts as a miss a hit on something that can't take
+            // damage.
             if (!HasComp<DamageableComponent>(target))
             {
                 return ToolResult.Fail(ToolError.Refused,
@@ -133,12 +137,13 @@ public sealed partial class AiBorgSystem
 
             if (!landed)
             {
-                // Причина называется поимённо, а не «не прошло».
+                // The reason is named explicitly, rather than a generic "didn't go through."
                 //
-                // AttemptAttack отказывает молча и по пяти разным поводам сразу, и для модели
-                // разница между «подожди секунду» и «до цели не дотянуться» — это разница между
-                // повтором и другим планом. Первая версия отвечала общей фразой, и на стенде
-                // отличить не отведённую руку от выключенного боевого режима было нельзя.
+                // AttemptAttack refuses silently for any of five different reasons at once, and
+                // for the model, the difference between "wait a second" and "can't reach the
+                // target" is the difference between retrying and forming a different plan. The
+                // first version answered with a generic phrase, and on the bench there was no way
+                // to tell an unrecovered swing arm apart from combat mode being off.
                 var why = melee.NextAttack > _timing.CurTime
                     ? "рука ещё не отведена после прошлого удара"
                     : !_blocker.CanAttack(borg, target, (weapon, melee))
@@ -157,26 +162,29 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Чем робот бьёт: оружие из рук, а если оружия нет ни в одной — сам корпус.
+    /// What the borg hits with: a weapon from its hands, or the chassis itself if neither hand
+    /// holds one.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Перебираются ВСЕ руки, а не только активная, и активная при находке делается текущей.
-    /// Живой игрок переключает руку клавишей и не считает это действием; у робота такой клавиши
-    /// нет, а модуль с двумя руками — клинок и ствол — обычное дело. Без перебора «ударить» и
-    /// «выстрелить» зависели бы от того, какая рука оказалась выбрана при установке модуля, то
-    /// есть от случайности, которую модели неоткуда узнать.
+    /// ALL hands are checked, not just the active one, and whichever hand the weapon is found in
+    /// becomes the active hand. A living player switches hands with a key and doesn't consider
+    /// that an action; a borg has no such key, and a module with two hands — a blade and a
+    /// barrel — is a common setup. Without this scan, "hit" and "shoot" would depend on whichever
+    /// hand happened to get chosen when the module was installed, i.e. on randomness the model has
+    /// no way to learn about.
     /// </para>
     /// <para>
-    /// Откат на корпус не щедрость: безоружная версия <c>MeleeWeaponComponent</c> висит на самом
-    /// мобе, и штатный NPC бьёт ровно так же — <c>AttemptLightAttack(uid, uid, …)</c>.
+    /// Falling back to the chassis isn't generosity: the unarmed version of
+    /// <c>MeleeWeaponComponent</c> lives on the mob itself, and a regular NPC hits exactly the
+    /// same way — <c>AttemptLightAttack(uid, uid, ...)</c>.
     /// </para>
     /// </remarks>
     private EntityUid ActiveMeleeWeapon(EntityUid borg) =>
         TryWieldFromHands<MeleeWeaponComponent>(borg, out var weapon) ? weapon : borg;
 
     /// <summary>
-    /// Найти в руках предмет с нужным компонентом и сделать его руку активной.
+    /// Find an item with the needed component among the hands and make its hand active.
     /// </summary>
     private bool TryWieldFromHands<T>(EntityUid borg, out EntityUid found) where T : IComponent
     {
@@ -205,12 +213,13 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Ствол: сначала руки, потом сам корпус, потом запертый слот шасси.
+    /// The gun: first the hands, then the chassis body itself, then the chassis's dedicated slot.
     /// </summary>
     /// <remarks>
-    /// <c>TryGetGun</c> смотрит только руку и само тело. Встроенный лазер лежит в
-    /// <c>gun_slot</c> — отдельная сущность, чтобы <c>BatteryAmmoProvider</c> Dirty'ил её,
-    /// а не корень шасси. Без этого шага боевой робот честно отвечал бы «нечем стрелять».
+    /// <c>TryGetGun</c> only looks at the hand and the body itself. The built-in laser lives in
+    /// <c>gun_slot</c> — a separate entity, so that <c>BatteryAmmoProvider</c> Dirty's it rather
+    /// than the chassis root. Without this step, a combat borg would honestly answer "nothing to
+    /// shoot with."
     /// </remarks>
     private bool TryGetBorgGun(EntityUid borg, out Entity<GunComponent> gun)
     {
@@ -263,10 +272,11 @@ public sealed partial class AiBorgSystem
                     retry: "other_target");
             }
 
-            // Прямая видимость обязательна, и это не придирка. Пуля летит по физике и упрётся в
-            // стену сама, но инструмент, отвечающий «выстрелил» на цель за переборкой, врёт
-            // модели о результате — а она поверит и будет стрелять в стену, пока не кончится
-            // заряд. Проверка ровно та же, которой пользуется всё остальное взаимодействие.
+            // A clear line of sight is mandatory, and that's not nitpicking. The bullet flies by
+            // physics and will hit the wall on its own, but a tool that reports "fired" at a
+            // target behind a bulkhead lies to the model about the outcome — and it will believe
+            // it and keep shooting the wall until the charge runs out. The check is exactly the
+            // same one every other interaction uses.
             if (!_interaction.InRangeUnobstructed(borg, target, range: ShootRangeTiles))
             {
                 return ToolResult.Fail(ToolError.NotVisible,

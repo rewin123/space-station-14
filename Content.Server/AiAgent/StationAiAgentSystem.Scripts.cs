@@ -5,20 +5,21 @@ using Content.Server.AiAgent.Perception;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Режим скрипта со стороны системы: где он включается и как о законченном скрипте узнаёт агент.
+/// Script mode as seen from the system side: where it's turned on and how the agent learns that a
+/// script has finished.
 ///
 /// <para>
-/// Скрипт умирает на своём потоке, а сказать об этом агенту можно только с главного:
-/// <see cref="ObservationQueue.Push"/> зовут из обработчиков событий мира, и вторая точка входа с
-/// чужого потока сломала бы её единственное правило. Поэтому поток кладёт процесс в очередь, а
-/// тик её разбирает — ровно тем же приёмом, что и сработавшие будильники.
+/// A script dies on its own thread, and the only place to tell the agent about it is the main one:
+/// <see cref="ObservationQueue.Push"/> is called from world event handlers, and a second entry point
+/// from a foreign thread would break its one rule. So the thread puts the process into a queue, and
+/// the tick drains it — exactly the same trick used for fired timers.
 /// </para>
 /// </summary>
 public sealed partial class StationAiAgentSystem
 {
     private ScriptTools? _scripts;
 
-    /// <summary>Ручки режима читаются живыми, как и везде: cvar меняется на боевом сервере без рестарта.</summary>
+    /// <summary>Mode knobs are read live, as everywhere else: the cvar changes on a live server without a restart.</summary>
     private ScriptTools Scripts => _scripts ??= new ScriptTools(new ScriptOptions
     {
         ForegroundMs = () => _cfg.GetCVar(AiCVars.ScriptForegroundMs),
@@ -30,23 +31,24 @@ public sealed partial class StationAiAgentSystem
     });
 
     /// <summary>
-    /// Идущие скрипты в строке SELF — по образцу будильников.
+    /// Running scripts in the SELF line — following the pattern of timers.
     ///
-    /// Без этого агент, запустивший фоновое дело и закрывший ход, забывал бы о нём до самого
-    /// наблюдения о конце и мог запустить второе такое же.
+    /// Without this, an agent that started a background task and closed its turn would forget about
+    /// it until the completion observation arrived, and could launch a second identical one.
     /// </summary>
     public string ScriptsForSelf(AgentSession session)
     {
         var line = session.Scripts?.SelfLine() ?? "";
-        return string.IsNullOrEmpty(line) ? "" : $"скрипты=[{line}]";
+        return string.IsNullOrEmpty(line) ? "" : $"{session.Locale.SelfScripts}=[{line}]";
     }
 
     /// <summary>
-    /// Досылка итога фонового скрипта наблюдением.
+    /// Delivering the outcome of a background script as an observation.
     ///
-    /// Именно она замыкает петлю: модель запустила длинное дело, закрыла ход и спит — и просыпается
-    /// сама, когда дело кончилось. Без этого пришлось бы опрашивать <c>bp_get_output</c>, а опрос
-    /// стоит ровно того обращения к модели, ради экономии которого весь режим и написан.
+    /// This is exactly what closes the loop: the model started a long-running task, closed its turn
+    /// and is asleep — and wakes up on its own once the task is done. Without this, it would have to
+    /// poll <c>bp_get_output</c>, and polling costs exactly the model call this whole mode was
+    /// written to save.
     /// </summary>
     private void ReportFinishedScripts()
     {
@@ -59,13 +61,18 @@ public sealed partial class StationAiAgentSystem
             while (table.TryTakeReport(out var process))
             {
                 var seconds = process.Elapsed.TotalSeconds;
-                var head = $"СКРИПТ #{process.Pid} {process.StatusWord()} за {seconds:0} с, вызовов {process.Calls}";
+                var loc = session.Locale;
+                var head = loc.T(
+                    $"СКРИПТ #{process.Pid} {process.StatusWord(loc)} за {seconds:0} с, вызовов {process.Calls}",
+                    $"SCRIPT #{process.Pid} {process.StatusWord(loc)} in {seconds:0}s, {process.Calls} calls");
 
                 var text = process.Status switch
                 {
-                    ScriptStatus.Done => $"{head}. {Tail(process)}",
-                    ScriptStatus.Stopped => $"{head} — снят. Сделанное не отменено. {Tail(process)}",
-                    _ => $"{head}: {process.Detail}. {Tail(process)}",
+                    ScriptStatus.Done => $"{head}. {Tail(process, loc)}",
+                    ScriptStatus.Stopped => loc.T(
+                        $"{head} — снят. Сделанное не отменено. {Tail(process, loc)}",
+                        $"{head} — stopped. What was done is not undone. {Tail(process, loc)}"),
+                    _ => $"{head}: {process.Detail}. {Tail(process, loc)}",
                 };
 
                 session.Queue.Push(Observation.Event(text, RoundTime()));
@@ -74,14 +81,17 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Хвост вывода в самом наблюдении — четыре строки, не больше.
+    /// The output tail included in the observation itself — four lines, no more.
     ///
-    /// Курсор при этом не двигается: полный вывод остаётся доступным через <c>bp_get_output</c>.
-    /// Здесь нужно ровно столько, чтобы модель поняла, надо ли туда смотреть вообще.
+    /// The cursor doesn't move for this: the full output stays available through
+    /// <c>bp_get_output</c>. Here we only need enough for the model to decide whether it's worth
+    /// looking there at all.
     /// </summary>
-    private static string Tail(ScriptProcess process)
+    private static string Tail(ScriptProcess process, Locale.AgentLocale loc)
     {
         var tail = process.Tail(4);
-        return string.IsNullOrWhiteSpace(tail) ? "Скрипт ничего не напечатал." : tail;
+        return string.IsNullOrWhiteSpace(tail)
+            ? loc.T("Скрипт ничего не напечатал.", "The script printed nothing.")
+            : tail;
     }
 }

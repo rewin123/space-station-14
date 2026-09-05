@@ -10,38 +10,48 @@ using Content.Server.AiAgent.Tools;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Будильники агента: три инструмента, которыми он сам назначает себе следующий ход.
+/// The agent's timers: three tools it uses to schedule its own next turn.
 ///
-/// До них у петли было ровно два повода проснуться — кто-то заговорил либо истёк тик простоя, — и
-/// поэтому «посмотрю через десять минут» агент физически не мог выполнить: следующий ход приходил
-/// по чужой реплике, в другом контексте, и о своём обещании он не вспоминал. Экипаж читал это как
-/// враньё, а не как отсутствие механизма.
+/// Before these, the loop had exactly two reasons to wake up — someone spoke, or the idle tick
+/// expired — which meant the agent physically could not follow through on "I'll check back in ten
+/// minutes": the next turn would arrive on someone else's line, in a different context, and it
+/// wouldn't recall its own promise. The crew read this as lying, not as a missing mechanism.
 ///
-/// Все три хода марширують на главный поток, хотя мира не касаются. Причина одна: срок считается от
-/// раундового времени, а раундовые часы принадлежат главному потоку — <see cref="RoundTime"/>
-/// достаёт GameTicker из EntityManager, а тянуть EntityManager с потока агента здесь нельзя
-/// (см. большой комментарий в <see cref="AgentSession"/>). Стоит это доли миллисекунды.
+/// All three calls dispatch to the main thread even though they don't touch the world. The one
+/// reason: the deadline is computed from round time, and the round clock belongs to the main thread —
+/// <see cref="RoundTime"/> pulls GameTicker from EntityManager, and EntityManager cannot be touched
+/// from the agent's thread (see the long comment in <see cref="AgentSession"/>). This costs a
+/// fraction of a millisecond.
 /// </summary>
 public sealed partial class StationAiAgentSystem
 {
-    /// <summary>Длиннее имя незачем: оно печатается в строке SELF на каждом ходу.</summary>
+    /// <summary>No point making the name longer: it gets printed in the SELF line on every turn.</summary>
     private const int MaxTimerNameLength = 32;
 
     private const int MaxTimerMessageLength = 200;
 
     private void RegisterTimerTools(AgentSession s, AiToolRegistry r)
     {
+        var L = s.Locale;
+
         r.Register(new AiTool
         {
             Name = "new_timer",
-            Description = "Завести себе будильник: через 'duration' секунд ты получишь событие " +
-                          "TIMER с текстом 'msg' и сделаешь ход, даже если на станции всё это время " +
-                          "было тихо. Так выполняют «проверю через десять минут»: сначала скажи " +
-                          "экипажу, потом поставь таймер. Имя с уже занятым именем — переставляет " +
-                          "старый, а не заводит второй. Заведённые таймеры видны в строке SELF.",
+            Description = L.T(
+                "Завести себе будильник: через 'duration' секунд ты получишь событие " +
+                "TIMER с текстом 'msg' и сделаешь ход, даже если на станции всё это время " +
+                "было тихо. Так выполняют «проверю через десять минут»: сначала скажи " +
+                "экипажу, потом поставь таймер. Имя с уже занятым именем — переставляет " +
+                "старый, а не заводит второй. Заведённые таймеры видны в строке SELF.",
+                "Set yourself an alarm: after 'duration' seconds you get a TIMER event " +
+                "with the text 'msg' and take a turn, even if the station was quiet the " +
+                "whole time. That is how you keep \"I'll check in ten minutes\": tell the " +
+                "crew first, then set the timer. A name that is already taken moves the old " +
+                "timer rather than starting a second one. Set timers are visible in the SELF line."),
 
-            // Не GameAction: это собственная память о будущем, а не действие с оборудованием.
-            // Должно работать и из интелликарты, и во время разбора — карденье не отменяет обещаний.
+            // Not a GameAction: this is the agent's own memory of the future, not an action on
+            // equipment. It must work from an intellicard too, and during a court-martial — being
+            // carded doesn't cancel promises.
             SchemaJson = """
                 {"type":"object","required":["name","msg","duration"],"additionalProperties":false,"properties":{
                 "name":{"type":"string","maxLength":32,"description":"Короткое имя, по нему таймер удаляют."},
@@ -55,7 +65,9 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "del_timer",
-            Description = "Удалить свой таймер по имени: дело сделано или отменилось.",
+            Description = L.T(
+                "Удалить свой таймер по имени: дело сделано или отменилось.",
+                "Delete your timer by name: the job is done or cancelled."),
             SchemaJson = """
                 {"type":"object","required":["name"],"additionalProperties":false,"properties":{
                 "name":{"type":"string","description":"Имя из строки SELF или из list_timers."}}}
@@ -66,8 +78,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "list_timers",
-            Description = "Все свои таймеры целиком: имя, текст, через сколько сработает, повторный " +
-                          "ли. В строке SELF видны только имена и сроки — это чтобы вспомнить текст.",
+            Description = L.T(
+                "Все свои таймеры целиком: имя, текст, через сколько сработает, повторный " +
+                "ли. В строке SELF видны только имена и сроки — это чтобы вспомнить текст.",
+                "All of your timers in full: name, text, how soon it fires, whether it " +
+                "repeats. The SELF line only shows names and deadlines — this is to recall the text."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
                 """,
@@ -94,11 +109,13 @@ public sealed partial class StationAiAgentSystem
 
         var repeat = GetBool(args, "repeat");
 
-        // Границы не отказывают, а поджимают, и это осознанный выбор в пользу хода.
+        // Out-of-range values are clamped, not rejected, and that's a deliberate choice in favor of
+        // the turn.
         //
-        // Отказ стоил бы модели второго вызова из отпущенных на ход — за ошибку, которую всё равно
-        // некуда исправлять, кроме как в разрешённый диапазон. Скрытого состояния при этом не
-        // возникает: ответ несёт настоящий срок срабатывания, а не запрошенный.
+        // A rejection would cost the model a second call out of its turn's allowance — for a mistake
+        // that has nowhere to be corrected to anyway except back into the allowed range. And no
+        // hidden state results from this: the response carries the actual firing deadline, not the
+        // requested one.
         var min = Math.Max(1, _cfg.GetCVar(AiCVars.TimerMinSeconds));
         var max = (int)TimerStore.MaxDelay.TotalSeconds;
 
@@ -125,20 +142,23 @@ public sealed partial class StationAiAgentSystem
 
             var effect = new Dictionary<string, object?>
             {
-                ["таймер"] = trimmedName,
-                ["сработает"] = ObservationFormatter.FormatRoundTime(result.Timer.DueAt),
-                ["через_секунд"] = clamped,
-                ["повтор"] = repeat,
-                ["всего_таймеров"] = s.State.Timers.Count,
+                [s.Locale.Timer] = trimmedName,
+                [s.Locale.FiresAt] = ObservationFormatter.FormatRoundTime(result.Timer.DueAt),
+                [s.Locale.InSeconds] = clamped,
+                [s.Locale.Repeat] = repeat,
+                [s.Locale.TimerCount] = s.State.Timers.Count,
             };
 
-            // Названо словом, а не выведено из числа таймеров: перезапись существующего и заведение
-            // нового отличаются только этим полем, а спутать их — значит потерять чужое напоминание.
+            // Named with a word, not derived from the timer count: overwriting an existing timer and
+            // setting a new one differ only by this field, and confusing the two means losing
+            // someone else's reminder.
             if (result.Replaced)
-                effect["замена"] = true;
+                effect[s.Locale.Replaced] = true;
 
             if (clamped != seconds)
-                effect["срок_поправлен"] = $"запрошено {seconds}с, допустимо от {min}с до {max}с";
+                effect[s.Locale.DurationClamped] = s.Locale.T(
+                    $"запрошено {seconds}с, допустимо от {min}с до {max}с",
+                    $"asked {seconds}s, allowed from {min}s to {max}s");
 
             return ToolResult.Success(effect);
         }, ct);
@@ -164,9 +184,9 @@ public sealed partial class StationAiAgentSystem
 
             return ToolResult.Success(new Dictionary<string, object?>
             {
-                ["снят"] = removed.Name,
-                ["текст_был"] = removed.Message,
-                ["всего_таймеров"] = s.State.Timers.Count,
+                [s.Locale.Removed] = removed.Name,
+                [s.Locale.WasText] = removed.Message,
+                [s.Locale.TimerCount] = s.State.Timers.Count,
             });
         }, ct);
     }
@@ -184,37 +204,39 @@ public sealed partial class StationAiAgentSystem
 
             var rows = timers.Select(t => new Dictionary<string, object?>
             {
-                ["имя"] = t.Name,
-                ["текст"] = t.Message,
-                // Может быть отрицательным ровно на один тик — между сроком и ближайшим обходом
-                // таймеров, — и это честнее, чем показать ноль.
-                ["через_секунд"] = (int)(t.DueAt - now).TotalSeconds,
-                ["сработает"] = ObservationFormatter.FormatRoundTime(t.DueAt),
-                ["повтор_секунд"] = t.Every.HasValue ? (int)t.Every.Value.TotalSeconds : 0,
+                [s.Locale.Name] = t.Name,
+                [s.Locale.Text] = t.Message,
+                // Can be negative by exactly one tick — between the deadline and the nearest timer
+                // sweep — and that's more honest than showing zero.
+                [s.Locale.InSeconds] = (int)(t.DueAt - now).TotalSeconds,
+                [s.Locale.FiresAt] = ObservationFormatter.FormatRoundTime(t.DueAt),
+                [s.Locale.RepeatSeconds] = t.Every.HasValue ? (int)t.Every.Value.TotalSeconds : 0,
             }).ToList();
 
             return ToolResult.Success(new Dictionary<string, object?>
             {
-                ["таймеры"] = rows,
-                ["сейчас"] = ObservationFormatter.FormatRoundTime(now),
+                [s.Locale.Timers] = rows,
+                [s.Locale.Now] = ObservationFormatter.FormatRoundTime(now),
             });
         }, ct);
     }
 
-    // --------------------------------------------------------------------- тик
+    // --------------------------------------------------------------------- tick
 
     /// <summary>
-    /// Обойти таймеры всех сессий и отправить сработавшие в наблюдение.
+    /// Sweep every session's timers and send the ones that fired into observation.
     ///
-    /// Здесь, в тике, а не в петле агента: петля спит на реальном времени и просыпается по сигналу,
-    /// а сроки считаются по раундовым часам — то есть проверять их обязан тот, кто эти часы двигает.
-    /// Побочно это даёт правильное поведение на паузе: мир стоит, тика нет, раундовое время не
-    /// растёт, и таймеры не срабатывают на станции, где по устройству ничего не может произойти.
+    /// This lives here, in the tick, not in the agent loop: the loop sleeps on real time and wakes on
+    /// a signal, while deadlines are computed on the round clock — so whoever moves that clock is the
+    /// one obligated to check them. As a side effect this gives correct behaviour on pause: the world
+    /// is stopped, there's no tick, round time isn't advancing, and timers don't fire on a station
+    /// where, by design, nothing can happen.
     ///
-    /// Сработавшее уходит в ту же <see cref="ObservationQueue"/>, что и речь экипажа, — значит
-    /// будит петлю тем же <c>Arrived</c> и приезжает к модели тем же наблюдением, наравне с
-    /// остальным миром. Отдельного канала для собственных напоминаний у агента нет намеренно:
-    /// он и не должен уметь отличать свой будильник от оклика по рации иначе, чем по строке.
+    /// A fired timer goes into the same <see cref="ObservationQueue"/> as crew speech — meaning it
+    /// wakes the loop through the same <c>Arrived</c> and arrives at the model as the same kind of
+    /// observation, on equal footing with the rest of the world. The agent deliberately has no
+    /// separate channel for its own reminders: it isn't supposed to be able to tell its own timer
+    /// apart from a radio hail except by the text.
     /// </summary>
     private void FireDueTimers()
     {
@@ -234,7 +256,7 @@ public sealed partial class StationAiAgentSystem
         }
     }
 
-    // ------------------------------------------------------------------- мелочи
+    // ------------------------------------------------------------------- misc
 
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max];
@@ -247,7 +269,7 @@ public sealed partial class StationAiAgentSystem
         return args.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.True;
     }
 
-    /// <summary>Имена и сроки таймеров для строки SELF, или пусто, когда ни одного нет.</summary>
+    /// <summary>Timer names and deadlines for the SELF line, or empty when there are none.</summary>
     private static string TimersForSelf(AgentSession session)
     {
         var timers = session.State.Timers.All();

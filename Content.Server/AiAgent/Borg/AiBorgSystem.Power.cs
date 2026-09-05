@@ -7,19 +7,20 @@ using Content.Shared.PowerCell;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Заряд: робот обязан знать, сколько его осталось, ДО того как встанет.
+/// Charge: the robot must know how much is left BEFORE it powers down.
 ///
 /// <para>
-/// Появилось после живого прогона, где робот собрал семь клеток экранирования вокруг реактора,
-/// сел без заряда и сообщил об этом уже постфактум: «батарея села». В строке SELF до этого был
-/// только флаг «шасси активно / НЕ АКТИВНО», то есть заряд становился видимым ровно в тот момент,
-/// когда чинить положение уже нечем — модули отваливаются вместе с руками.
+/// This came out of a live run where the robot collected seven shielding cells around the
+/// reactor, powered down without charge, and reported it only after the fact: "battery died".
+/// Before that, the SELF line only had a "chassis active / NOT ACTIVE" flag, meaning the charge
+/// only became visible at the exact moment nothing could be done about it anymore — modules fall
+/// off along with the hands.
 /// </para>
 /// <para>
-/// Поэтому две вещи: процент в каждой строке SELF и отдельная строка на каждый потерянный
-/// процент. Второе — по прямому решению владельца: расход у борга неровный (ходьба, инструменты,
-/// простой), и «сколько осталось времени» надёжнее считать по скорости падения, чем по одному
-/// числу.
+/// Hence two things: a percentage in every SELF line, and a separate line for every percent
+/// lost. The second one is a deliberate decision by the owner: a borg's drain is uneven (walking,
+/// tools, idling), so "how much time is left" is more reliably estimated from the rate of drop
+/// than from a single number.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -28,21 +29,22 @@ public sealed partial class AiBorgSystem
     [Dependency] private SharedBatterySystem _battery = default!;
 
     /// <summary>
-    /// Через сколько процентов падения докладывать.
+    /// After how many percent of drop to report.
     /// </summary>
     /// <remarks>
-    /// ИЗВЕСТНЫЙ ДЕФЕКТ: ступень держится не всегда. Сравнение идёт с последним ДОЛОЖЕННЫМ
-    /// уровнем, а он обновляется и в ветке «докладывать не надо» — при зарядке и при быстром
-    /// разряде база сползает, и шаг схлопывается обратно в один процент. На боевом прогоне это
-    /// видно так: 99, 98, 97 … 80, потом честные 75, 70, 65, 60, а дальше снова по одному.
-    /// Чинится переходом на сетку (percent / ChargeStep), а не на разницу с предыдущим.
+    /// KNOWN DEFECT: the step doesn't always hold. The comparison is against the last REPORTED
+    /// level, but that level also gets updated on the "no need to report" branch — during charging
+    /// and during a fast discharge the baseline drifts, and the step collapses back to one percent.
+    /// On a live run this looks like: 99, 98, 97 … 80, then honest 75, 70, 65, 60, and then back to
+    /// one-by-one. Fixed by switching to a grid (percent / ChargeStep) instead of a diff against
+    /// the previous value.
     /// </remarks>
     private const int ChargeStep = 5;
 
-    /// <summary>Последний доложенный процент заряда, чтобы не повторяться.</summary>
+    /// <summary>Last reported charge percentage, so we don't repeat.</summary>
     private readonly Dictionary<EntityUid, int> _lastCharge = new();
 
-    /// <summary>Заряд в процентах, или <c>null</c>, если батареи нет вовсе.</summary>
+    /// <summary>Charge in percent, or <c>null</c> if there's no battery at all.</summary>
     public int? ChargePercent(EntityUid borg)
     {
         if (!_powerCell.TryGetBatteryFromSlot(borg, out var battery))
@@ -58,16 +60,17 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Доложить, если заряд просел ещё на процент.
+    /// Report if the charge has dropped by another percent.
     /// </summary>
     /// <remarks>
-    /// Только на СНИЖЕНИЕ: зарядка идёт быстро, и обратный отсчёт вверх залил бы очередь
-    /// наблюдений десятками строк, вытеснив из неё рацию.
+    /// Only on a DECREASE: charging is fast, and counting back up would flood the observation
+    /// queue with dozens of lines, pushing the radio out of it.
     ///
     /// <para>
-    /// Шаг — пять процентов. Начинали с одного, и на живом прогоне это оказалось шумом: за ход
-    /// набегало по десять строк «ЗАРЯД», которые в очереди конкурируют с рацией и чужой речью.
-    /// Пять процентов дают тот же ответ на вопрос «успею ли», занимая впятеро меньше места.
+    /// The step is five percent. Started with one, and on a live run that turned out to be noise:
+    /// per turn there'd be a pile-up of ten "CHARGE" lines competing in the queue with radio and
+    /// other people's speech. Five percent gives the same answer to "will I make it" while taking
+    /// up five times less space.
     /// </para>
     /// </remarks>
     private void WatchCharge(EntityUid borg)
@@ -81,10 +84,10 @@ public sealed partial class AiBorgSystem
             return;
         }
 
-        // Шаг доклада: молчим, пока не потеряли целую ступень.
+        // Report step: stay quiet until we've lost a whole step.
         if (percent > last - ChargeStep)
         {
-            // Зарядился — просто запоминаем новый уровень, молча.
+            // Charged up — just remember the new level, silently.
             if (percent > last)
                 _lastCharge[borg] = percent;
 
@@ -93,7 +96,7 @@ public sealed partial class AiBorgSystem
 
         _lastCharge[borg] = percent;
 
-        // Ниже двадцати процентов формулировка меняется: там уже не сводка, а срок.
+        // Below twenty percent the wording changes: it's no longer a summary, it's a deadline.
         var text = percent switch
         {
             <= 5 => $"ЗАРЯД {percent}% — вот-вот встанешь. Бросай дело и иди на зарядную станцию.",

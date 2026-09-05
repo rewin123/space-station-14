@@ -1,30 +1,33 @@
 <Project>
   <!--
-    Единственный файл сборки, который добавляет форк.
+    The one build file the fork adds.
 
-    Зачем он вообще есть. Режиму SCRIPT TOOL MODE нужен интерпретатор Lua, а взять зависимость
-    штатным путём нельзя: Content.Server.csproj — апстримовый файл, и правило форка запрещает
-    менять апстрим (единственное исключение — строка ai_data/ в корневом .gitignore).
+    Why it exists at all. SCRIPT TOOL MODE needs a Lua interpreter, and the dependency can't be
+    taken the standard way: Content.Server.csproj is an upstream file, and the fork's rule forbids
+    changing upstream (the one exception being the ai_data/ line in the root .gitignore).
 
-    Почему это работает и ничего не задевает. Корневого Directory.Build.props в дереве нет, а
-    MSBuild берёт ПЕРВЫЙ найденный вверх от каталога проекта (Microsoft.Common.props,
-    GetDirectoryNameOfFileAbove). Значит этот файл виден ровно Content.Server: RobustToolbox
-    останавливается на своём RobustToolbox/Directory.Build.props, прочие Content.* лежат выше и
-    его не видят, а перекрывать нам нечего — перекрывать было бы что, существуй корневой.
+    Why this works and touches nothing else. There is no root Directory.Build.props in the tree,
+    and MSBuild takes the FIRST one found walking up from the project directory
+    (Microsoft.Common.props, GetDirectoryNameOfFileAbove). That means this file is visible only to
+    Content.Server: RobustToolbox stops at its own RobustToolbox/Directory.Build.props, the other
+    Content.* projects sit above it and don't see it, and there's nothing for us to override —
+    there would be something to override only if a root one existed.
 
-    Почему две строки, а не одна. В дереве включён Central Package Management
-    (RobustToolbox/MSBuild/Robust.Properties.targets: ManagePackageVersionsCentrally=true), поэтому
-    PackageReference обязан идти без Version, а версия — приехать из PackageVersion. Корневой
-    Directory.Packages.props апстримовый, трогать нельзя; items из обоих файлов складываются, так
-    что свой PackageVersion объявляем здесь.
+    Why two lines, not one. Central Package Management is enabled in this tree
+    (RobustToolbox/MSBuild/Robust.Properties.targets: ManagePackageVersionsCentrally=true), so a
+    PackageReference must go without a Version, with the version coming from PackageVersion. The
+    root Directory.Packages.props is upstream and must not be touched; items from both files are
+    merged, so we declare our own PackageVersion here.
 
-    ЧЕГО ЗДЕСЬ ДЕЛАТЬ НЕЛЬЗЯ: заводить Content.Server/Directory.Packages.props. По тому же правилу
-    «первый вверх по дереву» он перекрыл бы корневой целиком и снёс версии всех остальных пакетов.
+    WHAT MUST NOT BE DONE HERE: creating Content.Server/Directory.Packages.props. By the same
+    "first one walking up the tree" rule, it would override the root one entirely and wipe out the
+    versions of every other package.
 
-    Почему MoonSharp безопасен именно в Content.Server: рантайм-песочница на сервере выключена
-    (ServerOptions.Sandboxing = false), а AssemblyTypeChecker натравливают только на Content.Client
-    и Content.Shared (Content.IntegrationTests/Tests/Utility/SandboxTest.cs). В Content.Shared этот
-    пакет тянуть нельзя ни при каких обстоятельствах — он живёт на рефлексии.
+    Why MoonSharp is safe specifically in Content.Server: the runtime sandbox is disabled on the
+    server (ServerOptions.Sandboxing = false), and AssemblyTypeChecker is only run against
+    Content.Client and Content.Shared (Content.IntegrationTests/Tests/Utility/SandboxTest.cs). This
+    package must never be pulled into Content.Shared under any circumstances — it lives on
+    reflection.
   -->
   <ItemGroup>
     <PackageVersion Include="MoonSharp" Version="2.0.0" />

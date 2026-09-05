@@ -5,28 +5,29 @@ using System.Text;
 namespace Content.Server.AiAgent.Vfs;
 
 /// <summary>
-/// Разбор и нормализация пути. Единственное место, где строка от модели становится путём.
+/// Parsing and normalizing a path. The one place where a string from the model becomes a path.
 ///
 /// <para>
-/// У заметок о людях обход каталогов невыразим по построению: <c>PlayerNoteStore</c> собирает имя
-/// файла из белого списка символов, и что бы ни прислала модель, точки и слэши до диска не
-/// доезжают. В файловой системе так не выйдет — путь здесь и есть аргумент, — поэтому проверка
-/// стоит отдельным типом, а не рассыпана по командам: пропущенная в одной команде проверка
-/// выглядит точно так же, как работающая.
+/// For notes about people, directory traversal is inexpressible by construction: <c>PlayerNoteStore</c>
+/// assembles the file name from a character whitelist, so no matter what the model sends, dots and
+/// slashes never reach the disk. That trick doesn't work for the filesystem — here the path IS the
+/// argument — so the check lives as a separate type instead of being scattered across commands: a
+/// check missed in one command looks exactly like a working one.
 /// </para>
 /// <para>
-/// Путь здесь обычный, как в любой файловой системе: буква в букву, с расширением, с учётом
-/// регистра. Ни приведения к нижнему регистру, ни замены пробелов — модель списывает имена из
-/// <c>ls</c>, а не сочиняет их, и «умная» нормализация только разошлась бы с тем, что лежит на
-/// диске. Единственная поблажка живёт не здесь, а в поиске: имя без <c>.md</c> ищется и с ним.
+/// A path here is ordinary, as in any filesystem: letter for letter, with the extension, case
+/// sensitive. No lowercasing, no space substitution — the model copies names from <c>ls</c> rather
+/// than making them up, and "smart" normalization would only diverge from what's actually on disk.
+/// The one concession doesn't live here but in search: a name without <c>.md</c> is searched for
+/// with it too.
 /// </para>
 /// </summary>
 public sealed class VfsPath
 {
-    /// <summary>Имя файла с метаданными папки: описание в строке «когда:», тело — обзор раздела.</summary>
+    /// <summary>File name carrying a folder's metadata: the description in the "when:" line, the body a section overview.</summary>
     public const string IndexFile = "_index";
 
-    /// <summary>Расширение на диске. В путях необязательно: «насосы» и «насосы.md» — одно и то же.</summary>
+    /// <summary>Extension on disk. Optional in paths: "pumps" and "pumps.md" are the same thing.</summary>
     public const string Extension = ".md";
 
     private readonly string[] _segments;
@@ -41,24 +42,24 @@ public sealed class VfsPath
     public int Count => _segments.Length;
     public bool IsRoot => _segments.Length == 0;
 
-    /// <summary>Первый сегмент — точка монтирования, или пустая строка для корня.</summary>
+    /// <summary>The first segment is the mount point, or an empty string for the root.</summary>
     public string Mount => _segments.Length == 0 ? string.Empty : _segments[0];
 
     public IReadOnlyList<string> Segments => _segments;
 
-    /// <summary>Последний сегмент — имя файла или папки.</summary>
+    /// <summary>The last segment — the file or folder name.</summary>
     public string Name => _segments.Length == 0 ? "/" : _segments[^1];
 
-    /// <summary>Путь внутри монтирования, без первого сегмента.</summary>
+    /// <summary>The path within the mount, without the first segment.</summary>
     public string Relative => string.Join('/', _segments.Skip(1));
 
     public override string ToString() => "/" + string.Join('/', _segments);
 
     /// <summary>
-    /// Разобрать путь. <paramref name="error"/> объясняет отказ словами, которые видит модель.
+    /// Parse a path. <paramref name="error"/> explains a rejection in words the model sees.
     ///
-    /// Относительные пути не поддерживаются намеренно: текущего каталога у агента нет, а значит
-    /// «насосы» без ведущего слэша — это не путь, а надежда. Отказать понятнее, чем угадать.
+    /// Relative paths are deliberately unsupported: the agent has no current directory, so "pumps"
+    /// without a leading slash isn't a path — it's a hope. Rejecting it is clearer than guessing.
     /// </summary>
     public static bool TryParse(string? raw, out VfsPath path, out string error)
     {
@@ -88,8 +89,9 @@ public sealed class VfsPath
             if (segment.Length == 0)
                 continue;
 
-            // Точка и две точки отсекаются здесь и только здесь. Ниже по течению путь уже собран
-            // из проверенных сегментов, и склеить из них выход за корень нечем.
+            // "." and ".." are cut off here and only here. Downstream, the path is already
+            // assembled from validated segments, and there's nothing left to glue into an escape
+            // above the root.
             if (segment == "." || segment == "..")
             {
                 error = "«.» и «..» в путях не бывает: путь всегда полный, от корня";
@@ -116,19 +118,20 @@ public sealed class VfsPath
     }
 
     /// <summary>
-    /// Имя с расширением: <c>«насосы»</c> → <c>«насосы.md»</c>, уже готовое остаётся как есть.
+    /// Name with the extension: <c>"pumps"</c> → <c>"pumps.md"</c>; one that's already complete is left as is.
     ///
     /// <para>
-    /// Единственная поблажка во всей адресации. Расширение — деталь хранения, а не часть имени
-    /// статьи, и заставлять модель дописывать его к каждому пути значило бы ловить промахи там,
-    /// где ошибки нет. Обратной операции (снимать расширение) нет намеренно: имя файла на диске и
-    /// имя в пути должны совпадать, иначе <c>ls</c> показывает одно, а работает другое.
+    /// The one concession in all of addressing. The extension is a storage detail, not part of an
+    /// article's name, and forcing the model to append it to every path would mean catching
+    /// mistakes where there aren't any. The reverse operation (stripping the extension) doesn't
+    /// exist on purpose: the file name on disk and the name in the path must match, or else
+    /// <c>ls</c> shows one thing while a different one works.
     /// </para>
     /// </summary>
     public static string WithExtension(string name) =>
         name.EndsWith(Extension, System.StringComparison.Ordinal) ? name : name + Extension;
 
-    /// <summary>Путь без первого сегмента — то, что видит само монтирование.</summary>
+    /// <summary>Path without the first segment — what the mount itself sees.</summary>
     public VfsPath WithoutMount() =>
         _segments.Length <= 1 ? Root : new VfsPath(_segments[1..]);
 

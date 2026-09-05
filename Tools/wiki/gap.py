@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Где справочник действительно потерял вику, а где нет.
+"""Where the reference library actually lost material from the wiki, and where it didn't.
 
-Мерить «полноту» пересказа нечем, но одна вещь считается точно: числа. Формула, порог, ёмкость,
-таймер — это то, ради чего агента вообще спрашивают, и число либо доехало до библиотеки, либо нет.
-Скрипт берёт все числа из источников категории и смотрит, встречается ли каждое в статьях с её
-префиксом.
+There's no way to measure the "completeness" of a retelling, but one thing can be counted
+exactly: numbers. A formula, a threshold, a capacity, a timer — this is exactly what the
+agent gets asked about, and a number either made it into the library or it didn't. The script
+takes every number out of a category's sources and checks whether each one shows up in
+articles with that category's prefix.
 
-Мера грубая: число может доехать в другой форме («восемьсот раз» вместо 800), а совпасть может
-случайно. Поэтому это не оценка, а карта — куда посылать агента в первую очередь.
+The measure is crude: a number could make it across in a different form ("eight hundred
+times" instead of 800), and a match could be coincidental. So this isn't a score, it's a map
+— of where to send the agent first.
 
-    python3 Tools/wiki/gap.py [категория]
+    python3 Tools/wiki/gap.py [category]
 """
 
 import re
@@ -19,11 +21,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import manifest  # noqa: E402
 
-# Число вместе с тем, что за ним следует: «200 L/s», «50 kJ», «30 seconds». Голые числа без
-# единицы отбрасываются — это чаще всего нумерация пунктов, а не факт.
+# A number together with whatever follows it: "200 L/s", "50 kJ", "30 seconds". Bare numbers
+# with no unit are dropped — those are usually list numbering, not a fact.
 FACT = re.compile(r"\b(\d[\d.,]*)\s*(%|[A-Za-zА-Яа-я°/]{1,12})")
 
-# Единицы, за которыми стоит настоящий факт. Всё прочее («2 of them», «3 way») — шум.
+# Units that indicate a real fact stands behind the number. Everything else ("2 of them",
+# "3 way") is noise.
 UNITS = {
     "kpa", "mpa", "pa", "atm", "kw", "w", "mw", "kj", "j", "mj", "k", "c", "°c", "l", "l/s",
     "u", "units", "unit", "seconds", "second", "sec", "s", "minutes", "minute", "m", "tiles",

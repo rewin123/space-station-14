@@ -6,7 +6,7 @@ using MoonSharp.Interpreter;
 
 namespace Content.Server.AiAgent.Core.Scripting;
 
-/// <summary>Чем кончился запуск скрипта. Коды те же, что уедут модели в <see cref="Tools.ToolError"/>.</summary>
+/// <summary>How a script run ended. The same codes that go to the model in <see cref="Tools.ToolError"/>.</summary>
 public static class LuaError
 {
     public const string Syntax = Tools.ToolError.ScriptSyntax;
@@ -14,52 +14,53 @@ public static class LuaError
     public const string Budget = Tools.ToolError.ScriptBudget;
 }
 
-/// <summary>Потолки одного запуска. Не регуляторы темпа, а предохранители от зациклившегося скрипта.</summary>
+/// <summary>Ceilings for a single run. Not pacing regulators, but fuses against a runaway script.</summary>
 public sealed class LuaLimits
 {
-    /// <summary>Инструкций Lua всего. Пять миллионов — это секунды счёта, а не цикл «пока не надоест».</summary>
+    /// <summary>Total Lua instructions. Five million is seconds of computing, not a "until it gets bored" loop.</summary>
     public long MaxSteps { get; init; } = 5_000_000;
 
     /// <summary>
-    /// Инструкций между проверками отмены. Чем меньше — тем отзывчивее <c>bp_stop</c> и тем дороже
-    /// счёт: замер на этой машине дал 533 среза по 20000 инструкций за 300 мс, то есть проверка
-    /// обходится в доли миллисекунды.
+    /// Instructions between cancellation checks. The smaller this is, the more responsive <c>bp_stop</c>
+    /// is and the more expensive the accounting: a measurement on this machine gave 533 slices of
+    /// 20000 instructions in 300 ms, meaning the check costs a fraction of a millisecond.
     /// </summary>
     public int SliceInstructions { get; init; } = 20_000;
 
     /// <summary>
-    /// Потолок по реальному времени, а не по раундовому — в отличие от таймеров агента.
+    /// A wall-clock ceiling, not a round-time one — unlike the agent's timers.
     ///
-    /// Таймеры живут в раундовом времени, чтобы не будить агента в замороженном мире. Здесь задача
-    /// обратная: не дать потоку крутиться вечно. На паузе раундовые часы стоят, и раундовый потолок
-    /// не наступил бы никогда — как раз в том случае, ради которого потолок и заведён.
+    /// Timers live in round time so they don't wake the agent in a frozen world. Here the task is the
+    /// opposite: don't let the thread spin forever. When paused, the round clock stops, and a round-time
+    /// ceiling would never be reached — exactly the case this ceiling exists for.
     /// </summary>
     public TimeSpan MaxWall { get; init; } = TimeSpan.FromMinutes(5);
 }
 
-/// <summary>Итог запуска: либо значение, которое вернул чанк, либо код ошибки с номером строки.</summary>
+/// <summary>The run's result: either the value the chunk returned, or an error code with a line number.</summary>
 public sealed record LuaOutcome(bool Ok, string? Error, string? Detail, DynValue Return, long Steps);
 
 /// <summary>
-/// Клетка, в которой исполняется скрипт агента.
+/// The sandbox in which the agent's script executes.
 ///
 /// <para>
-/// Набор модулей собран руками, потому что готовый <c>Preset_HardSandbox</c> не подошёл ни одной
-/// стороной: он выкидывает не только опасное, но и <c>pcall</c> с метатаблицами. Без <c>pcall</c>
-/// у скрипта нет способа пережить отказ инструмента, а вся конвенция режима на нём и держится.
-/// Чего в клетке нет и не будет: <c>io</c>, <c>os</c>, <c>require</c>, <c>load</c>, <c>dofile</c>,
-/// <c>debug</c> — то есть файлов, процессов и загрузки постороннего кода. Это граница по
-/// построению, а не список запретов: таких понятий в этом интерпретаторе просто не существует.
+/// The module set is assembled by hand, because the ready-made <c>Preset_HardSandbox</c> didn't fit
+/// on any front: it strips out not only dangerous things but also <c>pcall</c> with metatables.
+/// Without <c>pcall</c>, a script has no way to survive a tool refusal, and the whole convention of
+/// the mode rests on it. What the sandbox doesn't have and never will: <c>io</c>, <c>os</c>,
+/// <c>require</c>, <c>load</c>, <c>dofile</c>, <c>debug</c> — that is, files, processes, and loading
+/// of outside code. This is a boundary by construction, not a list of prohibitions: these concepts
+/// simply don't exist in this interpreter.
 /// </para>
 /// <para>
-/// Чанк исполняется корутиной с <c>AutoYieldCounter</c>, а не прямым вызовом. Это единственный
-/// способ отобрать управление у <c>while true do end</c>: между срезами проверяются отмена и
-/// потолки. Без него <c>bp_stop</c> был бы обещанием, которое нечем сдержать, — ровно то, из-за
-/// чего для этой задачи не годится штатный C#-скриптинг движка.
+/// The chunk executes as a coroutine with <c>AutoYieldCounter</c>, not a direct call. This is the
+/// only way to wrest control back from a <c>while true do end</c>: cancellation and ceilings are
+/// checked between slices. Without it, <c>bp_stop</c> would be a promise with nothing to back it up
+/// — exactly why the engine's stock C# scripting doesn't fit this job.
 /// </para>
 /// <para>
-/// Один хост — один скрипт — один поток. MoonSharp не потокобезопасен, и общего состояния между
-/// процессами здесь нет намеренно: два скрипта не могут испортить друг другу таблицу глобалов.
+/// One host — one script — one thread. MoonSharp isn't thread-safe, and there is deliberately no
+/// shared state between processes here: two scripts can't corrupt each other's globals table.
 /// </para>
 /// </summary>
 public sealed class LuaHost
@@ -75,19 +76,19 @@ public sealed class LuaHost
         _limits = limits ?? new LuaLimits();
         _script = new Script(Caged);
 
-        // print уходит в буфер процесса, а не в консоль сервера: это вывод скрипта, его читает
-        // модель через bp_get_output.
+        // print goes into the process's buffer, not the server console: this is the script's output,
+        // which the model reads through bp_get_output.
         if (print != null)
             _script.Options.DebugPrint = print;
     }
 
-    /// <summary>Функция, видимая скрипту под именем <paramref name="name"/>.</summary>
+    /// <summary>A function visible to the script under the name <paramref name="name"/>.</summary>
     public void Bind(string name, Func<CallbackArguments, DynValue> body)
     {
         _script.Globals[name] = DynValue.NewCallback((_, args) => body(args), name);
     }
 
-    /// <summary>Таблица, видимая скрипту под именем <paramref name="name"/> — для <c>raw</c>.</summary>
+    /// <summary>A table visible to the script under the name <paramref name="name"/> — for <c>raw</c>.</summary>
     public Table NewTable(string name)
     {
         var table = new Table(_script);
@@ -95,7 +96,7 @@ public sealed class LuaHost
         return table;
     }
 
-    /// <summary>Таблица из одной пары, принадлежащая этому скрипту — для подстановки голого аргумента.</summary>
+    /// <summary>A single-pair table belonging to this script — for substituting a bare argument.</summary>
     public DynValue NewValue(string key, DynValue value)
     {
         var table = new Table(_script);
@@ -103,13 +104,13 @@ public sealed class LuaHost
         return DynValue.NewTable(table);
     }
 
-    /// <summary>Функция внутри таблицы — так живут инструменты, чьи имена заняты словами Lua.</summary>
+    /// <summary>A function inside a table — how tools whose names are taken by Lua keywords live.</summary>
     public void BindInto(Table table, string name, Func<CallbackArguments, DynValue> body)
     {
         table[name] = DynValue.NewCallback((_, args) => body(args), name);
     }
 
-    /// <summary>Все имена, известные скрипту. Нужны линтеру опечаток до запуска.</summary>
+    /// <summary>All names known to the script. Needed by the typo linter before a run.</summary>
     public IEnumerable<string> GlobalNames()
     {
         foreach (var pair in _script.Globals.Pairs)
@@ -120,22 +121,22 @@ public sealed class LuaHost
     }
 
     /// <summary>
-    /// Результат инструмента таблицей Lua. Живёт здесь, а не у вызывающего, потому что таблица
-    /// обязана принадлежать этому же скрипту: чужая уронила бы интерпретатор при первом обращении.
+    /// A tool's result as a Lua table. Lives here rather than with the caller because the table must
+    /// belong to this same script: a foreign one would crash the interpreter on the first access.
     /// </summary>
     public DynValue ToLua(System.Text.Json.JsonElement element) => LuaBridge.FromJson(_script, element);
 
-    /// <summary>Собственный код агента (прелюдия) — исполняется до скрипта и объявляет свои функции.</summary>
+    /// <summary>The agent's own code (prelude) — executes before the script and declares its own functions.</summary>
     public void LoadPrelude(string source)
     {
-        // Прелюдия наша, не модели: синтаксическая ошибка здесь — дефект сборки, а не поведения,
-        // и падать она обязана на тесте, а не тихо оставлять агента без go().
+        // The prelude is ours, not the model's: a syntax error here is a build defect, not a behavior
+        // one, and it's obligated to fail on the test, not silently leave the agent without go().
         _script.DoString(source, null, "прелюдия");
     }
 
     /// <summary>
-    /// Исполнить скрипт модели. Отмена (<c>bp_stop</c>, смерть сессии) выходит наружу
-    /// <see cref="OperationCanceledException"/> — проверено, что она проходит корутину насквозь.
+    /// Execute the model's script. Cancellation (<c>bp_stop</c>, session death) surfaces as
+    /// <see cref="OperationCanceledException"/> — verified to propagate through the coroutine cleanly.
     /// </summary>
     public LuaOutcome Run(string code, CancellationToken ct)
     {

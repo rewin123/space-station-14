@@ -17,45 +17,48 @@ using Content.Shared.Silicons.StationAi;
 namespace Content.Server.AiAgent.Vision;
 
 /// <summary>
-/// Обзор станционного ИИ, посчитанный ПО КУСКАМ — столько за кадр, сколько разрешает бюджет.
+/// The station AI's view, computed IN SLICES — as much per frame as the budget allows.
 ///
 /// <para>
-/// <b>Зачем понадобилась своя копия апстримового <c>StationAiVisionSystem.GetView</c>.</b>
-/// Тот считает всё одним неделимым вызовом. Пока каждый <c>look</c> стоил круга через модель,
-/// это было терпимо: один вызов на агента раз в четырнадцать секунд, и в нашем же комментарии
-/// рядом было записано, что вызовы «ограничены тиком агента, а не могут спамиться». Режим Lua
-/// это допущение снял — скрипт зовёт <c>look()</c> в цикле, — и в живом раунде 20.08.2026 главный
-/// поток получил 280 перерасходов бюджета: в среднем 28 мс на вызов при кадре в 33 мс, худший 85.
+/// <b>Why a private copy of upstream's <c>StationAiVisionSystem.GetView</c> was needed.</b>
+/// That one computes everything in one indivisible call. As long as each <c>look</c> cost a round
+/// trip through the model, this was tolerable: one call per agent roughly every fourteen seconds,
+/// and our own comment right next to it noted that calls were "bounded by the agent's tick and
+/// can't be spammed". Lua mode removed that assumption — a script calls <c>look()</c> in a loop —
+/// and in a live round on 2026-08-20 the main thread took 280 budget overruns: an average of 28 ms
+/// per call against a 33 ms frame, worst case 85.
 /// </para>
 /// <para>
-/// Профиль по фазам не оставил выбора, куда чинить: <c>view=18.4 gather=3.4 rows=2.4</c> — три
-/// четверти времени сидят в теневом касте, а не в построении строк. Ограничивать «не больше
-/// одного обзора за кадр» бессмысленно, когда один обзор и есть кадр целиком; резать надо
-/// ВНУТРИ него. Ровно для этого в <see cref="IWorldJob"/> и заведён <c>Step(JobBudget)</c>,
-/// у которого до сих пор не было ни одной реализации кроме атомарной.
+/// A per-phase profile left no choice about where to fix it: <c>view=18.4 gather=3.4 rows=2.4</c> —
+/// three quarters of the time sits in shadowcasting, not row construction. Limiting to "no more
+/// than one view per frame" is pointless when a single view IS the whole frame; the cut has to be
+/// made INSIDE it. That is exactly why <see cref="IWorldJob"/> has a <c>Step(JobBudget)</c>, which
+/// until now had no implementation other than the atomic one.
 /// </para>
 /// <para>
-/// <b>Почему копия, а не кэш.</b> Кэш видимости пришлось бы инвалидировать по каждой открытой
-/// двери и каждому сломанному окну, а промах такой инвалидации — это агент, который не видит
-/// вошедшего человека и ведёт себя правдоподобно. Копия алгоритма стоит дороже в написании и
-/// ничего не прячет: тот же вход даёт тот же выход, просто растянутый на несколько кадров.
+/// <b>Why a copy, not a cache.</b> A visibility cache would have to be invalidated on every opened
+/// door and every broken window, and a miss in that invalidation means an agent that doesn't see
+/// someone who just walked in and behaves plausibly anyway. A copy of the algorithm is more
+/// expensive to write and hides nothing: the same input gives the same output, just spread across
+/// several frames.
 /// </para>
 /// <para>
-/// <b>Алгоритм перенесён дословно</b> с <c>Content.Shared/Silicons/StationAi/StationAiVisionSystem.cs</c>
-/// (он, в свою очередь, портирован из OpenDream <c>ViewAlgorithm.cs</c>). Менять его здесь нельзя:
-/// расхождение с апстримом означало бы, что ИИ видит не то же, что видел бы игрок на этой роли, а
-/// это прямое нарушение паритета. Эквивалентность стережёт тест, который гоняет обе реализации
-/// по одной станции в одном кадре и требует совпадения множеств тайл в тайл.
+/// <b>The algorithm was ported verbatim</b> from <c>Content.Shared/Silicons/StationAi/StationAiVisionSystem.cs</c>
+/// (which was itself ported from OpenDream's <c>ViewAlgorithm.cs</c>). It must not be changed here:
+/// diverging from upstream would mean the AI sees something different from what a player would see
+/// in this role, which is a direct parity violation. Equivalence is guarded by a test that runs
+/// both implementations against the same station in the same frame and requires the resulting tile
+/// sets to match tile for tile.
 /// </para>
 /// </summary>
 public sealed class SlicedView
 {
-    /// <summary>Сколько тайлов проверяем на непрозрачность между проверками бюджета.</summary>
+    /// <summary>How many tiles we check for opacity between budget checks.</summary>
     /// <remarks>
-    /// Бюджет спрашивается не на каждом тайле: <c>Stopwatch.GetTimestamp()</c> сам по себе не
-    /// бесплатен, а один <c>IsOccluded</c> — это поход в broadphase, то есть десятки микросекунд.
-    /// Тридцать две штуки между проверками дают зерно около миллисекунды: мельче незачем, крупнее
-    /// начнёт перебирать бюджет.
+    /// The budget isn't checked on every tile: <c>Stopwatch.GetTimestamp()</c> isn't free by
+    /// itself, and a single <c>IsOccluded</c> is a trip into broadphase, i.e. tens of microseconds.
+    /// Thirty-two per check gives a grain of about a millisecond: finer is pointless, coarser starts
+    /// overrunning the budget.
     /// </remarks>
     private const int OcclusionGrain = 32;
 
@@ -83,30 +86,30 @@ public sealed class SlicedView
     private readonly EntityQuery<OccluderComponent> _occluderQuery;
     private readonly EntityQuery<TransformComponent> _xformQuery;
 
-    // --------------------------------------------------------------- вход
+    // --------------------------------------------------------------- input
 
     private Entity<BroadphaseComponent, MapGridComponent> _grid;
     private Box2 _localAabb;
     private Box2 _expandedAabb;
 
-    // --------------------------------------------- состояние между срезами
+    // --------------------------------------------- state between slices
 
     private Phase _phase = Phase.Seeds;
 
     private readonly List<Entity<StationAiVisionComponent>> _data = new();
     private readonly HashSet<Entity<StationAiVisionComponent>> _seeds = new();
 
-    /// <summary>Тайлы, которые вообще попадают в кадр обзора. Только они уезжают в результат.</summary>
+    /// <summary>Tiles that actually fall within the view frame. Only these end up in the result.</summary>
     private readonly HashSet<Vector2i> _viewportTiles = new();
 
-    /// <summary>Непрозрачные тайлы. Считаются порциями — это самая дорогая фаза после каста.</summary>
+    /// <summary>Opaque tiles. Computed in chunks — this is the most expensive phase after casting.</summary>
     private readonly HashSet<Vector2i> _opaque = new();
 
-    /// <summary>Список тайлов на проверку непрозрачности и позиция в нём.</summary>
+    /// <summary>List of tiles pending an opacity check, and the position within it.</summary>
     private readonly List<Vector2i> _pending = new();
     private int _pendingAt;
 
-    // ------------------------------------------------- состояние одного каста
+    // ------------------------------------------------- state of one cast
 
     private int _seedAt;
     private CastStage _stage = CastStage.Prepare;
@@ -119,21 +122,21 @@ public sealed class SlicedView
     private readonly HashSet<Vector2i> _seedTiles = new();
     private readonly HashSet<Vector2i> _boundary = new();
 
-    /// <summary>Переиспользуемый буфер под окклюдеры одного тайла. См. <see cref="IsOccluded"/>.</summary>
+    /// <summary>Reusable buffer for one tile's occluders. See <see cref="IsOccluded"/>.</summary>
     private readonly HashSet<Entity<OccluderComponent>> _occluders = new();
 
-    /// <summary>Куда складывается результат. Тот же контракт, что у апстрима.</summary>
+    /// <summary>Where the result is stored. The same contract as upstream's.</summary>
     public HashSet<Vector2i> VisibleTiles { get; } = new();
 
-    /// <summary>Сколько срезов заняло вычисление. Для журнала и для теста «резка вообще работает».</summary>
+    /// <summary>How many slices the computation took. For the log and for the "slicing actually works" test.</summary>
     public int Slices { get; private set; }
 
     /// <summary>
-    /// Сколько времени обзор реально ЗАНЯЛ главный поток, без пауз между кадрами.
+    /// How much time the view computation actually SPENT on the main thread, excluding pauses between frames.
     ///
-    /// Настенные часы здесь не годятся принципиально: нарезанный обзор живёт секунду, из которой
-    /// в главном потоке проведено миллисекунд двадцать. Мерить его секундомером снаружи — значит
-    /// объявить починку регрессией, что при первом же прогоне и произошло.
+    /// A wall clock is fundamentally unfit here: a sliced view lives for a second, of which about
+    /// twenty milliseconds is spent on the main thread. Measuring it with an external stopwatch
+    /// means declaring the fix a regression, which is exactly what happened on the very first run.
     /// </summary>
     public double BusyMs { get; private set; }
 
@@ -154,7 +157,7 @@ public sealed class SlicedView
     }
 
     /// <summary>
-    /// Задать вход и начать сначала. Зовётся один раз перед первым <see cref="Step"/>.
+    /// Set the input and start over. Called once before the first <see cref="Step"/>.
     /// </summary>
     public void Begin(Entity<BroadphaseComponent, MapGridComponent> grid, Box2Rotated worldBounds, float expansionSize)
     {
@@ -178,7 +181,7 @@ public sealed class SlicedView
     }
 
     /// <summary>
-    /// Отработать один срез. <c>true</c> — обзор посчитан целиком, <see cref="VisibleTiles"/> готов.
+    /// Process one slice. <c>true</c> means the view is fully computed, <see cref="VisibleTiles"/> is ready.
     /// </summary>
     public bool Step(JobBudget budget)
     {
@@ -208,11 +211,12 @@ public sealed class SlicedView
         }
     }
 
-    // ------------------------------------------------------------ фаза семян
+    // ------------------------------------------------------------ seed phase
 
     /// <summary>
-    /// Собрать камеры и разложить тайлы кадра. Один срез: обход broadphase здесь ровно один, а
-    /// перечисление тайлов без проверки непрозрачности дёшево — платим мы за <c>IsOccluded</c>.
+    /// Gather cameras and lay out the frame's tiles. One slice: there's exactly one broadphase
+    /// traversal here, and enumerating tiles without checking opacity is cheap — we pay for
+    /// <c>IsOccluded</c>.
     /// </summary>
     private bool StepSeeds()
     {
@@ -239,10 +243,10 @@ public sealed class SlicedView
             return true;
         }
 
-        // Порядок тот же, что у апстрима: сначала тайлы кадра, потом расширенная рамка без тех,
-        // что уже в кадре. Разница между списками несёт смысл — в результат уезжают только тайлы
-        // кадра, а непрозрачность нужна и снаружи него, иначе стена за краем экрана не отбросит
-        // тень внутрь.
+        // The same order as upstream: first the frame's tiles, then the expanded bounding box minus
+        // whatever's already in the frame. The distinction between the two lists carries meaning —
+        // only the frame's tiles end up in the result, but opacity is also needed outside it, or
+        // else a wall past the screen edge wouldn't cast a shadow inward.
         var viewport = _maps.GetLocalTilesEnumerator(_grid.Owner, _grid.Comp2, _localAabb, ignoreEmpty: false);
         while (viewport.MoveNext(out var tileRef))
         {
@@ -263,7 +267,7 @@ public sealed class SlicedView
         return false;
     }
 
-    // --------------------------------------------------- фаза непрозрачности
+    // --------------------------------------------------- opacity phase
 
     private bool StepOcclusion(JobBudget budget)
     {
@@ -286,11 +290,11 @@ public sealed class SlicedView
     }
 
     /// <summary>
-    /// Перенос апстримового <c>IsOccluded</c> слово в слово.
+    /// A word-for-word port of upstream's <c>IsOccluded</c>.
     ///
-    /// Набор переиспользуется, а не создаётся на каждый тайл, — ровно как в апстриме. В первой
-    /// версии он создавался внутри, и это стоило тысяч аллокаций на один обзор: тест удержания
-    /// тика поймал это немедленно, худший вызов перевалил за 150 мс.
+    /// The set is reused rather than created per tile, exactly as upstream does. In the first
+    /// version it was created inside, and that cost thousands of allocations per view: the
+    /// tick-budget test caught it immediately, with the worst call going past 150 ms.
     /// </summary>
     private bool IsOccluded(Vector2i tile)
     {
@@ -310,7 +314,7 @@ public sealed class SlicedView
         return false;
     }
 
-    // ---------------------------------------------------------- фаза каста
+    // ---------------------------------------------------------- cast phase
 
     private bool StepCast(JobBudget budget)
     {
@@ -331,10 +335,10 @@ public sealed class SlicedView
     }
 
     /// <summary>
-    /// Один шаг каста от одной камеры. <c>true</c> — эта камера досчитана.
+    /// One casting step from one camera. <c>true</c> means this camera is fully computed.
     ///
-    /// Внутри камеры резка идёт по глубине <c>d</c>: оба теневых цикла — это O(глубина × тайлы),
-    /// и на большой дальности один цикл сам по себе перебрал бы кадр.
+    /// Within a camera, slicing proceeds by depth <c>d</c>: both shadow loops are O(depth × tiles),
+    /// and at long range a single loop by itself would overrun the frame.
     /// </summary>
     private bool StepOneSeed(JobBudget budget)
     {
@@ -344,8 +348,8 @@ public sealed class SlicedView
         {
             var seedXform = _xformQuery.GetComponent(seed.Owner);
 
-            // Быстрый путь апстрима: камера без окклюзии видит круг целиком. Резать тут нечего,
-            // и ради одного этого случая усложнять состояние незачем.
+            // Upstream's fast path: a camera without occlusion sees the whole circle. There's
+            // nothing to slice here, and complicating the state for just this one case is pointless.
             if (!seed.Comp.Occluded)
             {
                 var squircles = _maps.GetLocalTilesIntersecting(_grid.Owner, _grid.Comp2,
@@ -436,8 +440,9 @@ public sealed class SlicedView
             return false;
         }
 
-        // Хвост апстрима: глаз видит сам себя, углы стен показываются, в результат уезжает только
-        // то, что попало в кадр. Всё вместе — линейный проход по тайлам камеры, резать незачем.
+        // Upstream's tail: the eye sees itself, wall corners are revealed, and only what fell
+        // within the frame ends up in the result. All together this is a linear pass over the
+        // camera's tiles, no need to slice it.
         _vis1[_eyePos] = 1;
 
         foreach (var tile in _seedTiles)
@@ -473,7 +478,7 @@ public sealed class SlicedView
         return true;
     }
 
-    // ------------------------------------------------------------ помощники
+    // ------------------------------------------------------------ helpers
 
     private static int MaxDelta(Vector2i tile, Vector2i center)
     {

@@ -3,12 +3,13 @@ using System.Collections.Generic;
 namespace Content.Server.AiAgent.Vfs.Mounts;
 
 /// <summary>
-/// Монтирование поверх <see cref="DocTree"/> — дерева статей на диске.
+/// A mount on top of <see cref="DocTree"/> — a tree of articles on disk.
 ///
 /// <para>
-/// Одним и тем же классом смонтированы и справочник, и личные записи агента. Разница между ними
-/// не в устройстве, а ровно в одном поле: справочник объявлен <see cref="VfsAccess.Read"/>, и
-/// поэтому все изменяющие методы уходят в отказ базового класса, не доходя до диска.
+/// The same class mounts both the reference library and the agent's own notes. The difference
+/// between them isn't in the mechanics but in exactly one field: the reference library is declared
+/// <see cref="VfsAccess.Read"/>, so all mutating methods fall through to the base class's rejection
+/// without ever reaching disk.
 /// </para>
 /// </summary>
 public sealed class DocMount : VfsMount
@@ -46,9 +47,9 @@ public sealed class DocMount : VfsMount
             return true;
         }
 
-        // cat по папке отдаёт её оглавление. Это не поблажка: у раздела есть собственный текст —
-        // обзор и список статей, — и именно с него правильно начинать, а не с угадывания имени
-        // файла внутри.
+        // cat on a folder returns its index. This isn't a shortcut: a section has its own text —
+        // an overview and a list of articles — and that's the right place to start, rather than
+        // guessing a file name inside it.
         if (Tree.HasDir(rel))
         {
             var indexKey = rel.Length == 0 ? VfsPath.IndexFile : rel + "/" + VfsPath.IndexFile;

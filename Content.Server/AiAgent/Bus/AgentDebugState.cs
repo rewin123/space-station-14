@@ -25,20 +25,20 @@ namespace Content.Server.AiAgent.Bus;
 public static class AgentDebugState
 {
     /// <summary>
-    /// Процессный снимок: память, записи, заметки и ростер.
+    /// The process-wide snapshot: memory, skills, notes and the roster.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Разделение снимка на процессный и агентный — не косметика: системный промпт и переписка
-    /// принадлежат одному агенту и весят мегабайты, а этот снимок мал. Слитый воедино ответ
-    /// заставлял бы качать четыре истории, чтобы посмотреть на одну.
+    /// Splitting the snapshot into process-wide and per-agent is not cosmetic: the system prompt and
+    /// the conversation belong to one agent and weigh megabytes, while this snapshot is small. A
+    /// merged response would force downloading four histories just to look at one.
     /// </para>
     /// <para>
-    /// <b>Отдаётся библиотека ЯДРА.</b> Раньше она была одна на процесс и слово «процессный» было
-    /// правдой; теперь у каждого тела своя, и здесь показано тело ядра — то, ради которого этот
-    /// отладчик и открывают. Библиотеки боргов лежат в <c>ai_data/agents/&lt;id&gt;/</c>; довести их
-    /// до вкладки — отдельная работа, и до неё честнее показывать одну правдиво, чем четыре
-    /// вперемешку.
+    /// <b>The CORE's library is what gets returned.</b> It used to be one per process and the word
+    /// "process-wide" was true; now every body has its own, and this shows the core's body — the one
+    /// this debugger exists for in the first place. Borg libraries live under
+    /// <c>ai_data/agents/&lt;id&gt;/</c>; bringing them into a tab is separate work, and until then
+    /// it is more honest to show one truthfully than four jumbled together.
     /// </para>
     /// </remarks>
     public static AgentStateSnapshot CaptureGlobal(
@@ -77,15 +77,15 @@ public static class AgentDebugState
             ? new AgentMemoryDto(System.Array.Empty<string>(), string.Empty, 0)
             : new AgentMemoryDto(memory.Entries(), memory.Snapshot(), memory.MemoryLimit);
 
-        // Имя записи теперь путь внутри /skills («питание/смес»), а не плоское имя. Проводной
-        // формат при этом прежний, поэтому клиент отладчика продолжает работать без правок.
+        // A skill's name is now a path inside /skills ("nutrition/mixes"), not a flat name. The wire
+        // format is unchanged, though, so the debugger client keeps working without edits.
         var skillDtos = (vfs?.Skills?.All ?? System.Array.Empty<Skill>())
             .Select(s => new AgentSkillDto(s.Name, s.When, s.Body))
             .ToList();
 
-        // Порядок задаёт стор (по слагу, ординально), а не эта строка: тот же порядок уезжает в
-        // notes.reloaded, и клиент, применяющий снимок и поток вперемешку, не переставляет список
-        // под читателем.
+        // The order is set by the store (by slug, ordinal), not by this line: the same order goes
+        // out in notes.reloaded, so a client applying the snapshot and the stream interleaved
+        // doesn't have the list reshuffled under it.
         var noteDtos = (notes?.All ?? System.Array.Empty<PlayerNote>())
             .Select(n => new AgentPlayerNoteDto(n.Slug, n.Name, n.Entries))
             .ToList();
@@ -96,7 +96,7 @@ public static class AgentDebugState
     }
 
     /// <summary>
-    /// Снимок одного агента. Тот же порядок «сначала seq», по той же причине.
+    /// One agent's snapshot. The same "seq first" order, for the same reason.
     /// </summary>
     public static AgentSessionSnapshot CaptureAgent(AgentEventBus bus, AgentHandle? handle)
     {
@@ -130,13 +130,13 @@ public static class AgentDebugState
     }
 
     /// <summary>
-    /// Дерево файлов агента на два уровня: корень и содержимое каждой папки верхнего уровня.
+    /// The agent's file tree, two levels deep: the root and the contents of each top-level folder.
     /// </summary>
     /// <remarks>
-    /// Глубина ограничена намеренно. Полное дерево справочника — это 226 строк, то есть ровно тот
-    /// список, ради избавления от которого всё и переделывалось; отдавать его в каждом снимке
-    /// значило бы вернуть болезнь с другой стороны. Кто хочет глубже — раскрывает папку отдельным
-    /// запросом.
+    /// The depth is limited on purpose. The reference's full tree is 226 lines — exactly the list
+    /// this whole redesign was meant to get rid of — and returning it in every snapshot would bring
+    /// the disease back from the other side. Whoever wants to go deeper expands a folder with a
+    /// separate request.
     /// </remarks>
     private static IReadOnlyList<AgentFileDto> Files(Vfs.Vfs vfs)
     {
@@ -164,7 +164,8 @@ public static class AgentDebugState
     }
 
     /// <summary>
-    /// Строка ростера. Дороже всего здесь <c>BodyCount</c>, и он берёт замок, но не копирует тело.
+    /// A roster row. The most expensive part here is <c>BodyCount</c>, which takes the lock but does
+    /// not copy the body.
     /// </summary>
     public static AgentRosterEntryDto Roster(AgentSession session, string id, string name, int roundId, long startedSeq)
     {
@@ -177,8 +178,8 @@ public static class AgentDebugState
             (int)session.Brain,
             roundId,
             startedSeq,
-            // Живость проставляет владелец хендла: считать её здесь значило бы трогать мир с
-            // чужого потока. См. AgentHandle.Alive.
+            // Liveness is stamped by the handle's owner: computing it here would mean touching the
+            // world from a foreign thread. See AgentHandle.Alive.
             true,
             stats.Mode,
             stats.Turns,

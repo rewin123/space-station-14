@@ -7,7 +7,7 @@ const props = defineProps<{
   pick: (sample: { cacheRatio: number; promptTokens: number; bodyChars: number }) => number
   label: string
   format?: (value: number) => string
-  /** Верхняя граница, если она известна заранее (доля кэша — это всегда 0..1). */
+  /** Upper bound, if it's known ahead of time (the cache ratio is always 0..1). */
   max?: number
 }>()
 
@@ -22,13 +22,13 @@ const bounds = computed(() => {
 
   const lo = Math.min(...parts.value.flat().map((s) => s.turn))
   const hi = Math.max(...parts.value.flat().map((s) => s.turn))
-  // Верх шкалы: заданный (доля кэша — всегда 0..1) или с запасом над максимумом. Единица —
-  // страховка от нулевого ряда, иначе делили бы на ноль.
+  // Top of the scale: the given one (the cache ratio is always 0..1) or a margin above the
+  // maximum. The 1 is a safeguard against an all-zero series, otherwise we'd divide by zero.
   const max = props.max ?? (Math.max(...values) * 1.1 || 1)
   return { min: 0, max, lo, hi }
 })
 
-/** Каждый отрезок — своя ломаная, поэтому пропуск виден дырой, а не прямой через него. */
+/** Each segment is its own polyline, so a gap shows up as a hole, not a straight line across it. */
 const polylines = computed(() =>
   parts.value.map((segment) =>
     segment

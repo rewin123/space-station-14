@@ -5,18 +5,18 @@ using System.IO;
 namespace Content.Server.AiAgent.Vfs.Mounts;
 
 /// <summary>
-/// Один текстовый файл с диска, без разбора на «когда» и тело.
+/// A single text file from disk, with no split into "when" and body.
 ///
 /// <para>
-/// Здесь живёт промпт разбора — <c>CURATOR.md</c>. Он не статья справочника: у него нет строки
-/// «когда», по которой его ищут, и открывать его по совпадению ситуации не нужно. Смонтирован он
-/// только на чтение, и это осознанно: инструкция разбора, которую разбор может себе переписать,
-/// перестаёт быть инструкцией.
+/// This is where the review prompt lives — <c>CURATOR.md</c>. It isn't a reference-library article:
+/// it has no "when" line to be found by, and there's no need to open it on a situational match. It
+/// is mounted read-only, deliberately: a review instruction that the review can rewrite for itself
+/// stops being an instruction.
 /// </para>
 /// </summary>
 public sealed class TextMount : VfsMount
 {
-    /// <summary>Путь на диске. Может не существовать — тогда файл читается как отсутствующий.</summary>
+    /// <summary>Path on disk. May not exist — then the file reads as missing.</summary>
     public required string File { get; init; }
 
     public override bool IsFile => true;
@@ -77,7 +77,7 @@ public sealed class TextMount : VfsMount
         _cache = string.Empty;
     }
 
-    /// <summary>Содержимое файла, или пустая строка, если его нет. Читается один раз и кэшируется.</summary>
+    /// <summary>The file's content, or an empty string if it doesn't exist. Read once and cached.</summary>
     public string Text()
     {
         if (_loaded)
@@ -89,8 +89,9 @@ public sealed class TextMount : VfsMount
         }
         catch (Exception)
         {
-            // Молча пустой файл — законный ответ: у вызывающего есть запасной путь, а звать сюда
-            // sawmill ради каждой попытки чтения незачем. О пропаже CURATOR.md кричит куратор.
+            // A silently empty file is a legitimate answer: the caller has a fallback path, and
+            // there's no reason to call the sawmill for every read attempt. The curator itself
+            // shouts about a missing CURATOR.md.
             _cache = string.Empty;
         }
 

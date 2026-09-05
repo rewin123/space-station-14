@@ -22,16 +22,17 @@ public sealed record AgentStateSnapshot(
     [property: JsonPropertyName("instance")] string Instance,
     [property: JsonPropertyName("seq")] long Seq,
 
-    /// <summary>Раунд: раньше его можно было узнать только из сессии, которой может не быть.</summary>
+    /// <summary>The round: it used to be learnable only from the session, which may not exist.</summary>
     [property: JsonPropertyName("round")] int Round,
 
     /// <summary>
-    /// Кто сейчас жив. Дешёвые строки: ни системного промпта, ни истории.
+    /// Who is alive right now. Cheap rows: no system prompt, no history.
     ///
-    /// Ростер едет вместе с процессным снимком, чтобы первый запрос клиента был ОДИН. Тяжёлое —
-    /// промпт и вся переписка — качается отдельно и поштучно, см. <see cref="AgentSessionSnapshot"/>:
-    /// четыре агента с историей под сотню тысяч токенов в одном ответе весили бы мегабайты, из
-    /// которых смотрят на один.
+    /// The roster rides along with the process-wide snapshot so the client's first request is a
+    /// SINGLE one. The heavy stuff — the prompt and the whole conversation — is fetched separately
+    /// and one at a time, see <see cref="AgentSessionSnapshot"/>: four agents with a history pushing
+    /// a hundred thousand tokens in one response would weigh megabytes, of which only one is being
+    /// looked at.
     /// </summary>
     [property: JsonPropertyName("agents")] IReadOnlyList<AgentRosterEntryDto> Agents,
 
@@ -40,8 +41,8 @@ public sealed record AgentStateSnapshot(
     [property: JsonPropertyName("notes")] IReadOnlyList<AgentPlayerNoteDto> Notes,
 
     /// <summary>
-    /// Потолок ОДНОЙ заметки в символах. Здесь, а не в каждой заметке: он общий на хранилище, и
-    /// повторять его на каждого человека значило бы врать о том, что он бывает разным.
+    /// The ceiling on ONE note, in characters. Here, not on each note: it's shared across the whole
+    /// store, and repeating it per person would imply it can vary, which would be a lie.
     /// </summary>
     [property: JsonPropertyName("note_limit")] int NoteLimit);
 
@@ -64,13 +65,13 @@ public sealed record AgentMemoryDto(
     [property: JsonPropertyName("memory_limit")] int MemoryLimit);
 
 /// <summary>
-/// Снимок ОДНОГО агента.
+/// The snapshot of ONE agent.
 /// </summary>
 /// <remarks>
-/// <paramref name="Agent"/> равен null со статусом <b>200</b>, а не 404, и это не небрежность:
-/// агент мог уйти между кадром <c>session.started</c> и этим запросом — штатная гонка, а не
-/// ошибка. Клиент считает 404 терминальным и после него навсегда останавливает опрос, то есть
-/// «правильный» код здесь погасил бы весь отладчик из-за нормального события.
+/// <paramref name="Agent"/> is null with status <b>200</b>, not 404, and that is not carelessness:
+/// the agent could have left between the <c>session.started</c> frame and this request — a normal
+/// race, not an error. The client treats 404 as terminal and stops polling forever after one — so
+/// the "correct" code here would kill the whole debugger over a normal event.
 /// </remarks>
 public sealed record AgentSessionSnapshot(
     [property: JsonPropertyName("instance")] string Instance,
@@ -78,16 +79,16 @@ public sealed record AgentSessionSnapshot(
     [property: JsonPropertyName("agent")] AgentSessionDto? Agent);
 
 /// <summary>
-/// Строка ростера: столько, сколько нужно, чтобы нарисовать вкладку с индикатором здоровья.
+/// A roster row: as much as is needed to draw a tab with a health indicator.
 /// </summary>
 /// <remarks>
-/// Чего здесь намеренно НЕТ: системного промпта, описания инструментов, сообщений и памяти — то
-/// есть всего, из-за чего снимок весит мегабайты. Ростер запрашивается на каждом длинном опросе,
-/// и любое тяжёлое поле здесь стоило бы этого веса ежеминутно.
+/// What is deliberately NOT here: the system prompt, the tool descriptions, messages and memory —
+/// i.e. everything that makes a snapshot weigh megabytes. The roster is requested on every long
+/// poll, and any heavy field here would cost that weight every minute.
 ///
-/// <paramref name="StartedSeq"/> отличает «тот же агент» от «тот же идентификатор, новая сессия
-/// после переклейма». Без него клиент угадывал бы это по номеру раунда, который посреди раунда
-/// не меняется.
+/// <paramref name="StartedSeq"/> distinguishes "the same agent" from "the same identifier, a new
+/// session after a reclaim". Without it the client would have to guess this from the round number,
+/// which does not change mid-round.
 /// </remarks>
 public sealed record AgentRosterEntryDto(
     [property: JsonPropertyName("id")] string Id,
@@ -107,16 +108,16 @@ public sealed record AgentRosterEntryDto(
     [property: JsonPropertyName("last_error")] string? LastError);
 
 /// <summary>
-/// Один узел файловой системы агента: путь, вид, описание, размер, права.
+/// One node in the agent's file system: path, kind, description, size, permissions.
 ///
 /// <para>
-/// Тела файла здесь нет намеренно — дерево запрашивают, чтобы посмотреть на состав, а тела статей
-/// справочника весят полтора мегабайта на всех. Тело открывается отдельным запросом, как и раньше
-/// открывалось тело скилла.
+/// The file's body is deliberately absent here — the tree is requested to look at the layout, and
+/// the reference articles' bodies weigh a megabyte and a half combined. A body is opened with a
+/// separate request, the way a skill's body already was.
 /// </para>
 /// <para>
-/// Права отдаются строкой <c>r--</c>/<c>rw-</c>, а не булевым флагом: в интерфейсе это подпись, а
-/// не логика, и одинаковая с тем, что видит сам агент в зоне 0.
+/// Permissions are given as the string <c>r--</c>/<c>rw-</c>, not a boolean flag: in the UI it's a
+/// label, not logic, and it matches what the agent itself sees in zone 0.
 /// </para>
 /// </summary>
 public sealed record AgentFileDto(
@@ -132,15 +133,16 @@ public sealed record AgentSkillDto(
     [property: JsonPropertyName("body")] string Body);
 
 /// <summary>
-/// Заметка об одном человеке: ключ, отображаемое имя и записи целиком.
+/// A note about one person: the key, the display name, and the entries in full.
 ///
-/// Заморожённого двойника, в отличие от памяти, здесь нет и быть не может: заметки в системный
-/// промпт не вклеиваются вовсе. Агент узнаёт о них только строкой NOTE, когда знакомый впервые за
-/// смену заговорил, и читает инструментом. Расхождения «живое против замороженного», которое у
-/// памяти составляет половину отладочной ценности, тут просто не существует.
+/// Unlike memory, there is no frozen twin here and there cannot be: notes are never pasted into the
+/// system prompt at all. The agent learns of them only through a NOTE line, the first time an
+/// acquaintance speaks during a shift, and reads the rest with a tool. The "live vs. frozen"
+/// divergence that accounts for half of memory's debugging value simply does not exist here.
 ///
-/// <paramref name="Slug"/> отдаётся вместе с именем, потому что именно он — ключ: два написания
-/// одного имени дают один файл, и без слага в отладчике это выглядит как пропавшая запись.
+/// <paramref name="Slug"/> is returned together with the name because the slug is the actual key:
+/// two spellings of the same name give one file, and without the slug in the debugger this looks
+/// like a missing entry.
 /// </summary>
 public sealed record AgentPlayerNoteDto(
     [property: JsonPropertyName("slug")] string Slug,
@@ -159,13 +161,13 @@ public sealed record AgentSessionDto(
     [property: JsonPropertyName("body_epoch")] int BodyEpoch,
     [property: JsonPropertyName("messages")] IReadOnlyList<AgentMessageDto> Messages,
     /// <summary>
-    /// Дерево файлов ЭТОГО агента, на два уровня от корня.
+    /// THIS agent's file tree, two levels deep from the root.
     ///
     /// <para>
-    /// Появилось, когда библиотеки перестали быть общими: процессный снимок с одной памятью и
-    /// одним списком записей стал неправдой — у ядра и у каждого киборга они свои. Глубже двух
-    /// уровней не ходим: полное дерево справочника это те самые 226 строк, ради избавления от
-    /// которых всё и затевалось.
+    /// This appeared once libraries stopped being shared: a process-wide snapshot with one memory
+    /// and one entries list became untrue — the core and every cyborg have their own. We don't go
+    /// deeper than two levels: the full reference tree is those very 226 lines that this whole thing
+    /// was undertaken to get rid of.
     /// </para>
     /// </summary>
     [property: JsonPropertyName("files")] IReadOnlyList<AgentFileDto> Files,
@@ -259,7 +261,7 @@ public sealed record AgentStatsDto(
     [property: JsonPropertyName("conv_turns")] int ConvTurns,
     [property: JsonPropertyName("untooled_replies")] int UntooledReplies,
 
-    /// <summary>Ходы, закрытые явным noop, — молчание по решению, а не по поломке.</summary>
+    /// <summary>Turns closed by an explicit noop — silence by decision, not by breakage.</summary>
     [property: JsonPropertyName("idle_turns")] int IdleTurns,
 
     [property: JsonPropertyName("consecutive_failures")] int ConsecutiveFailures,

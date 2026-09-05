@@ -65,11 +65,11 @@ public sealed class AiWorld : IAsyncDisposable
         Build(llm ?? new ScriptedLlmClient(), radius, gridOffset);
 
     /// <summary>
-    /// Мир, где агент живёт в режиме скрипта.
+    /// A world where the agent lives in script mode.
     ///
-    /// Отдельная фабрика, а не cvar после создания: режим ставится при старте сессии — тогда же
-    /// собирается провод инструментов и замораживается префикс. Включённый позже, он не поменял бы
-    /// уже работающего агента, и тест проверял бы не то, что думает.
+    /// A separate factory rather than a CVar set after creation: the mode is set at session startup —
+    /// that is also when the tool wiring is assembled and the prefix is frozen. Enabled later, it
+    /// would not change an already-running agent, and the test would check the wrong thing.
     /// </summary>
     public static Task<AiWorld> CreateScripted(ScriptedLlmClient llm = null, int radius = 6) =>
         Build(llm ?? new ScriptedLlmClient(), radius, 0f, scriptMode: true);
@@ -95,8 +95,15 @@ public sealed class AiWorld : IAsyncDisposable
     /// </summary>
     public static Task<AiWorld> CreateLive() => Build(null, 6, 0f);
 
+    /// <summary>
+    /// A world whose agent prompt is English. The language is frozen at session start, so it
+    /// has to be set here, before the body is assembled — same reason as <see cref="CreateScripted"/>.
+    /// </summary>
+    public static Task<AiWorld> CreateEnglish(ScriptedLlmClient llm = null, int radius = 6) =>
+        Build(llm ?? new ScriptedLlmClient(), radius, 0f, language: "en");
+
     private static async Task<AiWorld> Build(Content.Server.AiAgent.Llm.ILlmClient llm, int radius, float gridOffset,
-        bool scriptMode = false)
+        bool scriptMode = false, string language = "ru")
     {
         var world = new AiWorld { Llm = llm as ScriptedLlmClient };
 
@@ -116,10 +123,10 @@ public sealed class AiWorld : IAsyncDisposable
 
         await server.WaitPost(() =>
         {
-            // Мир не должен вставать на паузу: в пуле нет игроков, а `game.auto_pause_empty`
-            // по умолчанию замораживает симуляцию именно в этом случае — CurTick перестаёт расти,
-            // и агент, чья петля живёт на реальном времени, по уговору не делает ни одного хода.
-            // Тесты петли после этого просто не дожидаются вызова модели.
+            // The world must not pause: the pool has no players, and `game.auto_pause_empty` freezes
+            // the simulation by default in exactly this case — CurTick stops advancing, and an agent
+            // whose loop lives on real time correspondingly makes not a single turn. Loop tests then
+            // simply never see the model get called.
             cfg.SetCVar(CVars.GameAutoPauseEmpty, false);
             cfg.SetCVar(AiCVars.Enabled, true);
             cfg.SetCVar(AiCVars.AutoClaim, false);   // tests claim explicitly, at a known moment
@@ -136,6 +143,7 @@ public sealed class AiWorld : IAsyncDisposable
             SeedLibrary(world.DataDir);
             cfg.SetCVar(AiCVars.CuratorEnabled, false);
             cfg.SetCVar(AiCVars.ScriptMode, scriptMode);
+            cfg.SetCVar(AiCVars.Language, language);
         });
 
         world.Map = await world.Pair.CreateTestMap();
@@ -274,11 +282,12 @@ public sealed class AiWorld : IAsyncDisposable
     }
 
     /// <summary>
-    /// Подождать условия по РЕАЛЬНОМУ времени, продолжая тикать сервер.
+    /// Wait for a condition by REAL time, ticking the server all the while.
     ///
-    /// Штатный <c>PoolManager.WaitUntil</c> считает тики и на пустом сервере прокручивает девятьсот
-    /// штук за доли секунды. Скрипт же живёт в реальном времени: он спит, ждёт шину и работает на
-    /// своём потоке. Ждать его тиками — значит не дождаться никогда и списать это на зависание.
+    /// The standard <c>PoolManager.WaitUntil</c> counts ticks, and on an empty server spins through
+    /// nine hundred of them in a fraction of a second. The script, though, lives in real time: it
+    /// sleeps, waits on the bus, and runs on its own thread. Waiting on it by ticks means never
+    /// catching up and writing it off as a hang.
     /// </summary>
     public async Task<bool> WaitFor(Func<bool> until, int seconds = 30)
     {
@@ -299,25 +308,25 @@ public sealed class AiWorld : IAsyncDisposable
         return false;
     }
 
-    /// <summary>Отпускать скрипт в фон быстрее секунды — иначе тест на фон ждал бы впустую.</summary>
+    /// <summary>Release the script to the background faster than a second — otherwise a background test would wait in vain.</summary>
     public Task SetScriptForeground(int ms) => Post(() =>
         Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
             .SetCVar(AiCVars.ScriptForegroundMs, ms));
 
-    /// <summary>Сколько скриптов пускать одновременно.</summary>
+    /// <summary>How many scripts to run concurrently.</summary>
     public Task SetScriptProcesses(int count) => Post(() =>
         Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
             .SetCVar(AiCVars.ScriptMaxProcesses, count));
 
-    /// <summary>Что уходит модели полем tools — тут видно, смешались режимы или нет.</summary>
+    /// <summary>What goes to the model in the tools field — this is where you'd see whether modes got mixed up.</summary>
     public Task<string> Wire() => Read(() => System.GetSession(Brain).Registry.WireJson());
 
     /// <summary>
-    /// Блок NEW_EVENTS в том виде, в каком он подмешивается в разговор посреди хода.
+    /// The NEW_EVENTS block exactly as it gets mixed into the conversation mid-turn.
     ///
-    /// <b>Забирает события из очереди</b>, как это делает и сам ход: доставлено — значит удалено.
-    /// Прежний <c>PeekUnread</c> только подсматривал, и именно это давало двойную доставку —
-    /// строки уезжали и в результат инструмента, и следующим ходом в наблюдение.
+    /// <b>Drains events from the queue</b>, the same way the turn itself does: delivered means
+    /// removed. The previous <c>PeekUnread</c> only peeked, and that was exactly what caused double
+    /// delivery — lines went out both in the tool result and, on the next turn, into the observation.
     /// </summary>
     public Task<string?> NewEvents() =>
         Read(() =>
@@ -327,7 +336,7 @@ public sealed class AiWorld : IAsyncDisposable
             return Content.Server.AiAgent.Perception.ObservationFormatter.FormatSteering(items, dropped, when);
         });
 
-    /// <summary>Таблица фоновых скриптов этой сессии.</summary>
+    /// <summary>This session's table of background scripts.</summary>
     public Task<Content.Server.AiAgent.Core.Scripting.ScriptProcessTable> ScriptTable() =>
         Read(() => System.GetSession(Brain).Scripts);
 
@@ -396,14 +405,14 @@ public sealed class AiWorld : IAsyncDisposable
     }
 
     /// <summary>
-    /// Положить в рабочий каталог минимальный справочник.
+    /// Put a minimal knowledge base into the working directory.
     ///
     /// <para>
-    /// Не косметика. <c>/wiki_ru</c> смонтирован только на чтение, и пустой каталог под чтение —
-    /// это <c>Error</c> в лог: «агент разучился» иначе разбирают сутками, поэтому сигнал громкий
-    /// намеренно. А стенд валит любой тест, чей сервер написал хоть одну ошибку. Заглушить сигнал
-    /// ради зелёных тестов значило бы выключить единственную сигнализацию о пропавшей библиотеке;
-    /// вместо этого стенд получает настоящий справочник, пусть и крошечный.
+    /// Not cosmetic. <c>/wiki_ru</c> is mounted read-only, and an empty directory under a read mount
+    /// is an <c>Error</c> in the log: otherwise "the agent forgot how to read" gets debugged for days,
+    /// so the signal is deliberately loud. And the bench fails any test whose server logged even one
+    /// error. Muting the signal for the sake of green tests would mean disabling the only alarm for a
+    /// missing library; instead the bench gets a real knowledge base, tiny as it is.
     /// </para>
     /// </summary>
     private static void SeedLibrary(string dataDir)

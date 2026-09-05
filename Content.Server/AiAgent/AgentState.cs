@@ -24,9 +24,9 @@ public sealed class AgentState
     public ConversationState Conv { get; } = new();
 
     /// <summary>
-    /// Будильники, которые агент завёл сам. Здесь, а не на сессии, ровно по правилу выше: они
-    /// переживают ход, и перезапуск сервера посреди смены не должен стирать «проверю через десять
-    /// минут», сказанное экипажу вслух.
+    /// Alarms the agent set for itself. Here, not on the session, for exactly the rule above: they
+    /// survive a turn, and a server restart mid-shift must not erase "I'll check back in ten
+    /// minutes" that was said out loud to the crew.
     /// </summary>
     public Perception.TimerStore Timers { get; } = new();
 
@@ -54,12 +54,12 @@ public sealed class AgentState
     public int BrokenPromises { get; set; }
 
     /// <summary>
-    /// Ходы, которые модель закрыла явным noop.
+    /// Turns the model closed with an explicit noop.
     ///
-    /// Считается, а не просто логируется, потому что это единственное, что отличает исправного
-    /// молчащего агента от сломанного. И то и другое выглядит одинаково — ИИ ничего не говорит, —
-    /// но «сорок ходов подряд ничего не происходило» и «сорок ходов подряд модель не смогла
-    /// собрать вызов» требуют противоположных действий от того, кто смотрит на сервер.
+    /// Counted rather than merely logged, because this is the only thing that distinguishes a
+    /// healthy, quiet agent from a broken one. Both look the same — the AI says nothing — but
+    /// "forty turns in a row with nothing happening" and "forty turns in a row where the model
+    /// could not assemble a call" call for opposite actions from whoever is watching the server.
     /// </summary>
     public int IdleTurns { get; set; }
 
@@ -68,24 +68,25 @@ public sealed class AgentState
     public string? LastSummary { get; set; }
 
     /// <summary>
-    /// Канал, в который уходит речь, когда ход не назвал канал явно.
+    /// The channel speech goes to when a turn did not name a channel explicitly.
     ///
-    /// Это тумблер, а не память о последней реплике: живой игрок на этой роли выбирает канал в
-    /// интерфейсе и дальше просто говорит, а разовое обращение в другой канал делает префиксом,
-    /// не сбивая выбор. Здесь так же — <c>radio</c> с явным каналом тумблер не двигает.
+    /// This is a toggle, not a memory of the last line spoken: a live player in this role picks a
+    /// channel in the UI and then just talks, and a one-off message to another channel makes it a
+    /// prefix without disturbing the choice. It works the same way here — <c>radio</c> with an
+    /// explicit channel does not move the toggle.
     ///
-    /// Скрытое состояние опасно для модели: она может забыть, куда настроена, и отправить
-    /// разговор о предателе в общий канал. Поэтому текущий канал печатается в строке SELF на
-    /// КАЖДОМ ходу — помнить его не требуется, достаточно прочитать.
+    /// Hidden state is dangerous for the model: it might forget what it is set to and send a
+    /// conversation about the traitor to the common channel. So the current channel is printed in
+    /// the SELF line on EVERY turn — there is no need to remember it, only to read it.
     /// </summary>
     public string OutputChannel { get; set; } = DefaultChannel;
 
     public const string DefaultChannel = "Common";
 
-    /// <summary>Куда вернуть тумблер, когда мозг вернут в ядро. Null — возвращать некуда.</summary>
+    /// <summary>Where to return the toggle to once the brain is back in the core. Null — nowhere to return it to.</summary>
     public string? ChannelBeforeCarding { get; set; }
 
-    /// <summary>Единственный канал, который остаётся у закарденного — см. AiHeldIntellicard.</summary>
+    /// <summary>The only channel a carded AI keeps — see AiHeldIntellicard.</summary>
     public const string CardedChannel = "Binary";
 
     /// <summary>
@@ -199,9 +200,9 @@ public sealed class AgentState
         Compactions = snapshot.Compactions;
         RestoreRecentSpeech(snapshot.RecentSpeech);
 
-        // Просроченное за время простоя не отбрасывается: таймер, чей срок прошёл, пока сервер
-        // лежал, сработает на первом же тике после восстановления. Это и есть правильное поведение —
-        // «проверить реактор» не перестало быть нужным оттого, что мы перезагрузились.
+        // What expired during the downtime is not discarded: a timer whose due time passed while
+        // the server was down fires on the very first tick after restoration. That is the correct
+        // behaviour — "check the reactor" did not stop being needed just because we restarted.
         Timers.Restore(snapshot.Timers.Select(t => new Perception.AgentTimer(
             t.Name,
             t.Message,

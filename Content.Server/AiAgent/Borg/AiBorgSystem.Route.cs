@@ -12,112 +12,115 @@ using Robust.Shared.Map.Components;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Маршрут через всю станцию.
+/// Route across the whole station.
 ///
 /// <para>
-/// <b>Зачем это вообще нужно.</b> Апстримовый путепоиск не рассчитан на переходы через станцию:
-/// <c>PathfindingSystem.Common.cs</c> задаёт <c>NodeLimit = 512</c>, и A* просто перестаёт
-/// разворачивать граф, возвращая <c>NoPath</c>. Для штатных NPC это не проблема — они дерутся и
-/// прибираются в пределах комнаты, — но робот, которому сказали «иди в инженерный», упирается в
-/// этот предел и сообщает «дороги нет», стоя в баре. Проверено на боевом сервере: три шага на
-/// восток — «дошёл», Bar → Bridge — «дороги нет».
+/// <b>Why this even exists.</b> Upstream pathfinding isn't built for station-wide crossings:
+/// <c>PathfindingSystem.Common.cs</c> sets <c>NodeLimit = 512</c>, and A* simply stops
+/// expanding the graph, returning <c>NoPath</c>. For regular NPCs this isn't a problem — they fight
+/// and clean up within a room — but a borg told to "go to engineering" hits this limit and reports
+/// "no path" while standing in the bar. Verified on the live server: three steps
+/// east — "arrived," Bar → Bridge — "no path."
 /// </para>
 /// <para>
-/// Поэтому маршрут строит <see cref="BorgPathfinder"/> — свой поиск по карте станции, — а
-/// апстримовому рулевому достаются короткие ноги, каждая из которых в его лимит укладывается.
-/// Глобальный маршрут наш, локальное движение чужое и проверенное.
+/// So the route is built by <see cref="BorgPathfinder"/> — our own search over the station map —
+/// while upstream steering gets short legs, each of which fits within its limit.
+/// The global route is ours, the local movement is theirs and battle-tested.
 /// </para>
 /// <para>
-/// Первая версия резала дорогу по навигационным маякам. Приём был плох тем, что маяки расставлены
-/// по смыслу, а не по проходимости: цепочка «ближайших» упиралась в запертые отсеки, и робот
-/// вставал на пересадке, хотя до цели оставались проходимые коридоры.
+/// The first version cut the road along navigation beacons. That approach was bad because beacons
+/// are placed by meaning, not by walkability: a chain of "nearest" beacons ran into locked
+/// compartments, and the borg would stop at a transfer point even though walkable corridors
+/// remained toward the goal.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
 {
     /// <summary>
-    /// Куда робот шёл на самом деле, сколько раз мы уже перекладывали маршрут и ГДЕ ЦЕЛЬ БЫЛА,
-    /// когда маршрут прокладывали.
+    /// Where the borg was actually heading, how many times we've already replanned the route, and
+    /// WHERE THE TARGET WAS when the route was built.
     /// </summary>
     /// <remarks>
-    /// Последнее поле нужно для погони. Цель по хендлу привязана к самой сущности
-    /// (<c>new EntityCoordinates(target, zero)</c>) именно затем, чтобы человек, к которому робот
-    /// пошёл, мог продолжать идти, — так написано в <c>TryResolveDestination</c>. Но привязка
-    /// делала половину дела: координата ехала за человеком, а путь оставался проложенным до места,
-    /// где тот стоял в момент вызова <c>goto</c>. Робот доходил до пустого пола и докладывал
-    /// прибытие. Разность между «где цель сейчас» и «где она была при прокладке» — единственный
-    /// дешёвый способ это заметить: спрашивать координату можно каждый кадр, а перекладывать
-    /// маршрут — нет, это полный A* по станции.
+    /// The last field is needed for pursuit. A target bound by handle is attached to the entity
+    /// itself (<c>new EntityCoordinates(target, zero)</c>) precisely so the person the borg went
+    /// after can keep moving — that's what <c>TryResolveDestination</c> does. But the binding only
+    /// did half the job: the coordinate followed the person, while the path stayed laid out to the
+    /// spot where they stood at the moment <c>goto</c> was called. The borg would reach empty floor
+    /// and report arrival. The difference between "where the target is now" and "where it was when
+    /// planned" is the only cheap way to notice this: the coordinate can be queried every frame, but
+    /// replanning the route can't — that's a full station-wide A*.
     /// </remarks>
     private readonly Dictionary<EntityUid, (EntityCoordinates Dest, string Goal, int Replans, Vector2 PlannedAt)> _goals = new();
 
-    /// <summary>Сколько кадров прошло с последней перекладки под ушедшую цель.</summary>
+    /// <summary>How many frames have passed since the last replan for a moved target.</summary>
     private readonly Dictionary<EntityUid, int> _sinceRetarget = new();
 
     /// <summary>
-    /// На сколько тайлов цель должна отъехать, чтобы маршрут перекладывали.
+    /// How many tiles the target must move away before the route gets replanned.
     /// </summary>
     /// <remarks>
-    /// Три — это заметно больше дальности руки (1.5) и заметно меньше комнаты. Меньший порог
-    /// заставил бы гоняться за каждым шагом человека, больший — приводил бы робота в соседний
-    /// отсек.
+    /// Three is noticeably more than hand range (1.5) and noticeably less than a room. A smaller
+    /// threshold would make it chase every step the person takes; a larger one would land the borg
+    /// in the next compartment.
     /// </remarks>
     private const float RetargetTiles = 3f;
 
-    /// <summary>Не чаще раза в столько кадров. Полторы секунды при тикрейте 30.</summary>
+    /// <summary>No more often than once per this many frames. One and a half seconds at tickrate 30.</summary>
     /// <remarks>
-    /// Погоня за бегущим человеком иначе превращается в поиск пути каждый кадр — то есть ровно в
-    /// ту поломку, из-за которой сервер ложился при движении роботов. Полторы секунды означают
-    /// худший случай около шести миллисекунд поиска в секунду на одного гонящегося робота.
+    /// Otherwise, chasing a running person turns into a pathfind every frame — exactly the breakage
+    /// that used to bring the server down when borgs moved. One and a half seconds means a worst
+    /// case of about six milliseconds of search per second for one pursuing borg.
     /// </remarks>
     private const int RetargetEvery = 45;
 
     /// <summary>
-    /// Во что обошёлся поиск пути с начала работы сервера: сколько раз, сколько всего и худший.
+    /// What pathfinding has cost since the server started: how many times, how much total, and the
+    /// worst case.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Не украшение и не любопытство. Поиск пути — единственная тяжёлая работа агента, которая
-    /// идёт МИМО <see cref="Content.Server.AiAgent.Threading.WorldBus"/>: перепланировка
-    /// вызывается из <c>Update</c>, то есть уже на главном потоке, и через шину её проводить
-    /// незачем — она добавила бы только задержку. Но вместе с шиной поиск терял и профиль, и
-    /// предупреждение о перерасходе кадра.
+    /// Not decoration, not curiosity. Pathfinding is the only heavy work the agent does that runs
+    /// OUTSIDE <see cref="Content.Server.AiAgent.Threading.WorldBus"/>: replanning is called from
+    /// <c>Update</c>, i.e. already on the main thread, and routing it through the bus would serve
+    /// no purpose — it would only add latency. But along with the bus, the search also lost its
+    /// profiling and its frame-overrun warning.
     /// </para>
     /// <para>
-    /// Ценой этой слепоты стал целый раунд разбирательств: в журнале честно светились 'look' и
-    /// 'observation', а восемьдесят миллисекунд поиска в секунду не светились нигде, и вывод «обзор
-    /// починен, а лаги остались» был единственным доступным. Теперь строка перерасхода пишется тем
-    /// же текстом, что и у шины, и ищется тем же grep.
+    /// The price of this blind spot was a whole round of troubleshooting: the log honestly showed
+    /// 'look' and 'observation,' while eighty milliseconds of search per second showed up nowhere,
+    /// leaving "observation is fixed but the lag remains" as the only available conclusion. Now the
+    /// overrun line is written with the same text as the bus uses, and found by the same grep.
     /// </para>
     /// </remarks>
     public (int Searches, double TotalMs, double WorstMs, int WorstProbes) RouteCost { get; private set; }
 
-    /// <summary>Обнулить счётчики поиска — для стенда, который меряет один сценарий.</summary>
+    /// <summary>Reset the search counters — for the bench, which measures a single scenario.</summary>
     public void ResetRouteCost() => RouteCost = default;
 
     /// <summary>
-    /// Сколько раз перекладывать маршрут, прежде чем признать, что дороги нет.
+    /// How many times to replan the route before declaring that there's no path.
     ///
     /// <para>
-    /// Раньше было три, и этого хватало, пока перепланировка была просто повтором: с тем же
-    /// набором препятствий она давала тот же путь, и упираться в него больше трёх раз смысла не
-    /// имело. Теперь каждая попытка ЧТО-ТО УЗНАЁТ — непроходимый тайл уходит в <see cref="_blocked"/>,
-    /// и следующий путь идёт в обход, — поэтому попыток не жалко. Тамбур у входа в атмос на карте
-    /// ротации окружён пятью дверьми сразу, и три попытки там кончались, не перебрав и половины.
+    /// It used to be three, and that was enough while replanning was just a repeat: with the same
+    /// set of obstacles it produced the same path, and there was no point hitting it more than three
+    /// times. Now every attempt LEARNS SOMETHING — an impassable tile goes into <see cref="_blocked"/>,
+    /// and the next path routes around it — so attempts aren't wasted. The vestibule at the atmos
+    /// entrance on the rotation map is surrounded by five doors at once, and three attempts there
+    /// used to run out before getting through even half of them.
     /// </para>
     /// </summary>
     private const int MaxReplans = 10;
 
     /// <summary>
-    /// Тайлы, которые робот на этом маршруте признал непроходимыми.
+    /// Tiles that the borg has marked impassable on this route.
     ///
-    /// Наполняется на месте: дверь, которая не открылась, створка, которую заварили, тайл, куда
-    /// корпус просто не лезет. Живёт до конца маршрута — новая задача начинает с чистого листа,
-    /// потому что дверь к тому времени могли и открыть.
+    /// Populated on the spot: a door that didn't open, a hatch that got welded shut, a tile the
+    /// chassis just doesn't fit through. Lives until the end of the route — a new task starts with
+    /// a clean slate, because by then the door might have been opened.
     /// </summary>
     private readonly Dictionary<EntityUid, HashSet<Vector2i>> _blocked = new();
 
-    /// <summary>Пометить тайл непроходимым для текущего маршрута.</summary>
+    /// <summary>Mark a tile impassable for the current route.</summary>
     private void BlockTile(EntityUid borg, Vector2i tile)
     {
         if (!_blocked.TryGetValue(borg, out var set))
@@ -127,7 +130,7 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Построить маршрут до точки и пойти по нему.
+    /// Build a route to a point and follow it.
     /// </summary>
     public bool TryStartRoute(EntityUid borg, EntityCoordinates destination, string goal, out string why)
     {
@@ -144,24 +147,26 @@ public sealed partial class AiBorgSystem
 
         var from = ToTile(xform.LocalPosition);
 
-        // Цель переводится в систему координат СЕТКИ, а не читается как есть.
+        // The target is converted into the GRID's coordinate system, not read as-is.
         //
-        // EntityCoordinates.Position — это смещение относительно РОДИТЕЛЯ, а цель по хендлу
-        // привязана к самой сущности: у неё Position равен (0,0). Прочитав его как координаты
-        // сетки, робот отправлялся в начало координат станции — на бою это выглядело так, что
-        // на «подойди к двери в двух шагах» он уходил за полстанции в другую сторону.
+        // EntityCoordinates.Position is an offset relative to the PARENT, while a target bound by
+        // handle is attached to the entity itself: its Position is (0,0). Reading it as grid
+        // coordinates sent the borg to the station's coordinate origin — in live play this looked
+        // like the borg walking halfway across the station in the wrong direction on a "go to the
+        // door two steps away" order.
         var destMap = _xform.ToMapCoordinates(destination);
         var to = ToTile(Vector2.Transform(destMap.Position, _xform.GetInvWorldMatrix(grid.Value)));
 
-        // Цель почти никогда не проходима сама по себе: маяк — вывеска на стене, хендл двери —
-        // сама дверь. Идти надо «к», а не «в».
-        // Проходимость сверяем с навмешем рулевого ПО ЕГО ЖЕ ПРАВИЛУ.
+        // The target is almost never walkable by itself: a beacon is a sign on the wall, a door
+        // handle is the door itself. You have to walk "to" it, not "into" it.
+        // Walkability is checked against steering's navmesh BY ITS OWN RULE.
         //
-        // Наличия полигона мало: у апстрима тайл с непроходимой для нас коллизией остаётся на
-        // навмеше, но GetTileCost возвращает по нему ноль, то есть «сюда нельзя». Так выглядят
-        // машины, шкафы и столы — наша карта их не видит вовсе, а рулевой видит и обходит.
-        // Повторяем его условие дословно, иначе наш путь ведёт туда, куда он не пойдёт: на бою
-        // робот прошёл 27 тайлов из 47 и встал в коридоре, где ни одной двери в четырёх тайлах.
+        // Having a polygon isn't enough: upstream keeps a tile with collision impassable for us on
+        // the navmesh, but GetTileCost returns zero for it, i.e. "can't go here." That's what
+        // machines, lockers, and tables look like — our map doesn't see them at all, while steering
+        // sees and avoids them. We repeat its condition verbatim, otherwise our path leads somewhere
+        // it won't go: in live play the borg walked 27 of 47 tiles and stopped in a corridor with no
+        // door within four tiles.
         var (ourLayer, ourMask) = TryComp<FixturesComponent>(borg, out var fixtures)
             ? _physics.GetHardCollision(borg, fixtures)
             : (0, 0);
@@ -183,8 +188,8 @@ public sealed partial class AiBorgSystem
             if ((ourLayer & data.CollisionMask) == 0 && (ourMask & data.CollisionLayer) == 0)
                 return true;
 
-            // Столкновение есть — но дверь мы открываем, а через перила перелезаем. Те же
-            // послабления, что даёт рулевому наш набор PathFlags.
+            // There's a collision — but we open doors and climb over railings. The same
+            // allowances our set of PathFlags gives to steering.
             return (data.Flags & PathfindingBreadcrumbFlag.Door) != 0
                    || (data.Flags & PathfindingBreadcrumbFlag.Climb) != 0;
         }
@@ -198,13 +203,14 @@ public sealed partial class AiBorgSystem
             return false;
         }
 
-        // Заказанный тайл против выбранного.
+        // Requested tile vs. the chosen one.
         //
-        // Debug, а не Info: для двери, ящика или консоли смещение ПРАВИЛЬНОЕ — идти надо «к», а не
-        // «в», и на таких целях строка сыпалась бы постоянно. Но для голых координат смещение
-        // означает «клетку сочли непроходимой», и это единственный способ отличить «маршрут повёл
-        // не туда» от «ходок не дошёл». Именно этой строкой найдено, что координата понималась как
-        // угол клетки и погрешность перевода сталкивала её в соседний тайл.
+        // Debug, not Info: for a door, crate, or console the offset is CORRECT — you have to walk
+        // "to" it, not "into" it, and on such targets this line would spam constantly. But for bare
+        // coordinates an offset means "the tile was deemed impassable," and this is the only way to
+        // tell "the route went the wrong way" apart from "the walker didn't arrive." This exact line
+        // is what revealed that the coordinate was being read as a tile corner, and rounding error
+        // was pushing it into the neighboring tile.
         if (goalTile.Value != to)
             _sawmill.Debug($"заказан тайл {to}, маршрут ведёт в {goalTile.Value} («{goal}»)");
 
@@ -221,18 +227,21 @@ public sealed partial class AiBorgSystem
             return false;
         }
 
-        // Ведём сами по всем тайлам пути. Пересадок нет вовсе: то, ради чего они заводились —
-        // уложиться в чужой лимит, — перестало быть задачей вместе с чужим рулевым.
+        // We steer ourselves through every tile of the path. There are no transfers at all: the
+        // reason they existed — to fit within someone else's limit — stopped being a concern along
+        // with someone else's steering.
         SetTrail(borg, path);
-        // Исход прошлой ходьбы забывается здесь: иначе скрипт, спросивший walk_status сразу
-        // после старта нового маршрута, получил бы «пришёл» от предыдущего и пошёл дальше.
+        // The outcome of the previous walk is forgotten here: otherwise a script that asked
+        // walk_status right after starting a new route would get "arrived" from the previous one
+        // and move on.
         _lastWalk.Remove(borg);
         _walking[borg] = goal;
 
         TraceBorgMove(borg, "start", $"goal={goal.Replace(' ', '_')} tiles={path.Count}");
 
-        // Точка цели запоминается ВСЕГДА, а счётчик перекладок — только при смене задачи: одно
-        // говорит «где она была», другое «сколько раз мы уже упирались», и путать их нельзя.
+        // The target point is remembered ALWAYS, while the replan counter resets only on a task
+        // change: one says "where it was," the other "how many times we've already hit a wall,"
+        // and they must not be mixed up.
         _goals[borg] = !_goals.TryGetValue(borg, out var known) || known.Goal != goal
             ? (destination, goal, 0, destMap.Position)
             : (known.Dest, known.Goal, known.Replans, destMap.Position);
@@ -246,7 +255,7 @@ public sealed partial class AiBorgSystem
         return true;
     }
 
-    /// <summary>Записать стоимость одного поиска и пожаловаться, если он съел кадр.</summary>
+    /// <summary>Record the cost of one search and complain if it ate a frame.</summary>
     private void ObserveSearch(double ms, BorgPathfinder.PathStats stats)
     {
         var c = RouteCost;
@@ -260,8 +269,9 @@ public sealed partial class AiBorgSystem
         if (ms <= budget)
             return;
 
-        // Формулировка дословно как у шины (WorldBus.Observe): один grep обязан находить оба
-        // источника перерасхода, иначе разбор снова упрётся в «профиль чистый, а лаги есть».
+        // Worded identically to the bus (WorldBus.Observe): a single grep must be able to find both
+        // sources of overrun, otherwise troubleshooting runs into "profile is clean but there's
+        // still lag" again.
         _sawmill.Warning(
             $"main-thread call 'route' took {ms:F1}ms (budget {budget:F1}ms), " +
             $"узлов {stats.Expanded}, проверок проходимости {stats.Probes}");
@@ -281,7 +291,7 @@ public sealed partial class AiBorgSystem
         _sinceRetarget.Remove(borg);
     }
 
-    /// <summary>Робот продвинулся — счётчик перепланировок обнулить.</summary>
+    /// <summary>The borg made progress — reset the replan counter.</summary>
     private void ForgetReplans(EntityUid borg)
     {
         if (_goals.TryGetValue(borg, out var g) && g.Replans != 0)
@@ -289,19 +299,20 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Цель ушла — догнать её, переложив маршрут.
+    /// The target moved — catch up to it by replanning the route.
     /// </summary>
-    /// <returns><c>true</c>, если маршрут переложен.</returns>
+    /// <returns><c>true</c> if the route was replanned.</returns>
     /// <remarks>
     /// <para>
-    /// Зовётся каждый кадр для каждого идущего робота, поэтому дешёвая часть стоит первой: сравнить
-    /// две точки можно сколько угодно раз, а строить путь — нет.
+    /// Called every frame for every walking borg, so the cheap part goes first: comparing two
+    /// points can be done as many times as needed, but building a path can't.
     /// </para>
     /// <para>
-    /// Счётчик перекладок (<see cref="MaxReplans"/>) здесь НЕ тратится, и это не оплошность.
-    /// Тот бюджет отвечает на вопрос «есть ли вообще дорога», а погоня отвечает на другой — «туда
-    /// ли я иду». Человек, уходящий от робота через полстанции, исчерпал бы общий бюджет за
-    /// полминуты, и робот объявил бы «дороги нет» о совершенно проходимом коридоре.
+    /// The replan counter (<see cref="MaxReplans"/>) is NOT spent here, and that's not an
+    /// oversight. That budget answers the question "is there a path at all," while pursuit answers
+    /// a different one — "am I even going the right way." A person fleeing the borg across half the
+    /// station would exhaust the shared budget within half a minute, and the borg would declare "no
+    /// path" about a perfectly walkable corridor.
     /// </para>
     /// </remarks>
     private bool TryFollowMovingGoal(EntityUid borg)
@@ -309,7 +320,7 @@ public sealed partial class AiBorgSystem
         if (!_goals.TryGetValue(borg, out var goal))
             return false;
 
-        // Отсек и координата не ходят: у них привязка к сетке, а не к сущности.
+        // A compartment or bare coordinate doesn't move: it's bound to the grid, not to an entity.
         if (!Exists(goal.Dest.EntityId) || HasComp<MapGridComponent>(goal.Dest.EntityId))
             return false;
 
@@ -329,8 +340,9 @@ public sealed partial class AiBorgSystem
         if (!TryStartRoute(borg, goal.Dest, goal.Goal, out _))
             return false;
 
-        // Точка отсчёта затора берётся заново: робот пошёл в другую сторону, и старая точка
-        // объявила бы его застрявшим на первом же шаге назад.
+        // The stuck-detection reference point is reset from scratch: the borg started moving in a
+        // different direction, and the old point would have declared it stuck on the very first
+        // step back.
         _progress.Remove(borg);
 
         _sawmill.Debug($"{ToPrettyString(borg)} догоняет ушедшую цель «{goal.Goal}»");
@@ -338,20 +350,21 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Нога не прошла — переложить маршрут ОТ ТЕКУЩЕГО МЕСТА.
+    /// A leg failed — replan the route FROM THE CURRENT LOCATION.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Первая версия просто пропускала неудачную ногу и бралась за следующую, и это было хуже, чем
-    /// ничего: следующая нога <b>дальше</b>, а у апстримового рулевого свой предел в 512 узлов.
-    /// Каждый пропуск ухудшал положение, и маршрут разваливался целиком — на бою «дойди до AME»
-    /// кончалось «дороги нет», хотя наш собственный поиск находил дорогу за 47 тайлов.
+    /// The first version simply skipped the failed leg and moved on to the next one, and that was
+    /// worse than nothing: the next leg is <b>further away</b>, and upstream steering has its own
+    /// limit of 512 nodes. Every skip made things worse, and the route fell apart entirely — in
+    /// live play "get to the AME" ended in "no path," even though our own search found a path in
+    /// 47 tiles.
     /// </para>
     /// <para>
-    /// Причина, по которой нога вообще не проходит: наша карта знает пол, стены и шлюзы, но не
-    /// знает мебели и машин. Точка пересадки могла попасть на тайл, занятый столом. Перепланировка
-    /// с места решает и это: новый путь обойдёт занятый тайл, потому что робот уже стоит не там,
-    /// где стоял.
+    /// The reason a leg fails at all: our map knows floors, walls, and airlocks, but not furniture
+    /// or machinery. A transfer point could land on a tile occupied by a table. Replanning from the
+    /// current spot fixes this too: the new path will route around the occupied tile, because the
+    /// borg is no longer standing where it used to.
     /// </para>
     /// </remarks>
     private bool TryReplan(EntityUid borg)

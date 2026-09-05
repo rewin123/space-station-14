@@ -34,12 +34,13 @@ public sealed class Curator
     public string? LastVerdict { get; private set; }
 
     /// <summary>
-    /// Сколько раз последний разбор реально что-то записал.
+    /// How many times the last review actually wrote something.
     ///
     /// <para>
-    /// Считаются успешные вызовы записи, а не ответы модели. Отчёт в диалог уходит только когда
-    /// это число больше нуля: «прочитал и решил, что записывать нечего» — законный исход разбора,
-    /// и сообщать о нём агенту значило бы каждую компакцию тратить строку на «ничего не сделал».
+    /// Counts successful write calls, not model responses. The report goes into the dialogue only
+    /// when this number is greater than zero: "read it and decided there was nothing worth writing"
+    /// is a legitimate review outcome, and telling the agent about it would spend a line on "did
+    /// nothing" at every single compaction.
     /// </para>
     /// </summary>
     public int LastWrites { get; private set; }
@@ -67,10 +68,10 @@ public sealed class Curator
         Runs++;
         LastWrites = 0;
 
-        // Снимок счётчика записей ДО разбора. Раньше записи считались по именам вызовов на
-        // проводе — write_file и edit_file, — но в режиме скриптов этих имён на проводе нет вовсе:
-        // там четыре имени, и всё остальное живёт функциями Lua. Счётчик стоит ниже обеих дорог,
-        // поэтому считает и то и другое.
+        // A snapshot of the write counter BEFORE the review. Writes used to be counted by call names
+        // on the wire — write_file and edit_file — but in script mode those names aren't on the wire
+        // at all: there are four names there, and everything else lives inside Lua functions. The
+        // counter sits below both paths, so it counts either one.
         var writesBefore = vfs.Writes;
 
         // A copy: the review question and its answers must never contaminate the game history.
@@ -138,26 +139,27 @@ public sealed class Curator
     }
 
     /// <summary>
-    /// Имя файла с промптом разбора и подстановка внутри него.
+    /// Name of the file holding the review prompt, and the substitution inside it.
     /// </summary>
     /// <remarks>
-    /// Файл, а не константа в коде, потому что правка файла рядом с <c>SOUL.md</c> — главный
-    /// отладочный аффорданс этого проекта, а промпт разбора правится чаще личности. Смонтирован он
-    /// только на чтение: инструкция разбора, которую разбор может себе переписать, перестаёт быть
-    /// инструкцией.
+    /// A file, not a constant in code, because editing a file next to <c>SOUL.md</c> is the project's
+    /// main debugging affordance, and the review prompt gets edited more often than the personality
+    /// does. Mounted read-only: a review instruction that the review could rewrite for itself stops
+    /// being an instruction.
     /// </remarks>
     public const string PromptFile = "CURATOR.md";
 
-    /// <summary>Куда в файле встаёт корень файловой системы.</summary>
+    /// <summary>Where the filesystem root goes in the file.</summary>
     public const string RootPlaceholder = "{{КОРЕНЬ}}";
 
     /// <summary>
-    /// Собрать вопрос разбора: текст из <c>CURATOR.md</c> плюс подставленный корень дерева.
+    /// Build the review question: the text from <c>CURATOR.md</c> plus the substituted tree root.
     ///
     /// <para>
-    /// Корень повторяется здесь, хотя он уже стоит в зоне 0, — по той же причине, по которой
-    /// раньше повторялся индекс: десятью тысячами токенов раньше модель его не замечает. Разница в
-    /// цене: индекс стоил 16 килобайт на каждый разбор, корень стоит около семисот символов.
+    /// The root is repeated here even though it already sits in zone 0, for the same reason the
+    /// index used to be repeated: ten thousand tokens earlier, the model doesn't notice it. The
+    /// difference is in cost: the index cost 16 kilobytes on every review, the root costs about
+    /// seven hundred characters.
     /// </para>
     /// </summary>
     private string BuildPrompt(Vfs.Vfs vfs)
@@ -166,9 +168,9 @@ public sealed class Curator
 
         if (text.Length == 0)
         {
-            // Молча не разбирать нельзя: снаружи это выглядит как «агент перестал учиться» и не
-            // даёт ни строки в лог. Запасной текст короткий намеренно — он должен работать, а не
-            // подменять собой файл, который надо вернуть на место.
+            // Silently skipping the review is not an option: from the outside it looks like "the
+            // agent stopped learning" and produces not a single log line. The fallback text is short
+            // on purpose — it needs to work, not stand in for the file that needs to be put back.
             _sawmill.Error($"{PromptFile} не найден — разбор идёт по встроенному запасному тексту");
             text = Fallback;
         }
@@ -176,7 +178,7 @@ public sealed class Curator
         return text.Replace(RootPlaceholder, vfs.RenderRoot(), StringComparison.Ordinal);
     }
 
-    /// <summary>Запасной текст на случай пропажи файла. Не замена ему, а способ не молчать.</summary>
+    /// <summary>Fallback text for when the file goes missing. Not a replacement for it, just a way not to stay silent.</summary>
     private const string Fallback = """
         Разговор выше окончен, ты сейчас не играешь — ты разбираешь прошедший отрезок.
         Игровые инструменты сейчас откажут, и это нормально.

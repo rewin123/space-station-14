@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 """
-Активация устройством и хранение сессии xAI для моста.
+Device activation and xAI session storage for the bridge.
 
-ЗАЧЕМ ОТДЕЛЬНАЯ СЕССИЯ, А НЕ ЧУЖОЙ ТОКЕН ИЗ ~/.grok/auth.json
+WHY A SEPARATE SESSION, NOT SOMEONE ELSE'S TOKEN FROM ~/.grok/auth.json
 ------------------------------------------------------------
-У refresh-токена может быть ровно один владелец: он одноразовый и ротируется на стороне
-вендора, поэтому второй потребитель, обновивший его, отзывает первого. Это не теория — в
-~/.hermes/auth.json на этой машине до сих пор лежит `refresh_token_reused` от 07.08.2026.
+A refresh token can have exactly one owner: it is single-use and rotated on the vendor's
+side, so a second consumer that refreshes it revokes the first. This is not theory — on this
+machine ~/.hermes/auth.json still has a `refresh_token_reused` from 2026-08-07.
 
-Читать токен CLI на чтение и не обновлять его тоже нельзя: он живёт шесть часов, и раунд,
-начатый в 02:50, кончился бы отказом провайдера в 02:54.
+Reading the CLI's token read-only and never refreshing it doesn't work either: it lives six
+hours, and a turn started at 02:50 would end in a provider refusal at 02:54.
 
-Активация устройством решает это без всяких договорённостей: игровой сервер проходит свой
-собственный вход и получает СВОЙ refresh-токен. Дальше `grok` в терминале и мост живут
-независимо — обновление одного не трогает второй.
+Device activation solves this with no coordination needed at all: the game server goes
+through its own login and gets ITS OWN refresh token. From then on `grok` in the terminal and
+the bridge live independently — refreshing one does not touch the other.
 
-ПОЧЕМУ ИМЕННО DEVICE FLOW, А НЕ БРАУЗЕР
+WHY DEVICE FLOW SPECIFICALLY, NOT A BROWSER
 ---------------------------------------
-Машина без графики и без доверенного браузера; вход по коду устройства (RFC 8628) не требует
-ни того, ни другого — он показывает ссылку и код, а подтверждение делается с телефона.
-`https://auth.x.ai/.well-known/openid-configuration` объявляет
-`urn:ietf:params:oauth:grant-type:device_code` и `token_endpoint_auth_methods_supported: none`,
-то есть публичный клиент без секрета — ровно наш случай.
+The machine has no graphics and no trusted browser; device code login (RFC 8628) needs
+neither — it shows a link and a code, and confirmation happens from a phone.
+`https://auth.x.ai/.well-known/openid-configuration` advertises
+`urn:ietf:params:oauth:grant-type:device_code` and `token_endpoint_auth_methods_supported: none`,
+i.e. a public client with no secret — exactly our case.
 
-ГДЕ ЛЕЖИТ РЕЗУЛЬТАТ
+WHERE THE RESULT LIVES
 -------------------
-`ai_data/grok.session.json`, права 600. Каталог gitignored — это единственное место, где
-секретам разрешено находиться. В Resources/ их быть не может: ContentMagicAczProvider раздаёт
-всю папку каждому подключившемуся игроку.
+`ai_data/grok.session.json`, mode 600. The directory is gitignored — the only place secrets
+are allowed to live. They cannot go in Resources/: ContentMagicAczProvider hands out the
+whole folder to every player who connects.
 """
 
 from __future__ import annotations
@@ -45,43 +45,45 @@ from datetime import datetime, timedelta, timezone
 
 ISSUER = "https://auth.x.ai"
 
-# Публичный идентификатор клиента Grok CLI. Не секрет: у публичного клиента его и не бывает,
-# вход подтверждается человеком в браузере, а не знанием этой строки.
+# Public client identifier of the Grok CLI. Not a secret: a public client never has one —
+# login is confirmed by a human in the browser, not by knowing this string.
 CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
 
-# `offline_access` — это и есть право на refresh; без него сессия умрёт через шесть часов и
-# починить её можно будет только руками.
+# `offline_access` is exactly the right to refresh; without it the session dies in six hours
+# and can only be fixed by hand.
 #
-# Про два «доступа». `grok-cli:access` пускает к cli-chat-proxy, но САМА МОДЕЛЬ за ним требует
-# ещё и `api:access` — без него вход проходит, токен выдаётся, /health зелёный, и только первый
-# настоящий ход отвечает 403 «OAuth2 token missing required scope». Проверено на себе.
+# On the two "accesses". `grok-cli:access` gets you into cli-chat-proxy, but the MODEL ITSELF
+# behind it also requires `api:access` — without it, login succeeds, a token is issued,
+# /health is green, and only the first real turn gets a 403 "OAuth2 token missing required
+# scope". Verified firsthand.
 #
-# Дописать scope к уже выданной сессии нельзя: refresh-грант их не расширяет. Поэтому список
-# правится только вместе с новым входом устройством.
+# Scope cannot be added to an already-issued session: the refresh grant does not expand it.
+# So the list can only be changed together with a new device login.
 SCOPE = "openid profile email offline_access grok-cli:access api:access"
 
-# Обновляемся заранее. Ход агента длится до 150 секунд, и токен, живой на момент отправки, но
-# умерший на момент ответа, выглядит как случайный 401 раз в шесть часов — самая дорогая форма
-# поломки, потому что она невоспроизводима.
+# Refresh ahead of time. An agent turn runs up to 150 seconds, and a token that's alive when
+# sent but dead by the time of the reply looks like a random 401 once every six hours — the
+# most expensive kind of failure, because it is irreproducible.
 REFRESH_MARGIN_SECONDS = 300
 
 USER_AGENT = "ss14-grok-bridge/1"
 
 
 class AuthError(RuntimeError):
-    """Отказ, который повтором не чинится: вход отклонён, код истёк, сессии нет."""
+    """A failure that a retry won't fix: login was rejected, the code expired, no session exists."""
 
 
-# --------------------------------------------------------------------------- сеть
+# --------------------------------------------------------------------------- network
 
 def _opener() -> urllib.request.OpenerDirector:
     """
-    Свой opener с ЯВНО выключенным прокси.
+    Our own opener with the proxy EXPLICITLY disabled.
 
-    На этой машине глобально экспортированы HTTP_PROXY и ALL_PROXY на немецкий выход, и
-    urllib подхватывает их из окружения молча. auth.x.ai и cli-chat-proxy.grok.com отвечают
-    напрямую (проверено), а лишний хоп — это лишняя причина, по которой вход однажды повиснет
-    без объяснений. Кому нужен прокси — задаёт его GROK_BRIDGE_PROXY, и тогда он виден.
+    On this machine, HTTP_PROXY and ALL_PROXY are globally exported to a German exit node,
+    and urllib picks them up from the environment silently. auth.x.ai and
+    cli-chat-proxy.grok.com respond directly (verified), and an extra hop is just one more
+    reason login could hang someday with no explanation. Whoever needs a proxy sets it via
+    GROK_BRIDGE_PROXY, and then it's visible.
     """
     proxy = os.environ.get("GROK_BRIDGE_PROXY", "").strip()
     handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})
@@ -111,21 +113,21 @@ def _post_form(url: str, fields: dict[str, str], timeout: float = 30.0) -> dict:
         except ValueError:
             raise AuthError(f"{url}: HTTP {error.code}: {raw[:300]}") from None
 
-        # Ошибки OAuth приезжают телом с кодом 400, и различать их обязан вызывающий:
-        # authorization_pending — это не поломка, а «человек ещё не нажал».
+        # OAuth errors arrive in the body with a 400 status, and the caller must tell them
+        # apart: authorization_pending is not a failure, it's "the human hasn't clicked yet".
         parsed["_http_status"] = error.code
         return parsed
 
 
 def discover(issuer: str = ISSUER) -> dict:
-    """Документ обнаружения. Спрашиваем, а не зашиваем: адреса эндпоинтов вендор вправе менять."""
+    """Discovery document. We ask instead of hardcoding: the vendor is free to change endpoint URLs."""
     url = issuer.rstrip("/") + "/.well-known/openid-configuration"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with _opener().open(request, timeout=30.0) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-# ------------------------------------------------------------------------ хранение
+# ------------------------------------------------------------------------ storage
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -136,8 +138,9 @@ def _iso(when: datetime) -> str:
 
 
 def _parse_iso(text: str) -> datetime:
-    # Вендор пишет наносекунды («…33.553355501Z»), а fromisoformat до 3.11 понимает только
-    # микросекунды. Обрезаем дробную часть целиком: точность секунды здесь и не нужна.
+    # The vendor writes nanoseconds ("...33.553355501Z"), and fromisoformat before 3.11 only
+    # understands microseconds. We strip the fractional part entirely: second precision is
+    # all that's needed here anyway.
     text = text.strip().replace("Z", "+00:00")
     if "." in text:
         head, _, tail = text.partition(".")
@@ -153,10 +156,11 @@ def _parse_iso(text: str) -> datetime:
 
 def save_session(path: str, session: dict) -> None:
     """
-    Запись атомарная и с правами 600 ДО того, как в файле появится токен.
+    The write is atomic and mode 600 BEFORE the token ever lands in the file.
 
-    Обычный `open(path, "w")` создал бы файл с 644 и заполнил бы его секретом — окно, в котором
-    любой пользователь этой машины (а их тут несколько) читает refresh-токен.
+    A plain `open(path, "w")` would create the file with mode 644 and then fill it with the
+    secret — a window in which any user on this machine (and there are several) can read the
+    refresh token.
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
@@ -190,8 +194,8 @@ def _session_from_token_response(payload: dict, previous: dict | None = None) ->
     expires_in = int(payload.get("expires_in") or 0)
     expires_at = _utcnow() + timedelta(seconds=expires_in if expires_in > 0 else 3600)
 
-    # Refresh-токен вендор вправе не присылать при обновлении — тогда действует прежний.
-    # Потерять его здесь значит превратить рабочую сессию в шестичасовую.
+    # The vendor is free not to send a refresh token on refresh — the old one then stays in
+    # effect. Losing it here means turning a working session into a six-hour one.
     refresh = payload.get("refresh_token") or (previous or {}).get("refresh_token", "")
 
     session = dict(previous or {})
@@ -209,25 +213,26 @@ def _session_from_token_response(payload: dict, previous: dict | None = None) ->
     return session
 
 
-# -------------------------------------------------------------------- вход по коду
+# -------------------------------------------------------------------- device code login
 
 def _echo(message: str = "") -> None:
     """
-    Печать с немедленным сбросом буфера.
+    Print with an immediate flush.
 
-    Обычный print при перенаправлении в файл буферизуется по 8 КБ, и ссылка с кодом появилась бы
-    в журнале уже после того, как код истёк. Для входа, который надо подтвердить за пятнадцать
-    минут, это разница между «работает» и «не работает никогда».
+    A plain print, when redirected to a file, buffers in 8 KB chunks, and the link with the
+    code would show up in the log only after the code had already expired. For a login that
+    must be confirmed within fifteen minutes, that's the difference between "works" and
+    "never works".
     """
     print(message, flush=True)
 
 
 def device_login(path: str, echo=_echo, timeout_seconds: float = 900.0) -> dict:
     """
-    Полный вход устройством. Печатает ссылку с кодом и ждёт подтверждения человеком.
+    Full device login. Prints the link with the code and waits for human confirmation.
 
-    Возвращает сохранённую сессию. Прежний файл переписывается только после успеха — неудачная
-    попытка входа не должна лишать сервер работающей сессии.
+    Returns the saved session. The previous file is only overwritten after success — a failed
+    login attempt must not deprive the server of a working session.
     """
     config = discover()
     device_endpoint = config["device_authorization_endpoint"]
@@ -273,8 +278,8 @@ def device_login(path: str, echo=_echo, timeout_seconds: float = 900.0) -> dict:
         if not error:
             session = _session_from_token_response(payload)
             if not session.get("refresh_token"):
-                # Без refresh-токена сессия проживёт часы, а не недели, и починить её сможет
-                # только человек у телефона. Молчать об этом нельзя.
+                # Without a refresh token the session lives hours, not weeks, and only a
+                # human at the phone can fix it. This cannot pass silently.
                 echo("  ВНИМАНИЕ: вендор не выдал refresh_token — сессия умрёт с истечением "
                      "access_token. Проверьте, что в scope есть offline_access.")
             save_session(path, session)
@@ -296,7 +301,7 @@ def device_login(path: str, echo=_echo, timeout_seconds: float = 900.0) -> dict:
 
 
 def refresh_session(session: dict) -> dict:
-    """Обновление по refresh-токену. Ротацию токена вендором сохраняем."""
+    """Refresh using the refresh token. We keep whatever token rotation the vendor performs."""
     refresh = session.get("refresh_token")
     if not refresh:
         raise AuthError("в сессии нет refresh_token — нужен повторный вход устройством")
@@ -317,18 +322,19 @@ def refresh_session(session: dict) -> dict:
     return _session_from_token_response(payload, previous=session)
 
 
-# ------------------------------------------------------------------- живой источник
+# ------------------------------------------------------------------- live source
 
 class TokenSource:
     """
-    Действующий access-токен, обновляемый по мере надобности.
+    A live access token, refreshed as needed.
 
-    Обновление под одним замком (single-flight): четыре агента ходят в мост параллельно, и
-    четыре одновременных обновления по одному refresh-токену — это гонка, в которой вендор
-    отзовёт три из четырёх. Проверка «не обновил ли кто-то уже» стоит внутри замка, а не до.
+    Refresh happens under a single lock (single-flight): four agents hit the bridge in
+    parallel, and four simultaneous refreshes on one refresh token is a race in which the
+    vendor revokes three of the four. The "did someone already refresh it" check sits inside
+    the lock, not before it.
 
-    Файл перечитывается по mtime, поэтому `grokauth.py login`, выполненный при живом мосте,
-    подхватывается без перезапуска сервиса.
+    The file is re-read by mtime, so `grokauth.py login`, run while the bridge is alive, is
+    picked up without restarting the service.
     """
 
     def __init__(self, path: str):
@@ -352,7 +358,7 @@ class TokenSource:
         return self._session
 
     def status(self) -> dict:
-        """Что можно показать наружу: сроки и владелец, но не токены."""
+        """What is safe to show outside: expiry and ownership, but never tokens."""
         session = self._read_if_changed()
         expires_at = session.get("expires_at", "")
         left = 0
@@ -385,11 +391,12 @@ class TokenSource:
 
     def force(self) -> str:
         """
-        Обновить немедленно, не спрашивая срок.
+        Refresh immediately, without checking the expiry.
 
-        Нужно ровно для одного случая: вышестоящий ответил 401 при формально живом токене.
-        Такое бывает после отзыва сессии на стороне вендора, и разбираться, кто прав — мы или
-        их часы, — дешевле одним обновлением, чем разбором логов через сутки.
+        Needed for exactly one case: the upstream answered 401 while the token was, on paper,
+        still alive. This happens after the vendor revokes a session on their side, and it's
+        cheaper to settle who's right — us or their clock — with one refresh than by
+        digging through logs a day later.
         """
         with self._lock:
             session = self._read_if_changed()
@@ -407,7 +414,7 @@ class TokenSource:
         return _parse_iso(expires_at) - _utcnow() < timedelta(seconds=REFRESH_MARGIN_SECONDS)
 
 
-# ------------------------------------------------------------------------- командная
+# ------------------------------------------------------------------------- command line
 
 def default_session_path() -> str:
     env = os.environ.get("GROK_BRIDGE_SESSION", "").strip()

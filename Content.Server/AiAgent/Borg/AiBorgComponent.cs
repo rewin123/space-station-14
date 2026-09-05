@@ -2,95 +2,96 @@ using System.Collections.Generic;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Шасси, которое ведёт языковая модель.
+/// Chassis driven by a language model.
 ///
 /// <para>
-/// Маркер плюс настройки конкретного робота. Отдельный компонент, а не флаг в
-/// <c>BorgChassisComponent</c>: тот апстримовый, и править его нельзя, а кроме того «этим боргом
-/// управляет ИИ» — свойство нашего форка, а не игры.
+/// A marker plus per-robot settings. A separate component rather than a flag on
+/// <c>BorgChassisComponent</c>: that one is upstream and must not be touched, and besides, "this borg
+/// is AI-controlled" is a property of our fork, not of the game.
 /// </para>
 /// </summary>
 [RegisterComponent, Access(typeof(AiBorgSystem))]
 public sealed partial class AiBorgComponent : Component
 {
     /// <summary>
-    /// Идентификатор агента: им названы каталог памяти, файл сессии и саймилл.
+    /// The agent identifier: it names the memory directory, the session file, and the simill.
     ///
     /// <para>
-    /// Обязан быть уникальным на сервере. Совпадение с чужим означало бы, что два робота пишут
-    /// диалог в один файл и после рестарта восстанавливают чужую память как свою — ровно та
-    /// поломка, из-за которой идентификатор перестал быть константой.
+    /// Must be unique server-wide. A collision with someone else's would mean two robots writing
+    /// dialogue to the same file, and after a restart each recovering the other's memory as its own —
+    /// exactly the failure that made the identifier stop being a constant.
     /// </para>
     /// <para>
-    /// ПУСТО — законный вариант и единственный, который масштабируется: тогда id выдаётся при
-    /// захвате из <see cref="AgentIdPrefix"/> и номера, а уникальность обеспечивает аллокатор,
-    /// а не внимательность того, кто писал прототип. Заполнять руками стоит только там, где к
-    /// каталогу уже привязаны накопленные данные — как у <c>borg-1</c>.
+    /// EMPTY is a legitimate option and the only one that scales: then the id is assigned on claim
+    /// from <see cref="AgentIdPrefix"/> plus a number, and uniqueness is guaranteed by the allocator
+    /// rather than by the attentiveness of whoever wrote the prototype. Filling it in by hand is
+    /// worthwhile only where accumulated data is already tied to the directory — as with <c>borg-1</c>.
     /// </para>
     /// </summary>
     [DataField]
     public string AgentId = string.Empty;
 
     /// <summary>
-    /// Из чего собирается id, когда <see cref="AgentId"/> пуст: <c>prefix-1</c>, <c>prefix-2</c>…
+    /// What the id is built from when <see cref="AgentId"/> is empty: <c>prefix-1</c>, <c>prefix-2</c>…
     ///
     /// <para>
-    /// Осмысленный префикс здесь не украшение: имя каталога — единственное, по чему в
-    /// <c>ai_data/agents/</c> потом отличают журнал боевого робота от журнала инженерного.
+    /// A meaningful prefix here is not decoration: the directory name is the only way to later tell a
+    /// combat robot's log apart from an engineering robot's log in <c>ai_data/agents/</c>.
     /// </para>
     /// </summary>
     [DataField]
     public string AgentIdPrefix = "borg";
 
     /// <summary>
-    /// Как робота зовут в эфире. Заполняется из <see cref="AgentNames"/> при захвате, если тот
-    /// список не пуст, — так что записанное здесь значение это запасной вариант, а не приговор.
+    /// What the robot is called over the radio. Filled from <see cref="AgentNames"/> on claim if that
+    /// list isn't empty — so the value written here is a fallback, not a verdict.
     /// </summary>
     [DataField]
     public string AgentName = "Сегмент";
 
     /// <summary>
-    /// Имена по номеру тела: первое достаётся <c>prefix-1</c>, второе <c>prefix-2</c> и так далее.
+    /// Names by body number: the first goes to <c>prefix-1</c>, the second to <c>prefix-2</c>, and so on.
     ///
     /// <para>
-    /// Заведено 01.09.2026, когда боевых корпусов стало шесть. Одно имя на всех означало шестерых
-    /// «Клинов» в одном эфире, и это ломало не косметику, а работу: приказ «Клин, иди в бар»
-    /// адресован сразу шестерым, каждый видит его своим, и роботы либо шли толпой, либо
-    /// препирались, кто из них имелся в виду, вместо того чтобы идти. Различать по номеру Si
-    /// не выходило — он выдаётся движком при спавне и в приказах экипажа не звучит.
+    /// Introduced on 2026-09-01, when the number of combat chassis reached six. One name for all of
+    /// them meant six "Klins" on the same channel, and that broke not cosmetics but function: an order
+    /// "Klin, go to the bar" is addressed to all six at once, each sees it as its own, and the robots
+    /// either walked in a crowd or argued about which of them was meant, instead of moving. Telling
+    /// them apart by Si number didn't work either — it's assigned by the engine at spawn and never
+    /// appears in crew orders.
     /// </para>
     /// <para>
-    /// Короче номера — не украшение: имя произносится в рацию каждый ход, и длинное съедает
-    /// и токены, и внимание модели.
+    /// Shorter than a number is not decoration: the name is spoken over the radio every turn, and a
+    /// long one eats both tokens and the model's attention.
     /// </para>
     /// </summary>
     [DataField]
     public List<string> AgentNames = new();
 
-    /// <summary>Файл личности внутри каталога агента.</summary>
+    /// <summary>The personality file inside the agent's directory.</summary>
     [DataField]
     public string SoulFile = "SOUL.md";
 
-    /// <summary>Занимать тело автоматически на старте раунда.</summary>
+    /// <summary>Claim the body automatically at round start.</summary>
     [DataField]
     public bool AutoClaim = true;
 
     /// <summary>
-    /// Своя цепочка профилей модели, пусто — общая <c>ai.llm_chain</c>.
+    /// Its own model profile chain; empty means the shared <c>ai.llm_chain</c>.
     ///
     /// <para>
-    /// Существует не ради гибкости, а ради физики: два агента на одном слоте llama-server
-    /// вытесняют префиксы друг друга и платят полный prefill каждый ход.
+    /// Exists not for flexibility but for physics: two agents on the same llama-server slot evict
+    /// each other's prefixes and pay a full prefill every turn.
     /// </para>
     /// </summary>
     [DataField]
     public string LlmChain = string.Empty;
 
-    /// <summary>Радиоканалы шасси. Должны совпадать с его <c>IntrinsicRadioTransmitter</c>.</summary>
+    /// <summary>The chassis's radio channels. Must match its <c>IntrinsicRadioTransmitter</c>.</summary>
     [DataField]
     public string[] Channels = { "Binary", "Common", "Science", "Engineering" };
 
-    /// <summary>Разум, созданный ради активации шасси. Удаляется вместе с сессией.</summary>
+    /// <summary>The mind created to activate the chassis. Removed together with the session.</summary>
     [ViewVariables]
     public EntityUid? Mind;
 }

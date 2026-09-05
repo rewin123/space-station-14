@@ -67,16 +67,17 @@ public sealed class SessionSnapshot
     public List<string> RecentSpeech { get; set; } = new();
 
     /// <summary>
-    /// Заведённые агентом таймеры. Сроки — раундовые, и это то, что делает их восстановимыми: снимок
-    /// и так принимается только внутри своего раунда (см. проверку round_id), а раундовые часы
-    /// перезапуск сервера переживают — их считает база, а не процесс.
+    /// Timers the agent set up. Deadlines are round-relative, and that is what makes them
+    /// restorable: the snapshot is only ever accepted within its own round anyway (see the round_id
+    /// check), and round-relative clocks survive a server restart — the database counts them, not
+    /// the process.
     /// </summary>
     [JsonPropertyName("timers")]
     public List<TimerDto> Timers { get; set; } = new();
 }
 
-/// <summary>Таймер на диске. Времена в секундах: TimeSpan сериализуется как "00:10:00", и это
-/// формат для человека, а не для дописывания поля со значением по умолчанию.</summary>
+/// <summary>A timer on disk. Times are in seconds: TimeSpan serialises as "00:10:00", and that is
+/// a format for a human, not for appending a field with a default value.</summary>
 public sealed class TimerDto
 {
     [JsonPropertyName("name")]
@@ -88,7 +89,7 @@ public sealed class TimerDto
     [JsonPropertyName("due_seconds")]
     public double DueSeconds { get; set; }
 
-    /// <summary>Ноль — одноразовый.</summary>
+    /// <summary>Zero means one-shot.</summary>
     [JsonPropertyName("every_seconds")]
     public double EverySeconds { get; set; }
 }

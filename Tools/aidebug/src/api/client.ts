@@ -8,11 +8,12 @@ import type {
 } from './types'
 
 /**
- * Ошибка, о которой известно, чем она была.
+ * An error that knows what it was.
  *
- * Различать их обязательно: 401 повторять бессмысленно (токен не станет верным сам), 400 — тоже
- * (это баг клиента), а вот обрыв сети или 5xx — ровно то, ради чего backoff и нужен. Клиент без
- * этой развилки бесконечно долбит сервер неверным токеном и выглядит как «просто не работает».
+ * Distinguishing them matters: retrying a 401 is pointless (the token won't become valid on its
+ * own), same for a 400 (that's a client bug), while a network drop or a 5xx is exactly what
+ * backoff exists for. A client without this branch hammers the server forever with a bad token
+ * and looks like it "just doesn't work".
  */
 export class ApiError extends Error {
   constructor(
@@ -23,21 +24,21 @@ export class ApiError extends Error {
     this.name = 'ApiError'
   }
 
-  /** Повторять нет смысла: ответ не изменится, пока не изменится запрос или токен. */
+  /** No point retrying: the response won't change until the request or the token does. */
   get terminal(): boolean {
     return this.status === 401 || this.status === 400 || this.status === 404
   }
 }
 
 /**
- * Сколько ждём ответа, прежде чем счесть сервер мёртвым.
+ * How long we wait for a response before deciding the server is dead.
  *
- * СТРОГО больше серверного PollTimeout (25с), и это не запас на всякий случай.
- * `AgentDebugServer.HandleAsync` передаёт роутеру токен ОСТАНОВКИ СЕРВЕРА, а не запроса, и
- * `HttpListener` не сообщает об отключении клиента. Оборванный запрос остаётся припаркованным
- * внутри `ReadAsync` все оставшиеся секунды и продолжает держать один из шестнадцати слотов.
- * Таймаут в две секунды — это тринадцать занятых слотов на вкладку, а при исчерпании блокируется
- * сам цикл приёма: /state и /command перестают отвечать для всех.
+ * STRICTLY greater than the server's PollTimeout (25s), and that's not a margin for safety's
+ * sake. `AgentDebugServer.HandleAsync` passes the router a SERVER SHUTDOWN token, not a request
+ * one, and `HttpListener` doesn't report client disconnects. An aborted request stays parked
+ * inside `ReadAsync` for all the remaining seconds and keeps holding one of the sixteen slots.
+ * A two-second timeout would mean thirteen occupied slots per tab, and once they're exhausted the
+ * accept loop itself locks up: /state and /command stop responding for everyone.
  */
 const DEAD_SERVER_MS = 35_000
 
@@ -55,7 +56,7 @@ async function request<T>(
   const timer = new AbortController()
   const timeout = setTimeout(() => timer.abort(), DEAD_SERVER_MS)
 
-  // Внешний signal (размонтирование, смена поколения) и наш таймаут — оба обрывают запрос.
+  // The external signal (unmount, generation change) and our own timeout both abort the request.
   const signals = signal ? AbortSignal.any([signal, timer.signal]) : timer.signal
 
   try {
@@ -63,30 +64,32 @@ async function request<T>(
       ...init,
       signal: signals,
       headers: {
-        // Пустой токен — не шлём заголовок совсем. За обратным прокси его подставляет сам
-        // прокси, и страница о нём не знает; посылать `Bearer ` пустой строкой было бы просто
-        // мусором в запросе.
+        // An empty token means we don't send the header at all. Behind a reverse proxy the
+        // proxy supplies it itself, and the page doesn't know about it; sending `Bearer ` with
+        // an empty string would just be junk in the request.
         ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
         ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...init.headers,
       },
-      // 'same-origin' — и ровно оно, не 'omit' и не 'include'.
+      // 'same-origin' — and exactly that, not 'omit' and not 'include'.
       //
-      // 'include' сломал бы разработку: Allow-Credentials несовместим с `*` в Allow-Origin,
-      // который ставит отладочный сервер, и каждый кросс-ориджинный запрос упал бы с невнятной
-      // ошибкой про wildcard.
+      // 'include' would break development: Allow-Credentials is incompatible with the `*` in
+      // Allow-Origin that the debug server sets, and every cross-origin request would fail with
+      // a cryptic wildcard error.
       //
-      // 'omit' ломает прод, и это было здесь написано. За обратным прокси страница и API лежат
-      // на одном origin, а доступ закрыт basic-auth; браузер приложил бы креды сам, но 'omit'
-      // их срезает — и до игрового сервера запрос не доходит вовсе. Наружу это выглядит как
-      // «неверный токен», хотя 401 отдал прокси.
+      // 'omit' breaks prod, and that was written here from experience. Behind a reverse proxy
+      // the page and the API sit on the same origin, but access is gated by basic-auth; the
+      // browser would attach the credentials itself, but 'omit' strips them — and the request
+      // never reaches the game server at all. From the outside this looks like "wrong token",
+      // even though it was the proxy that returned the 401.
       //
-      // 'same-origin' даёт оба поведения разом: свой origin получает креды, чужой — нет.
+      // 'same-origin' gives both behaviors at once: its own origin gets credentials, another
+      // origin doesn't.
       credentials: 'same-origin',
 
-      // Пояс поверх подтяжек: сервер шлёт no-store, но /events — это повторяющийся GET с
-      // одинаковым URL, пока курсор не сдвинулся, и цена ошибки здесь — намертво замерший
-      // интерфейс. Пусть браузер не имеет и теоретической возможности ответить из кэша.
+      // Belt and suspenders: the server sends no-store, but /events is a repeating GET with the
+      // same URL as long as the cursor hasn't moved, and the cost of a mistake here is a frozen
+      // UI. Let the browser not even have the theoretical possibility of answering from cache.
       cache: 'no-store',
     })
 
@@ -97,9 +100,10 @@ async function request<T>(
       try {
         detail = (JSON.parse(text) as { error?: string }).error ?? text
       } catch {
-        // Не JSON — значит отвечал не наш сервер, а что-то по дороге (обратный прокси, шлюз).
-        // Вываливать его HTML-страницу в интерфейс бессмысленно: там сотня строк разметки и
-        // ни одного слова о причине. Говорим, КТО отказал, — это и есть полезная часть.
+        // Not JSON — meaning it wasn't our server that answered, but something along the way
+        // (a reverse proxy, a gateway). Dumping its HTML page into the UI is pointless: it's a
+        // hundred lines of markup and not a word about the cause. Saying WHO failed is the
+        // useful part.
         detail = `${response.statusText || 'ошибка'} — ответил не отладочный сервер, а посредник`
       }
       throw new ApiError(response.status, detail || response.statusText)
@@ -120,10 +124,11 @@ export function getState(endpoint: Endpoint, signal?: AbortSignal): Promise<Agen
 }
 
 /**
- * Снимок одного агента.
+ * A single agent's snapshot.
  *
- * Неизвестный агент приходит как `{agent: null}` со статусом 200 — обрабатывать это надо как
- * «слайс опустел», а не как ошибку: 404 здесь терминален и остановил бы петлю навсегда.
+ * An unknown agent comes back as `{agent: null}` with status 200 — that must be handled as
+ * "the slice went empty", not as an error: a 404 here would be terminal and would stop the loop
+ * forever.
  */
 export function getSession(
   endpoint: Endpoint,
@@ -135,9 +140,9 @@ export function getSession(
 }
 
 /**
- * Долгий опрос: сервер держит ответ до 25 секунд, если ничего не произошло.
+ * Long polling: the server holds the response for up to 25 seconds if nothing happened.
  *
- * Пустой список по истечении — нормальный ответ, а не деградация.
+ * An empty list once it times out is a normal response, not a degradation.
  */
 export function getEvents(
   endpoint: Endpoint,
@@ -150,11 +155,12 @@ export function getEvents(
 }
 
 /**
- * Команда агенту.
+ * A command to the agent.
  *
- * Вызывающий обязан быть single-flight и НИКОГДА не повторять автоматически: `AgentInbox.Enqueue`
- * склеивает два сообщения через перевод строки вместо того, чтобы отвергнуть второе, а ключа
- * идемпотентности на проводе нет. Повтор успевшего запроса даст одно сообщение с текстом дважды.
+ * The caller must be single-flight and NEVER retry it automatically: `AgentInbox.Enqueue` glues
+ * two messages together with a newline instead of rejecting the second one, and there is no
+ * idempotency key on the wire. Retrying a request that already succeeded produces one message
+ * with the text doubled.
  */
 export function postCommand(
   endpoint: Endpoint,

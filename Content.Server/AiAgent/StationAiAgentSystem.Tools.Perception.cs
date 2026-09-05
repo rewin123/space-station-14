@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Tools;
 using Content.Shared.Access.Components;
 using Content.Shared.Pinpointer;
@@ -35,9 +36,10 @@ public sealed partial class StationAiAgentSystem
         TryGetString(args, "near", out var near);
         TryGetString(args, "kind", out var kind);
 
-        // Обзор идёт СРЕЗАМИ, а не одним вызовом. Разбор — у OnMainSlicedAsync и у SlicedView;
-        // коротко: теневой каст это три четверти времени look и целый кадр сервера, а в режиме
-        // Lua скрипт зовёт look в цикле, и ограничитель в виде круга через модель исчез.
+        // The view runs in SLICES, not one call. The breakdown lives in OnMainSlicedAsync and
+        // SlicedView; in short: the shadow-cast is three quarters of look's time and a whole server
+        // frame, and in Lua mode a script calls look in a loop, so the throttle of going through the
+        // model on every call is gone.
         var profile = new LookProfile();
         ViewPass? pass = null;
         string? failure = null;
@@ -53,8 +55,9 @@ public sealed partial class StationAiAgentSystem
 
                 var done = pass.View.Step(budget);
 
-                // Не настенные часы: нарезанный обзор живёт секунду, а главный поток занимает
-                // двадцать миллисекунд. Считать секундомером снаружи — объявить починку регрессией.
+                // Not a wall clock: a sliced view lives for a second while the main thread only
+                // occupies twenty milliseconds of it. Timing it with an outside stopwatch would be
+                // declaring the fix a regression.
                 if (done)
                     pass.ViewMs = pass.View.BusyMs;
 
@@ -74,9 +77,10 @@ public sealed partial class StationAiAgentSystem
             // LISTING, not here: an anchor named by the crew may well be of a different kind than
             // the things being asked about ("какие двери рядом с Иваном").
             //
-            // Вид считается ОДИН раз на сущность и едет рядом с ней. Раньше KindOf звался до трёх
-            // раз: `Handles.GetOrCreate(uid, KindOf(uid))` вычисляет аргумент всегда, даже когда
-            // хендл уже есть и метод сразу выходит, — а это цепочка из тринадцати HasComp.
+            // The kind is computed ONCE per entity and travels alongside it. KindOf used to be
+            // called up to three times: `Handles.GetOrCreate(uid, KindOf(uid))` always evaluates the
+            // argument, even when the handle already exists and the method returns immediately — and
+            // that's a chain of thirteen HasComp calls.
             var interesting = new List<(EntityUid Uid, string Kind)>(seen.Count);
             foreach (var uid in seen)
             {
@@ -106,16 +110,16 @@ public sealed partial class StationAiAgentSystem
             var originUid = anchor ?? eye;
             var origin = _xform.GetMapCoordinates(originUid).Position;
 
-            // Отбор и отсечка ДО построчной работы.
+            // Selection and cutoff BEFORE the per-row work.
             //
-            // `ai.look_limit` (300) применялся в самом конце, к уже построенному списку: при
-            // expand=3 на живой станции строилось ~2290 строк, и 85% из них выбрасывалось
-            // немедленно. Каждая выброшенная стоила `ShortState` (а он для большинства сущностей
-            // сваливается в `_power.IsPowered`, то есть в опрос энергосети), `Identity.Name` и
-            // сборки строки — всё это на главном потоке, внутри тика.
+            // `ai.look_limit` (300) used to be applied at the very end, on an already-built list: at
+            // expand=3 on a live station this built ~2290 lines, 85% of which were discarded
+            // immediately. Every discarded one had already paid for `ShortState` (which for most
+            // entities falls through to `_power.IsPowered`, i.e. a power-grid query), `Identity.Name`
+            // and building the string — all of it on the main thread, inside the tick.
             //
-            // Дистанция считается по позиции, а позиция берётся одним обходом трансформа, поэтому
-            // отсортировать и обрезать можно ДО того, как платить за состояние и имена.
+            // Distance is computed from position, and position comes from a single transform lookup,
+            // so sorting and trimming can happen BEFORE paying for state and names.
             var candidates = new List<(EntityUid Uid, string Kind, Vector2 Pos, float Dist)>(interesting.Count);
 
             foreach (var (uid, kindOf) in interesting)
@@ -123,9 +127,9 @@ public sealed partial class StationAiAgentSystem
                 if (uid == anchor)
                     continue;
 
-                // Фильтр по виду — ДО построчной работы, а не после неё. Раньше `look {"kind":"door"}`
-                // платил полную цену за все шестьсот сущностей в поле зрения, чтобы напечатать
-                // двадцать девять дверей.
+                // Filtering by kind happens BEFORE the per-row work, not after it. Previously
+                // `look {"kind":"door"}` paid the full price for all six hundred entities in view
+                // just to print twenty-nine doors.
                 if (!string.IsNullOrWhiteSpace(kind)
                     && !string.Equals(kindOf, kind, StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -134,18 +138,19 @@ public sealed partial class StationAiAgentSystem
                 candidates.Add((uid, kindOf, pos, (pos - origin).Length()));
             }
 
-            // Полное число — до отсечки. Оно уезжает в ответ как `count` и решает, печатать ли
-            // предупреждение об обрезке; посчитать его по обрезанному списку значило бы соврать
-            // ровно в том месте, ради которого предупреждение и заведено.
+            // The total count is taken before the cutoff. It goes into the response as `count` and
+            // decides whether to print the truncation warning; computing it from the trimmed list
+            // would mean lying at exactly the spot the warning exists to cover.
             var total = candidates.Count;
             var limit = _cfg.GetCVar(AiCVars.LookLimit);
 
-            // Ничьи разводятся по uid, а НЕ по тексту строки, которого здесь ещё нет.
+            // Ties are broken by uid, NOT by the row text, which doesn't exist yet at this point.
             //
-            // Итоговая выдача ниже по-прежнему сортируется по (дистанция, текст) — это требование
-            // префикс-кэша, см. комментарий там. Но отсечка обязана быть детерминированной сама по
-            // себе, иначе порядок обхода broadphase решал бы, кто попал в трёхсотку, и одинаковые
-            // состояния мира давали бы разные ответы. uid от порядка обхода не зависит.
+            // The final output below is still sorted by (distance, text) — that's a prefix-cache
+            // requirement, see the comment there. But the cutoff itself must be deterministic on its
+            // own terms, otherwise broadphase's traversal order would decide who makes it into the
+            // top three hundred, and identical world states would produce different answers. uid
+            // doesn't depend on traversal order.
             if (total > limit)
             {
                 candidates.Sort((a, b) => a.Dist != b.Dist
@@ -163,10 +168,10 @@ public sealed partial class StationAiAgentSystem
 
                 var state = ShortState(uid);
 
-                // Второй HasComp<MobStateComponent> тут не нужен: вид уже это знает — KindOf
-                // ставит "crew" ровно по наличию этого компонента и ставит его первым.
+                // No need for a second HasComp<MobStateComponent> here: the kind already knows —
+                // KindOf sets "crew" precisely based on this component's presence, and checks it first.
                 if (kindOf == "crew")
-                    state += $", смотрит на {FacingRu(uid)}";
+                    state += s.Locale.T($", смотрит на {FacingWord(uid, s.Locale)}", $", facing {FacingWord(uid, s.Locale)}");
 
                 // Say which of these the AI can actually operate.
                 //
@@ -176,7 +181,7 @@ public sealed partial class StationAiAgentSystem
                 // touch. A player sees this instantly — the radial menu either appears or it does
                 // not — so making the model probe for it was a handicap, not parity.
                 if (TryComp<StationAiWhitelistComponent>(uid, out var aiWire))
-                    state += aiWire.Enabled ? ", управляю" : ", провод перерезан";
+                    state += aiWire.Enabled ? $", {s.Locale.Controlling}" : $", {s.Locale.WireCut}";
 
                 // Same shape whether the listing is measured from a person or from the eye: the
                 // offset answers "which one", the absolute pair feeds move_camera.
@@ -193,8 +198,9 @@ public sealed partial class StationAiAgentSystem
                 ? a.Dist.CompareTo(b.Dist)
                 : string.CompareOrdinal(a.Text, b.Text));
 
-            // Обрезка уже произошла выше, по расстоянию: ближнее остаётся, дальнее уходит — чтобы
-            // из ответа выпадал дальний угол комнаты, а не то, что стоит рядом со спросившим.
+            // The cutoff already happened above, by distance: the near stays, the far goes — so
+            // what drops out of the answer is the far corner of the room, not what's standing right
+            // next to whoever asked.
             var result = new Dictionary<string, object?>
             {
                 ["count"] = total,
@@ -206,26 +212,33 @@ public sealed partial class StationAiAgentSystem
             // short, say so out loud and say what to do about it.
             if (total > limit)
             {
-                result["обрезано"] = total - limit;
+                result[s.Locale.Truncated] = total - limit;
 
                 // The old advice led with "expand поменьше", which is impossible: expand defaults to
                 // 0, its minimum, so in the overwhelmingly common case the first remedy offered
                 // could not be taken. The kind filter is the one that actually works.
-                result["как_увидеть_остальное"] =
+                result[s.Locale.HowToSeeRest] = s.Locale.T(
                     "список обрезан по расстоянию, дальнее не показано. Сузь его: " +
                     "look {\"kind\":\"door\"} покажет только двери, look {\"near\":\"<имя>\"} — то, " +
-                    "что вокруг человека. Либо переведи глаз ближе к цели";
+                    "что вокруг человека. Либо переведи глаз ближе к цели",
+                    "the list was cut by distance, the far end is not shown. Narrow it: " +
+                    "look {\"kind\":\"door\"} shows only doors, look {\"near\":\"<name>\"} — what " +
+                    "is around a person. Or move the eye closer to the target");
             }
 
             if (anchor != null)
             {
                 result["near"] = Identity.Name(anchor.Value, EntityManager);
                 result["near_handle"] = s.Handles.GetOrCreate(anchor.Value, KindOf(anchor.Value));
-                result["near_facing"] = FacingRu(anchor.Value);
-                result["note"] =
+                result["near_facing"] = FacingWord(anchor.Value, s.Locale);
+                result["note"] = s.Locale.T(
                     "Δ отсчитана ОТ него. Список отсортирован от ближнего, «дверь рядом со мной» — " +
                     "первая строка. В одном проёме часто стоят две створки, шлюз и файрлок, с " +
-                    "одинаковой Δ: не прошёл после открытия — открывай вторую, а не ищи другую дверь";
+                    "одинаковой Δ: не прошёл после открытия — открывай вторую, а не ищи другую дверь",
+                    "Δ is measured FROM them. The list is nearest-first, \"the door next to me\" is " +
+                    "the first line. One opening often has two leaves, an airlock and a firelock, " +
+                    "with the same Δ: if they did not get through after opening — open the second, " +
+                    "do not look for a different door");
             }
 
             profile.RowsMs = Stopwatch.GetElapsedTime(rowsStart).TotalMilliseconds;
@@ -237,18 +250,19 @@ public sealed partial class StationAiAgentSystem
         }, ct, TimeSpan.FromSeconds(10));
     }
 
-    /// <summary>Профиль последнего обзора. Только для тестов и консоли — на решения не влияет.</summary>
+    /// <summary>Profile of the last view. For tests and the console only — doesn't influence any decisions.</summary>
     private LookProfile _lastLook;
 
     /// <summary>
-    /// Сказать, куда ушло время, если его ушло много.
+    /// Say where the time went, if a lot of it went somewhere.
     ///
-    /// Предупреждение диспетчера называет операцию, но не фазу, а без фазы «look 496 мс» одинаково
-    /// хорошо объясняется и стенами, и содержимым чужих рюкзаков — притом что чинить это разные
-    /// вещи. Отдельная строка стоит трёх обращений к таймеру и снимает весь спор.
+    /// The dispatcher's warning names the operation but not the phase, and without the phase, "look
+    /// 496 ms" is equally well explained by walls or by the contents of other people's backpacks —
+    /// even though fixing those is different work. A separate line costs three timer calls and ends
+    /// the whole argument.
     ///
-    /// Порог тот же, что у диспетчера: две строки об одном событии должны появляться вместе, иначе
-    /// в журнале заводится «предупреждение без объяснения» и наоборот.
+    /// The threshold is the same as the dispatcher's: two lines about one event must show up
+    /// together, otherwise the log ends up with "a warning with no explanation" or the reverse.
     /// </summary>
     private void ReportLookCost(int expand, LookProfile p)
     {
@@ -281,8 +295,9 @@ public sealed partial class StationAiAgentSystem
         found = default;
         failure = null;
 
-        // Список приходит полным, ДО фильтра по kind, и это не оплошность: анкер может быть
-        // другого вида, чем то, о чём спрашивают («какие двери рядом с Иваном» — Иван не дверь).
+        // The list arrives whole, BEFORE the kind filter, and that's not an oversight: the anchor can
+        // be of a different kind than what's being asked about ("what doors are near Ivan" — Ivan is
+        // not a door).
         if (s.Handles.TryResolve(query, out var byHandle) && visible.Any(v => v.Uid == byHandle))
         {
             found = byHandle;
@@ -382,47 +397,60 @@ public sealed partial class StationAiAgentSystem
                 var dist = (pos - origin).Length();
 
                 rows.Add((dist, string.Create(CultureInfo.InvariantCulture,
-                    $"{beacon.Text} | ({pos.X:F0},{pos.Y:F0}) | {BearingFrom(origin, pos)}")));
+                    $"{beacon.Text} | ({pos.X:F0},{pos.Y:F0}) | {BearingFrom(origin, pos, s.Locale)}")));
             }
 
             rows.Sort((a, b) => a.Dist != b.Dist
                 ? a.Dist.CompareTo(b.Dist)
                 : string.CompareOrdinal(a.Text, b.Text));
 
+            var originCoords = string.Create(CultureInfo.InvariantCulture, $"{cx:F0},{cy:F0}");
             var d = new Dictionary<string, object?>
             {
                 ["note"] = haveX && haveY
-                    ? string.Create(CultureInfo.InvariantCulture,
-                        $"направления и расстояния отсчитаны от точки ({cx:F0},{cy:F0}); координаты идут в move_camera {{x,y}}")
-                    : "направления и расстояния — от ТВОЕГО глаза, не от собеседника. Чтобы узнать, " +
-                      "что рядом с человеком, передай сюда его координаты: map {\"x\":…,\"y\":…}. " +
-                      "Координаты идут в move_camera {x,y}",
+                    ? s.Locale.T(
+                        $"направления и расстояния отсчитаны от точки ({originCoords}); координаты идут в move_camera {{x,y}}",
+                        $"directions and distances are from point ({originCoords}); coordinates go into move_camera {{x,y}}")
+                    : s.Locale.T(
+                        "направления и расстояния — от ТВОЕГО глаза, не от собеседника. Чтобы узнать, " +
+                        "что рядом с человеком, передай сюда его координаты: map {\"x\":…,\"y\":…}. " +
+                        "Координаты идут в move_camera {x,y}",
+                        "directions and distances are from YOUR eye, not from the speaker. To see " +
+                        "what is next to a person, pass their coordinates: map {\"x\":…,\"y\":…}. " +
+                        "Coordinates go into move_camera {x,y}"),
             };
 
             AddRows(d, "places", rows.Select(r => r.Text).ToList(), 80,
-                "карта обрезана. Сузь её: map {\"query\":\"<часть названия>\"} — подписи английские");
+                s.Locale.T(
+                    "карта обрезана. Сузь её: map {\"query\":\"<часть названия>\"} — подписи английские",
+                    "map was cut. Narrow it: map {\"query\":\"<part of the name>\"} — labels are English"),
+                s.Locale);
 
             if (rows.Count == 0 && !string.IsNullOrWhiteSpace(query))
-                d["note"] = $"по запросу '{query}' ничего нет — вызови map без query, чтобы увидеть все места";
+                d["note"] = s.Locale.T(
+                    $"по запросу '{query}' ничего нет — вызови map без query, чтобы увидеть все места",
+                    $"nothing for query '{query}' — call map without query to see every place");
 
             return ToolResult.Success(d);
         }, ct);
     }
 
     /// <summary>Nearest named place to an entity, for the SELF line.</summary>
-    private string PlaceAt(EntityUid uid)
+    private string PlaceAt(EntityUid uid, AgentLocale? loc = null)
     {
+        loc ??= AgentLocale.Ru;
         return _navMap.TryGetNearestBeacon(uid, out var beacon, out _) && beacon != null
             ? beacon.Value.Comp.Text ?? Name(beacon.Value.Owner)
-            : "неизвестно";
+            : loc.UnknownPlace;
     }
 
     /// <summary>Nearest named place to a bare position — for people the AI locates by coordinates.</summary>
-    private string PlaceNear(MapCoordinates coords)
+    private string PlaceNear(MapCoordinates coords, AgentLocale? loc = null)
     {
+        loc ??= AgentLocale.Ru;
         return _navMap.TryGetNearestBeacon(coords, out var beacon, out _) && beacon != null
             ? beacon.Value.Comp.Text ?? Name(beacon.Value.Owner)
-            : "неизвестно";
+            : loc.UnknownPlace;
     }
 
     /// <summary>
@@ -514,9 +542,9 @@ public sealed partial class StationAiAgentSystem
             // Whether the AI's own control wire has been cut is genuinely useful and genuinely
             // knowable: vanilla shows it on the airlock's wire panel indicator.
             if (TryComp<StationAiWhitelistComponent>(uid, out var whitelist))
-                d["ai_control"] = whitelist.Enabled ? "есть" : "провод перерезан";
+                d["ai_control"] = whitelist.Enabled ? s.Locale.T("есть", "yes") : s.Locale.WireCut;
             else
-                d["ai_control"] = "нет";
+                d["ai_control"] = s.Locale.No;
 
             // Handles live for the whole shift, and this used to report live bolt, breaker, charge
             // and pressure readings for anything the AI had ever laid eyes on — from the other end
@@ -526,9 +554,12 @@ public sealed partial class StationAiAgentSystem
             // done with it costs nothing and refusing burns a turn — but the live readings go.
             if (!visible)
             {
-                d["устарело"] = "сейчас ты этого не видишь ни одной камерой — текущее состояние " +
-                                "неизвестно, это только то, что ты знал раньше. Наведи камеру, " +
-                                "если состояние важно";
+                d[s.Locale.Stale] = s.Locale.T(
+                    "сейчас ты этого не видишь ни одной камерой — текущее состояние " +
+                    "неизвестно, это только то, что ты знал раньше. Наведи камеру, " +
+                    "если состояние важно",
+                    "no camera can see this right now — the current state is unknown, " +
+                    "this is only what you knew earlier. Point a camera if the state matters");
                 d["actions"] = AvailableActions(uid);
                 AddAccessInfo(s, args, uid, d);
                 return ToolResult.Success(d);
@@ -821,7 +852,10 @@ public sealed partial class StationAiAgentSystem
             };
 
             AddRows(d, "crew", rows, 60,
-                "список обрезан. Сузь его: crew_status {\"filter\":\"<имя, должность или отдел>\"}");
+                s.Locale.T(
+                    "список обрезан. Сузь его: crew_status {\"filter\":\"<имя, должность или отдел>\"}",
+                    "list was cut. Narrow it: crew_status {\"filter\":\"<name, job or department>\"}"),
+                s.Locale);
 
             return ToolResult.Success(d);
         }, ct);
@@ -843,7 +877,8 @@ public sealed partial class StationAiAgentSystem
         string key,
         List<string> rows,
         int limit,
-        string howToNarrow)
+        string howToNarrow,
+        AgentLocale loc)
     {
         d["count"] = rows.Count;
         d[key] = rows.Take(limit).ToList();
@@ -851,8 +886,8 @@ public sealed partial class StationAiAgentSystem
         if (rows.Count <= limit)
             return;
 
-        d["обрезано"] = rows.Count - limit;
-        d["как_увидеть_остальное"] = howToNarrow;
+        d[loc.Truncated] = rows.Count - limit;
+        d[loc.HowToSeeRest] = howToNarrow;
     }
 
     // ------------------------------------------------------------------- identify
@@ -950,7 +985,10 @@ public sealed partial class StationAiAgentSystem
 
             var d = new Dictionary<string, object?>();
             AddRows(d, "records", rows, 60,
-                "список обрезан. Сузь его: records {\"query\":\"<имя или должность>\"}");
+                s.Locale.T(
+                    "список обрезан. Сузь его: records {\"query\":\"<имя или должность>\"}",
+                    "list was cut. Narrow it: records {\"query\":\"<name or job>\"}"),
+                s.Locale);
 
             return ToolResult.Success(d);
         }, ct);
@@ -992,10 +1030,10 @@ public sealed partial class StationAiAgentSystem
             var station = _station.GetOwningStation(s.Brain);
             if (station != null)
             {
-                // Как станция называется. Экипаж зовёт её по имени постоянно — в объявлениях, по
-                // рации, в позывных Центрального командования, — а узнать его агенту было неоткуда
-                // ни одним инструментом. Он мог отработать всю смену, ни разу не поняв, что «Аксиома»
-                // это то место, где он находится.
+                // The station's name. The crew calls it by name constantly — in announcements, over
+                // the radio, in Central Command's callsigns — and there was no tool that let the
+                // agent learn it. It could work an entire shift without ever realizing that
+                // "Axiom" was the place it was standing in.
                 d["station"] = Name(station.Value);
 
                 if (TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))

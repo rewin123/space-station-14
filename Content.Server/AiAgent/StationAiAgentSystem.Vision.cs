@@ -20,42 +20,43 @@ using Robust.Shared.Physics;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Куда ушло время у look.
+/// Where look's time actually goes.
 ///
-/// «look тормозит» — не диагноз. Между теневым кастом апстрима и сбором сущностей разница в два
-/// порядка, и без разбивки спор о том, что чинить, решается рассуждением, а не числом. Живой
-/// сервер за сутки дал 111 вызовов и 111 перерасходов бюджета, медиану 98 мс и максимум 1908 —
-/// но не сказал ни слова о том, где именно они потрачены.
+/// "look is slow" is not a diagnosis. There's a two-order-of-magnitude gap between upstream's
+/// shadow-cast and gathering entities, and without a breakdown, the argument about what to fix is
+/// settled by reasoning rather than by a number. A live server gave 111 calls and 111 budget
+/// overruns in a day, a median of 98 ms and a max of 1908 — but said not a word about where exactly
+/// that time went.
 ///
-/// <see cref="Queries"/> стоит здесь не ради времени. Это счётчик походов в broadphase, и он
-/// обязан быть равен единице независимо от того, сколько тайлов вернул обзор. Именно его стережёт
-/// тест: миллисекунды на сборочной машине меряют железо и шумят, а единица меряет алгоритм и не
-/// шумит вовсе.
+/// <see cref="Queries"/> is here for reasons other than timing. It's a counter of trips into
+/// broadphase, and it must equal one no matter how many tiles the view returned. This is the one the
+/// test guards: milliseconds on the build machine measure the hardware and are noisy, while the
+/// count of one measures the algorithm and isn't noisy at all.
 /// </summary>
 internal struct LookProfile
 {
-    /// <summary>Фаза A1: теневой каст апстрима, <c>StationAiVisionSystem.GetView</c>.</summary>
+    /// <summary>Phase A1: upstream's shadow-cast, <c>StationAiVisionSystem.GetView</c>.</summary>
     public double ViewMs;
 
-    /// <summary>Фаза A2: превращение тайлов в сущности.</summary>
+    /// <summary>Phase A2: turning tiles into entities.</summary>
     public double GatherMs;
 
-    /// <summary>Фазы B..E: отсев, хендлы, построение строк, сортировка.</summary>
+    /// <summary>Phases B..E: filtering, handles, building the lines, sorting.</summary>
     public double RowsMs;
 
-    /// <summary>Сколько видимых тайлов вернул обзор.</summary>
+    /// <summary>How many visible tiles the view returned.</summary>
     public int Tiles;
 
-    /// <summary>Сколько сущностей отдал broadphase до отсева.</summary>
+    /// <summary>How many entities broadphase handed back before filtering.</summary>
     public int Candidates;
 
-    /// <summary>Сколько пережило <c>IsOnScreen</c> и проверку попадания в видимый тайл.</summary>
+    /// <summary>How many survived <c>IsOnScreen</c> and the visible-tile membership check.</summary>
     public int OnScreen;
 
-    /// <summary>Сколько строк ушло модели.</summary>
+    /// <summary>How many lines went to the model.</summary>
     public int Rows;
 
-    /// <summary>Походов в broadphase. Инвариант быстрого пути: 1.</summary>
+    /// <summary>Trips into broadphase. Invariant for the fast path: 1.</summary>
     public int Queries;
 }
 
@@ -65,22 +66,22 @@ internal struct LookProfile
 public sealed partial class StationAiAgentSystem
 {
     /// <summary>
-    /// Переиспользуемый буфер кандидатов.
+    /// A reusable candidate buffer.
     ///
-    /// Не свежий <c>HashSet</c> на вызов: обзор строится только на главном потоке и только из
-    /// <c>LookAsync</c>, реентрантности нет по построению. На большой станции здесь бывает под
-    /// тысячу сущностей, и выбрасывать их вместе с набором на каждый вызов — это отдавать GC
-    /// работу, которой можно не быть.
+    /// Not a fresh <c>HashSet</c> per call: the view is only ever built on the main thread and only
+    /// from <c>LookAsync</c>, so there's no reentrancy by construction. On a big station this can
+    /// hold close to a thousand entities, and throwing them away along with the set on every call
+    /// means handing the GC work it doesn't need to do.
     /// </summary>
     private readonly HashSet<EntityUid> _lookCandidates = new();
 
     /// <summary>
-    /// Сколько тайлов вширь и ввысь мы готовы обойти ради одной многотайловой сущности.
+    /// How many tiles wide and tall we're willing to scan for the sake of one multi-tile entity.
     ///
-    /// Потолок, а не размер: реальные машины на станции занимают один-два тайла, три — это
-    /// сингулярность с её полем. Восемь взято с запасом на порядок. Если что-то не влезло, лучше
-    /// отдать промах, чем на одной сущности просканировать полстанции и вернуть тик к тому, из-за
-    /// чего всё это затевалось.
+    /// A ceiling, not a typical size: real machines on the station take up one or two tiles, three
+    /// is the singularity with its field. Eight was picked with an order of magnitude of headroom.
+    /// If something doesn't fit, it's better to give up on it than to scan half the station for one
+    /// entity and drag the tick right back to the thing this whole exercise was meant to fix.
     /// </summary>
     private const int MaxSpanTiles = 8;
 
@@ -94,19 +95,20 @@ public sealed partial class StationAiAgentSystem
     /// which happens to accept exactly a set of grid indices — so the two composed into a single
     /// bridge with no approximation in between.
     ///
-    /// Композиция была красивой и стоила секунды тика. Почему — подробно в
-    /// <see cref="GatherByBounds"/>; коротко: тот перегруз обещает в комментарии «Faster than
-    /// doing each tile individually» и буквально делает каждый тайл отдельно, а на каждом из них
-    /// заново обходит весь уже накопленный набор.
+    /// The composition looked elegant and cost a second of the tick. Why, in detail, is in
+    /// <see cref="GatherByBounds"/>; in short: that overload's own comment promises "Faster than
+    /// doing each tile individually" and then literally does each tile individually, re-walking the
+    /// entire accumulated set on each one.
     ///
     /// Runs on the main thread inside the tick, and <c>GetView</c> carries an upstream comment
     /// reading "yes this is expensive. Yes it needs optimising", so callers are rate-limited by
     /// the agent's tick rather than being free to spam it.
     /// </summary>
     /// <param name="fastOverride">
-    /// Заставить конкретный путь сбора вместо того, что велит <see cref="AiCVars.LookFast"/>.
-    /// Только для теста эквивалентности: ему нужно прогнать оба пути в ОДНОМ кадре, иначе он
-    /// сравнивает две разные секунды жизни станции и ловит не геометрию, а чьи-то шаги.
+    /// Force a specific gathering path instead of whatever <see cref="AiCVars.LookFast"/> dictates.
+    /// Only for the equivalence test: it needs to run both paths within ONE frame, otherwise it's
+    /// comparing two different seconds of the station's life and catching someone's footsteps
+    /// instead of geometry.
     /// </param>
     private List<EntityUid> GetVisibleEntities(
         EntityUid brain,
@@ -167,12 +169,13 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Проход обзора, растянутый на несколько кадров.
+    /// A view pass stretched over several frames.
     ///
-    /// Держит то, что посчитано один раз на старте (глаз, сетка, ядро) и переживает срезы вместе с
-    /// самим <see cref="SlicedView"/>. Отдельным объектом, а не полями системы, потому что проходов
-    /// в полёте может быть несколько: у каждого агента свой, и складывать их в систему значило бы
-    /// поймать чужие тайлы при <c>ai.max_agents &gt; 1</c>.
+    /// Holds what's computed once at the start (the eye, the grid, the core) and survives the slices
+    /// together with the <see cref="SlicedView"/> itself. It's its own object rather than fields on
+    /// the system because there can be several passes in flight at once: each agent has its own, and
+    /// stashing them on the system would mean catching someone else's tiles once
+    /// <c>ai.max_agents &gt; 1</c>.
     /// </summary>
     private sealed class ViewPass
     {
@@ -185,8 +188,8 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Разрешить глаз и сетку. Общий кусок для атомарного и нарезаемого путей — чтобы они не
-    /// разъехались в том, что считают «глазом»; расхождение здесь было бы расхождением в паритете.
+    /// Resolve the eye and the grid. Shared code for the atomic and the sliced paths — so they don't
+    /// drift apart on what counts as "the eye"; a divergence here would be a divergence in parity.
     /// </summary>
     private bool TryResolveEye(
         EntityUid brain,
@@ -230,7 +233,7 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Завести проход обзора. Тяжёлого здесь ничего нет: только разрешение глаза и рамка.
+    /// Start a view pass. There's nothing heavy here: just resolving the eye and the bounds.
     /// </summary>
     private ViewPass? BeginSlicedView(EntityUid brain, float expansion, out string? failure)
     {
@@ -257,8 +260,8 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Собрать сущности по посчитанным тайлам. Тот же сбор, что и у атомарного пути, — резать его
-    /// незачем: по профилю это 3-4 мс против 18-22 у каста.
+    /// Gather entities from already-computed tiles. The same gathering step as the atomic path —
+    /// there's no reason to slice it: per the profile it's 3-4 ms against 18-22 for the cast.
     /// </summary>
     private List<EntityUid> GatherFromPass(ViewPass pass, EntityUid brain, ref LookProfile profile)
     {
@@ -284,30 +287,32 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Быстрый путь: один обход дерева по общей рамке, дальше отсев по принадлежности тайлу.
+    /// The fast path: one tree traversal over the overall bounds, then filtering by tile membership.
     ///
     /// <para>
-    /// Медленный путь спрашивал у broadphase «кто пересекает вот этот тайл» и делал это по разу на
-    /// каждый видимый тайл — от 289 при <c>expand:0</c> до 1681 при <c>expand:3</c>. На каждом
-    /// тайле это до четырёх обходов дерева, узкая фаза на кандидата и вызов <c>AddContained</c>,
-    /// который заново проходит ВЕСЬ накопленный набор, спрашивает у каждого элемента
-    /// <c>ContainerManagerComponent</c> и рекурсивно добавляет содержимое всех контейнеров — со
-    /// свежим списком на каждый тайл. При T тайлах и наборе в E сущностей это O(T·E) по времени и
-    /// O(T) аллокаций внутри тика. Отсюда и брались 1908 мс: T и E растут вместе, произведение —
-    /// четвёртой степенью от радиуса.
+    /// The slow path asked broadphase "who intersects this specific tile" and did that once per
+    /// visible tile — anywhere from 289 at <c>expand:0</c> to 1681 at <c>expand:3</c>. For each tile
+    /// that's up to four tree traversals, a narrow-phase check per candidate, and a call to
+    /// <c>AddContained</c>, which re-walks the ENTIRE accumulated set, asks every element for its
+    /// <c>ContainerManagerComponent</c>, and recursively adds the contents of every container — with
+    /// a fresh list on every single tile. With T tiles and a set of E entities that's O(T·E) in time
+    /// and O(T) allocations inside the tick. That's where the 1908 ms came from: T and E grow
+    /// together, so the product scales as the fourth power of the radius.
     /// </para>
     /// <para>
-    /// Здесь наоборот: кандидаты собираются разом, а потом у каждого спрашивается, где он стоит.
-    /// Один поход в дерево вместо тысячи, дальше линейный проход.
+    /// Here it's the other way around: candidates are gathered all at once, and only then is each
+    /// one asked where it stands. One trip into the tree instead of a thousand, followed by a linear
+    /// pass.
     /// </para>
     /// <para>
-    /// <b>Ответ от этого не беднеет, и это доказуемо, а не на глаз.</b> Апстрим тестировал фикстуру
-    /// против тайла, сжатого на <c>TileEnlargementRadius</c> (величина отрицательная), — мы
-    /// тестируем рамку сущности против несжатого. Рамка ⊇ фикстуры, несжатый тайл ⊇ сжатого,
-    /// значит новый набор — надмножество старого. Ошибка возможна только в сторону «на границе
-    /// попал лишний», и для паритета эта сторона безопасная: спрайт на экране игрока рисуется по
-    /// позиции, а не по фикстуре, так что рамочная проверка ближе к «что видно человеку», чем
-    /// узкая фаза. Тест эквивалентности гоняет оба пути и требует включения.
+    /// <b>The answer isn't poorer for it, and that's provable, not eyeballed.</b> Upstream tested
+    /// the fixture against a tile shrunk by <c>TileEnlargementRadius</c> (a negative value) — we test
+    /// the entity's bounding box against the unshrunk tile. The box ⊇ the fixture, the unshrunk tile
+    /// ⊇ the shrunk one, so the new set is a superset of the old one. The only possible error is in
+    /// the direction of "an extra one got included at the boundary", and for parity that direction is
+    /// the safe one: a sprite on the player's screen is drawn from its position, not its fixture, so
+    /// a bounding-box check is actually closer to "what a human sees" than the narrow phase is. The
+    /// equivalence test runs both paths and requires strict inclusion.
     /// </para>
     /// </summary>
     private void GatherByBounds(
@@ -332,19 +337,19 @@ public sealed partial class StationAiAgentSystem
         var size = mapGrid.TileSize;
         var box = new Box2(min.X * size, min.Y * size, (max.X + 1) * size, (max.Y + 1) * size);
 
-        // Contained снят намеренно, и из ответа это не убирает ничего: IsOnScreen отказывает всему,
-        // что лежит в контейнере, — рюкзакам, шкафам, начинке машин. Мы платили квадратом за то,
-        // что не попадало в ответ ни разу.
+        // Contained is dropped deliberately, and that removes nothing from the answer: IsOnScreen
+        // rejects everything sitting in a container anyway — backpacks, lockers, machine innards. We
+        // were paying a quadratic cost for something that never once made it into the answer.
         //
-        // Approximate — тоже намеренно. Узкая фаза против общей рамки бессмысленна: принадлежность
-        // конкретному тайлу мы всё равно проверяем сами и проверяем строже.
+        // Approximate is also deliberate. A narrow phase against the overall bounds is pointless:
+        // membership in a specific tile is something we check ourselves anyway, and more strictly.
         _lookCandidates.Clear();
         _lookup.GetLocalEntitiesIntersecting(gridUid, box, _lookCandidates,
             LookupFlags.Uncontained | LookupFlags.Approximate);
         profile.Queries++;
         profile.Candidates = _lookCandidates.Count;
 
-        // Считается один раз на весь обзор: применять её придётся к каждому кандидату.
+        // Computed once for the whole view: it will have to be applied to every candidate.
         var invGrid = _xform.GetInvWorldMatrix(gridUid);
 
         foreach (var uid in _lookCandidates)
@@ -352,9 +357,9 @@ public sealed partial class StationAiAgentSystem
             if (uid == eye || uid == brain || uid == coreUid)
                 continue;
 
-            // IsOnScreen ПЕРЕД геометрией, а не после. Основная масса кандидатов на станции — это
-            // кабель, труба и мусоропровод под плитой: они SubFloorHide, отсекаются одним
-            // сравнением и до тайловой арифметики не доходят вовсе.
+            // IsOnScreen BEFORE the geometry, not after. The bulk of candidates on a station are
+            // cables, pipes and disposal lines under the plating: they're SubFloorHide, get cut by
+            // one comparison, and never reach the tile arithmetic at all.
             if (!IsOnScreen(uid))
                 continue;
 
@@ -366,8 +371,8 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Медленный путь. Существует ради теста эквивалентности и ради отката рубильником в бою —
-    /// см. <see cref="AiCVars.LookFast"/>. Новый код сюда не добавлять.
+    /// The slow path. Exists for the equivalence test and for a switch-flip rollback in production —
+    /// see <see cref="AiCVars.LookFast"/>. Do not add new code here.
     /// </summary>
     private void GatherByTile(
         EntityUid gridUid,
@@ -388,11 +393,11 @@ public sealed partial class StationAiAgentSystem
             if (uid == eye || uid == brain || uid == coreUid)
                 continue;
 
-            // IsOnScreen здесь, а не у вызывающего, — чтобы оба пути отдавали ОДИН И ТОТ ЖЕ вид
-            // множества и тест эквивалентности сравнивал сравнимое. Раньше этот отсев жил в
-            // LookAsync; сместить его сюда ничего не меняет по результату (проверка чистая и
-            // идемпотентная), зато делает утверждение «быстрый путь ничего не потерял»
-            // проверяемым одной строкой вместо пересборки условий в тесте.
+            // IsOnScreen lives here, not at the call site, so both paths hand back the SAME kind of
+            // set and the equivalence test compares like with like. This filter used to live in
+            // LookAsync; moving it here changes nothing about the result (the check is pure and
+            // idempotent), but it makes the claim "the fast path lost nothing" verifiable in one
+            // line instead of reassembling the conditions inside the test.
             if (!IsOnScreen(uid))
                 continue;
 
@@ -401,13 +406,14 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Попадает ли сущность хоть одним тайлом в видимый набор.
+    /// Does the entity land on even one tile of the visible set.
     ///
-    /// Сначала тайл самого трансформа — у подавляющего большинства он единственный, и это одно
-    /// матричное умножение. Рамка считается только для промахнувшихся, а промах здесь означает
-    /// одно из двух: либо многотайловая машина на границе видимого, у которой центр оказался в
-    /// закрытом стеной тайле, — такую терять нельзя, она у игрока на экране; либо честный мусор за
-    /// стеной, который и должен отсеяться. Промахов мало, так что дорогая ветка почти не берётся.
+    /// First the transform's own tile — for the overwhelming majority that's the only one, and it's
+    /// a single matrix multiplication. The bounding box is only computed for misses, and a miss here
+    /// means one of two things: either a multi-tile machine at the edge of visibility whose center
+    /// happens to land on a tile hidden behind a wall — which must not be lost, it's on the player's
+    /// screen — or honest junk behind a wall that should indeed be filtered out. Misses are rare, so
+    /// the expensive branch is almost never taken.
     /// </summary>
     private bool CoversVisibleTile(EntityUid uid, ushort size, Matrix3x2 invGrid, HashSet<Vector2i> tiles)
     {
@@ -421,15 +427,15 @@ public sealed partial class StationAiAgentSystem
         if (tiles.Contains(tile))
             return true;
 
-        // Все ЧЕТЫРЕ угла, а не два противоположных.
+        // All FOUR corners, not two opposite ones.
         //
-        // Рамка приходит выровненной по осям МИРА, а станция стоит под углом — Box, например,
-        // повёрнута, и это видно невооружённым глазом по числу тайлов в обзоре. После перевода в
-        // координаты сетки прямоугольник превращается в ромб, у которого крайние точки — вовсе не
-        // те два угла, что были крайними в мире. Версия на двух углах теряла лампу, лежащую на
-        // стыке тайлов: диапазон получался скошенным и не накрывал тот единственный тайл, который
-        // и был виден. Один потерянный предмет из двух с половиной тысяч — ровно та поломка,
-        // которую замечает тест и не замечает человек.
+        // The bounding box arrives axis-aligned to the WORLD, while the station sits at an angle —
+        // Box, for instance, is rotated, and that's visible to the naked eye just from the tile count
+        // in the view. After converting to grid coordinates, the rectangle turns into a rhombus whose
+        // extreme points are not the same two corners that were extreme in world space. The
+        // two-corner version was losing a lamp sitting right on a tile seam: the range came out
+        // skewed and didn't cover the one tile that was actually visible. One lost item out of two
+        // and a half thousand — exactly the kind of breakage a test catches and a human doesn't.
         var aabb = _lookup.GetWorldAABB(uid);
 
         var c0 = Vector2.Transform(aabb.BottomLeft, invGrid);
@@ -515,40 +521,30 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Cardinal directions in Russian, keyed the way the crew actually talks.
+    /// Cardinal directions in the agent's prompt language, keyed the way the crew actually talks.
     ///
     /// North is up the screen. That equivalence is what makes "открой дверь надо мной" answerable
     /// at all: the client renders the station world-aligned with no eye rotation, so world north
     /// and screen up are the same thing for both the player and the AI.
     /// </summary>
-    private static string DirectionRu(Direction dir) => dir switch
-    {
-        Direction.North => "север",
-        Direction.NorthEast => "северо-восток",
-        Direction.East => "восток",
-        Direction.SouthEast => "юго-восток",
-        Direction.South => "юг",
-        Direction.SouthWest => "юго-запад",
-        Direction.West => "запад",
-        Direction.NorthWest => "северо-запад",
-        _ => "рядом",
-    };
+    private static string DirectionWord(Direction dir, Locale.AgentLocale loc) => loc.Dir(dir);
 
     /// <summary>
-    /// Where <paramref name="target"/> lies as seen from <paramref name="from"/>: "север 3".
+    /// Where <paramref name="target"/> lies as seen from <paramref name="from"/>: "север 3" / "north 3".
     ///
     /// Within half a tile there is no meaningful bearing — the two are on the same square, which is
     /// what "прямо рядом" means to a person describing their surroundings.
     /// </summary>
-    private static string BearingFrom(Vector2 from, Vector2 target)
+    private static string BearingFrom(Vector2 from, Vector2 target, Locale.AgentLocale? loc = null)
     {
+        loc ??= Locale.AgentLocale.Ru;
         var delta = target - from;
         var dist = delta.Length();
 
         if (dist < 0.5f)
-            return "вплотную";
+            return loc.Adjacent;
 
-        return string.Create(CultureInfo.InvariantCulture, $"{DirectionRu(delta.GetDir())} {dist:F0}");
+        return string.Create(CultureInfo.InvariantCulture, $"{DirectionWord(delta.GetDir(), loc)} {dist:F0}");
     }
 
     /// <summary>
@@ -569,7 +565,8 @@ public sealed partial class StationAiAgentSystem
             $"Δ({target.X - from.X:F0},{target.Y - from.Y:F0}) ({target.X:F0},{target.Y:F0})");
 
     /// <summary>Which way a mob is facing, for "открой дверь, на которую я смотрю".</summary>
-    private string FacingRu(EntityUid uid) => DirectionRu(_xform.GetWorldRotation(uid).GetDir());
+    private string FacingWord(EntityUid uid, Locale.AgentLocale loc) =>
+        DirectionWord(_xform.GetWorldRotation(uid).GetDir(), loc);
 
     /// <summary>Classify an entity into a handle kind. Order matters: most specific first.</summary>
     public string KindOf(EntityUid uid)

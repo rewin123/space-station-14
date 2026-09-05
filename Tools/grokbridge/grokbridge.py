@@ -1,39 +1,45 @@
 #!/usr/bin/env python3
 """
-Мост между игровым сервером и подпиской Grok.
+Bridge between the game server and the Grok subscription.
 
-ЗАЧЕМ ОН ВООБЩЕ НУЖЕН
+WHY IT EXISTS AT ALL
 ---------------------
-Профили моделей форка ходят одним способом: `POST {endpoint}/chat/completions`, `stream: false`,
-ключ в заголовке Authorization (Llm/LlamaClient.cs). Подписка Grok так не отвечает:
+The fork's model profiles all speak one way: `POST {endpoint}/chat/completions`, `stream:
+false`, key in the Authorization header (Llm/LlamaClient.cs). The Grok subscription does not
+answer like that:
 
-  1. у неё свой адрес — `https://cli-chat-proxy.grok.com/v1`, и он требует двух заголовков
-     сверх обычного: `X-XAI-Token-Auth: xai-grok-cli` и `x-grok-model-override: <модель>`
-     (маршрутизация идёт ПО ЗАГОЛОВКУ, а не по полю model в теле);
-  2. почти все модели за этим адресом отвечают только потоком, а наш клиент потока не умеет;
-  3. вместо ключа там OIDC-токен на шесть часов, который надо обновлять.
+  1. it has its own address — `https://cli-chat-proxy.grok.com/v1`, and it requires two
+     headers beyond the usual: `X-XAI-Token-Auth: xai-grok-cli` and
+     `x-grok-model-override: <model>` (routing is done BY HEADER, not by the model field in
+     the body);
+  2. almost every model behind this address only responds by streaming, and our client
+     doesn't know how to stream;
+  3. instead of a key there's an OIDC token good for six hours, which has to be refreshed.
 
-Каждый из трёх пунктов можно было бы внести в игровой сервер — и это было бы хуже. Обновление
-токена в игровом процессе означает, что владельцем OAuth-кредов становится он, а значит любой
-`grok` в терминале отзывает токен посреди раунда. Потоковая сборка в C# — это ещё один парсер в
-том же процессе, где уже живёт петля хода. А заголовки маршрутизации превратились бы в новый
-диалект ради одного провайдера.
+Each of these three points could be brought into the game server — and that would be worse.
+Refreshing the token inside the game process means the game process becomes the owner of the
+OAuth credentials, so any `grok` in a terminal revokes the token mid-round. Assembling a
+stream in C# is one more parser in the same process that already runs the turn loop. And the
+routing headers would turn into a new dialect for the sake of a single provider.
 
-Поэтому мост: отдельный процесс, единственный владелец сессии, снаружи — обычный
-OpenAI-совместимый эндпоинт, для которого профиль выглядит ровно как любой другой.
+Hence the bridge: a separate process, the sole owner of the session, presenting to the
+outside as an ordinary OpenAI-compatible endpoint, so the profile looks exactly like any
+other.
 
-ЧТО ЭТО НЕ ЕСТЬ
+WHAT THIS IS NOT
 ---------------
-Это НЕ CLIProxyAPI, о котором говорит README форка. Тот мост на этой машине не установлен
-(каталога ~/.cli-proxy-api/ нет, порт 8317 не слушает никто), и профиль `codex` до сих пор
-указывает в пустоту. Наш мост занимается только Grok и слушает 8318, чтобы не занимать чужой
-порт: если CLIProxyAPI однажды появится ради ChatGPT, они разойдутся без конфликта.
+This is NOT CLIProxyAPI, which the fork's README talks about. That bridge is not installed
+on this machine (no ~/.cli-proxy-api/ directory, nothing listening on port 8317), and the
+`codex` profile still points into the void. Our bridge handles only Grok and listens on
+8318, so as not to take a port that belongs to someone else: if CLIProxyAPI ever shows up
+for ChatGPT, the two will coexist without conflict.
 
-ЗАЩИТА ДОСТУПА
+ACCESS PROTECTION
 --------------
-Loopback на этой машине НЕ приватен — у неё несколько пользователей (см. историю с ANSYS
-Fluent на тех же картах). Поэтому мост требует свой bearer-ключ из ai_data/grok_bridge.key и
-без файла ключа не стартует вовсе: тихо открытый мост означает чужой расход недельной квоты.
+Loopback on this machine is NOT private — it has several users (see the history with ANSYS
+Fluent on the same cards). So the bridge requires its own bearer key from
+ai_data/grok_bridge.key and refuses to start at all without the key file: a quietly open
+bridge means someone else spending the weekly quota.
 """
 
 from __future__ import annotations
@@ -56,17 +62,17 @@ from grokauth import AuthError, TokenSource, default_session_path  # noqa: E402
 UPSTREAM = "https://cli-chat-proxy.grok.com/v1"
 USER_AGENT = "ss14-grok-bridge/1"
 
-# Версия клиента, которой мост представляется вышестоящему.
+# Client version the bridge presents itself as to the upstream.
 #
-# Не украшение: cli-chat-proxy отвечает 426 «Your Grok CLI version (none) is outdated» на запрос
-# без этого заголовка и отказывается работать вовсе. Имена заголовков взяты из самого бинарника
-# CLI (`strings ~/.grok/downloads/grok-linux-x86_64`), потому что в его README их нет — там
-# описаны только Authorization, X-XAI-Token-Auth и x-grok-model-override, и по этому описанию
-# запрос не проходит.
+# Not decoration: cli-chat-proxy answers 426 "Your Grok CLI version (none) is outdated" to a
+# request without this header and refuses to work at all. The header names were taken from
+# the CLI binary itself (`strings ~/.grok/downloads/grok-linux-x86_64`), because its README
+# doesn't have them — it only documents Authorization, X-XAI-Token-Auth and
+# x-grok-model-override, and a request built from that description does not get through.
 #
-# Значение берём из установленного CLI, а не зашиваем: порог версии вендор поднимает, и
-# захардкоженное число однажды превратится в 426 посреди раунда. Обновился `grok` — обновился и
-# мост, без правки кода.
+# We take the value from the installed CLI instead of hardcoding it: the vendor raises the
+# version threshold over time, and a hardcoded number would eventually turn into a 426
+# mid-round. `grok` gets updated, so the bridge gets updated too, with no code change.
 CLIENT_IDENTIFIER = "xai-grok-cli"
 FALLBACK_CLIENT_VERSION = "1.0.5"
 GROK_VERSION_FILE = os.path.expanduser("~/.grok/version.json")
@@ -87,9 +93,10 @@ def client_version() -> str:
 
     return FALLBACK_CLIENT_VERSION
 
-# Поля, которые уходят вверх. Список белый, а не чёрный, и это осознанно: наш клиент шлёт
-# `cache_prompt` и `id_slot` для llama.cpp, а строгая API отвечает на незнакомое поле 400 —
-# и «провайдер лежит» становится не отличить от «провайдер не понял четвёртое поле».
+# Fields that get forwarded upstream. This is a whitelist, not a blacklist, and deliberately
+# so: our client sends `cache_prompt` and `id_slot` for llama.cpp, and a strict API answers
+# 400 to an unknown field — making "provider is down" indistinguishable from "provider didn't
+# understand the fourth field".
 FORWARDED_FIELDS = frozenset(
     {
         "model",
@@ -112,16 +119,17 @@ FORWARDED_FIELDS = frozenset(
 
 
 class Upstream:
-    """Разговор с cli-chat-proxy: заголовки, токен и одна попытка починиться."""
+    """Talking to cli-chat-proxy: headers, the token, and one attempt to self-heal."""
 
     def __init__(self, base: str, source: TokenSource, log):
         self.base = base.rstrip("/")
         self.source = source
         self.log = log
 
-        # Поддерживает ли вышестоящий `stream_options.include_usage`, неизвестно, а без него в
-        # ответе не будет `usage` и счётчик расхода покажет нули. Спрашиваем — и при первом же
-        # отказе перестаём спрашивать навсегда: лучше слепой счётчик, чем мёртвый профиль.
+        # Whether the upstream supports `stream_options.include_usage` is unknown, and without
+        # it the response won't have `usage` and the spend counter will show zeros. We ask —
+        # and on the first refusal we stop asking forever: a blind counter beats a dead
+        # profile.
         self.include_usage = os.environ.get("GROK_BRIDGE_USAGE", "1") != "0"
 
         self.client_version = client_version()
@@ -135,11 +143,11 @@ class Upstream:
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
             "Authorization": f"Bearer {token}",
-            # Говорит middleware вендора, что это сессионный токен CLI, а не ключ из console.x.ai.
+            # Tells the vendor's middleware this is a CLI session token, not a console.x.ai key.
             "X-XAI-Token-Auth": CLIENT_IDENTIFIER,
-            # Маршрут выбирается ЭТИМ заголовком, а не полем model в теле.
+            # The route is chosen by THIS header, not by the model field in the body.
             "x-grok-model-override": model,
-            # Без этих двух — 426 и отказ обслуживать. См. комментарий у client_version().
+            # Without these two: 426 and a refusal to serve. See the comment on client_version().
             "x-grok-client-identifier": CLIENT_IDENTIFIER,
             "x-grok-client-version": self.client_version,
             "User-Agent": USER_AGENT,
@@ -147,12 +155,12 @@ class Upstream:
 
     def open_stream(self, payload: dict, timeout: float):
         """
-        Отправить запрос и вернуть открытый поток ответа.
+        Send the request and return the open response stream.
 
-        Две попытки, и обе — про разные поломки. 401 при формально живом токене означает, что
-        сессию отозвали на той стороне: обновляемся принудительно и повторяем. 400 с упоминанием
-        stream_options означает, что вендор такого поля не знает: выкидываем его и повторяем,
-        уже навсегда.
+        Two attempts, each for a different kind of failure. A 401 with a token that's, on
+        paper, still alive means the session was revoked on the other end: force a refresh
+        and retry. A 400 mentioning stream_options means the vendor doesn't know that field:
+        drop it and retry, permanently this time.
         """
         model = payload.get("model") or ""
 
@@ -218,18 +226,19 @@ class UpstreamError(Exception):
         self.retry_after = retry_after
 
 
-# ----------------------------------------------------------------- сборка из потока
+# ----------------------------------------------------------------- assembly from the stream
 
 def assemble(lines, model: str) -> dict:
     """
-    Собрать один обычный ответ chat.completion из потока SSE.
+    Assemble one ordinary chat.completion response out of an SSE stream.
 
-    Отдельная функция без единого обращения к сети — потому что это единственное место, где мост
-    может соврать незаметно. Оборванный аргумент вызова инструмента не выглядит ошибкой: он
-    выглядит как решение агента, и разбирать такое по журналам раунда — самая дорогая отладка,
-    какая бывает. Проверяется в test_assemble.py на записанных потоках.
+    A separate function with not a single network call — because this is the one place where
+    the bridge could lie without anyone noticing. A truncated tool-call argument doesn't look
+    like an error: it looks like the agent's decision, and untangling that from round logs is
+    the most expensive kind of debugging there is. Covered in test_assemble.py against
+    recorded streams.
 
-    `lines` — итератор байтовых строк, как их отдаёт HTTPResponse.
+    `lines` is an iterator of byte strings, exactly as HTTPResponse yields them.
     """
     content: list[str] = []
     reasoning: list[str] = []
@@ -254,8 +263,9 @@ def assemble(lines, model: str) -> dict:
         try:
             chunk = json.loads(data)
         except ValueError:
-            # Битый кадр молча пропускать нельзя, но и ронять из-за него весь ход — тоже:
-            # остальные кадры целы, а ответ без одного токена лучше отсутствующего ответа.
+            # A corrupt frame can't be silently skipped, but crashing the whole turn over it
+            # isn't right either: the other frames are intact, and a response missing one
+            # token beats no response at all.
             continue
 
         response_id = chunk.get("id") or response_id
@@ -272,16 +282,16 @@ def assemble(lines, model: str) -> dict:
             if delta.get("content"):
                 content.append(delta["content"])
 
-            # Рассуждения приходят отдельным полем и в тело ответа НЕ попадают: наш клиент
-            # читает только content, а склейка размышлений с ответом превратила бы внутренний
-            # монолог в реплику агента в игре.
+            # Reasoning arrives as a separate field and does NOT go into the response body:
+            # our client only reads content, and merging the reasoning into the reply would
+            # turn the agent's internal monologue into an in-game line.
             if delta.get("reasoning_content"):
                 reasoning.append(delta["reasoning_content"])
 
             for call in delta.get("tool_calls") or []:
-                # Индекс — штатный способ различить параллельные вызовы. Его может не быть у
-                # провайдеров, которые шлют вызов целиком; тогда ключом служит id, а в самом
-                # безнадёжном случае — порядковый номер.
+                # Index is the standard way to tell parallel calls apart. Providers that send
+                # a call whole may not have one; then id serves as the key, and in the most
+                # hopeless case, a sequential number.
                 key = call.get("index")
                 if key is None:
                     key = call.get("id") or f"#{len(order)}"
@@ -298,9 +308,10 @@ def assemble(lines, model: str) -> dict:
                 function = call.get("function") or {}
                 name = function.get("name")
                 if name and not slot["name"].endswith(name):
-                    # Имя приходит одним куском у всех известных провайдеров, но склейка кусков
-                    # ничего не стоит; проверка на повтор защищает от тех, кто шлёт имя в каждом
-                    # кадре — иначе получилось бы «movemovemove».
+                    # The name arrives in one piece with every known provider, but
+                    # concatenating pieces costs nothing; the repeat check guards against
+                    # providers that send the name in every frame — otherwise we'd get
+                    # "movemovemove".
                     slot["name"] += name
 
                 if function.get("arguments"):
@@ -338,29 +349,31 @@ def assemble(lines, model: str) -> dict:
     if usage:
         result["usage"] = usage
 
-    # Не для игры, а для журнала: длину размышлений видно только отсюда, и без неё «выдал 300
-    # токенов» читается как многословный ответ, хотя это могли быть 215 токенов раздумий.
+    # Not for the game, only for the log: the length of the reasoning is visible only from
+    # here, and without it "produced 300 tokens" reads as a verbose reply, when it could have
+    # been 215 tokens of thinking.
     if reasoning:
         result["_bridge_reasoning_chars"] = sum(len(part) for part in reasoning)
 
     return result
 
 
-# ------------------------------------------------------------------------- сервер
+# ------------------------------------------------------------------------- server
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "GrokBridge/1"
     protocol_version = "HTTP/1.1"
 
-    # Поднимается извне при создании сервера.
+    # Set from outside when the server is created.
     bridge: "Bridge" = None  # type: ignore[assignment]
 
     def log_message(self, fmt, *args):
-        # Стандартный лог http.server пишет в stderr строкой без времени; журнал systemd своё
-        # время проставит, а вот молчать про запросы нельзя — это единственный след обращения.
+        # The standard http.server log writes to stderr as a line with no timestamp; the
+        # systemd journal will stamp its own time, but staying silent about requests isn't an
+        # option — this is the only trace a request leaves.
         self.bridge.log(f"{self.address_string()} {fmt % args}")
 
-    # ---------------------------------------------------------------- вспомогательное
+    # ---------------------------------------------------------------- helpers
 
     def _send(self, status: int, payload: bytes, content_type="application/json", extra=None):
         self.send_response(status)
@@ -379,18 +392,19 @@ class Handler(BaseHTTPRequestHandler):
         expected = self.bridge.local_key
         header = self.headers.get("Authorization", "")
         given = header[7:].strip() if header.lower().startswith("bearer ") else ""
-        # Сравнение постоянного времени — привычка, а не необходимость: ключ локальный, но
-        # написать здесь `==` значит оставить читателю вопрос, подумали ли об этом.
+        # Constant-time comparison is a habit rather than a necessity: the key is local, but
+        # writing `==` here would leave the reader wondering whether we'd thought about it.
         return len(given) == len(expected) and sum(a != b for a, b in zip(given, expected)) == 0
 
-    # ------------------------------------------------------------------- маршруты
+    # ------------------------------------------------------------------- routes
 
     def do_GET(self):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
 
         if path == "/health":
-            # Без ключа: это проба живости, и секретов в ответе нет. Она обязана работать у
-            # того, кто чинит сервер в три часа ночи, не зная, где лежит ключ.
+            # No key required: this is a liveness probe and the response holds no secrets. It
+            # must work for whoever is fixing the server at three in the morning without
+            # knowing where the key lives.
             try:
                 status = self.bridge.source.status()
                 ok = status["expires_in_seconds"] > 0 or status["has_refresh_token"]
@@ -453,8 +467,9 @@ class Handler(BaseHTTPRequestHandler):
             response = self.bridge.upstream.open_stream(payload, timeout=self.bridge.timeout)
         except UpstreamError as error:
             extra = {"Retry-After": error.retry_after} if error.retry_after else None
-            # Тело вышестоящего отдаётся как есть: в нём настоящая причина (исчерпана квота,
-            # неизвестная модель, слишком длинный контекст), и без неё все отказы на одно лицо.
+            # The upstream body is passed through as-is: it holds the real reason (quota
+            # exhausted, unknown model, context too long), and without it every failure looks
+            # the same.
             self._send(error.status, error.body.encode("utf-8", "replace"), extra=extra)
             return
         except AuthError as error:
@@ -466,8 +481,8 @@ class Handler(BaseHTTPRequestHandler):
 
         with response:
             if wants_stream:
-                # Прозрачный проброс — для curl и отладки. Игровой сервер сюда не попадает:
-                # LlamaClient всегда шлёт stream: false.
+                # Transparent passthrough — for curl and debugging. The game server never
+                # reaches this branch: LlamaClient always sends stream: false.
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
@@ -505,10 +520,11 @@ class Bridge:
     @staticmethod
     def _read_key(path: str) -> str:
         """
-        Ключ обязателен, и его отсутствие — отказ стартовать, а не открытый мост.
+        The key is mandatory, and its absence means refusing to start, not an open bridge.
 
-        Loopback здесь общий с другими пользователями машины. Мост без ключа — это чужой доступ
-        к недельной квоте подписки, причём заметный только по счётчику расхода.
+        Loopback here is shared with other users of the machine. A bridge without a key is
+        someone else's access to the weekly subscription quota, noticeable only via the spend
+        counter.
         """
         try:
             with open(path, encoding="utf-8") as handle:
@@ -556,8 +572,8 @@ def main(argv: list[str]) -> int:
 
     server = ThreadingHTTPServer((host or "127.0.0.1", int(port)), Handler)
     server.daemon_threads = True
-    # Ход агента длится минутами; сокет, закрытый по короткому таймауту, выглядит в игре как
-    # «модель не ответила», хотя она отвечала.
+    # An agent turn takes minutes; a socket closed by a short timeout looks in-game like "the
+    # model didn't answer", even though it did.
     server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     bridge.log(f"мост слушает {args.bind}, вышестоящий {args.upstream}, версия клиента {bridge.upstream.client_version}")
@@ -565,8 +581,9 @@ def main(argv: list[str]) -> int:
         status = bridge.source.status()
         bridge.log(f"сессия действует до {status['expires_at']} (refresh: {status['has_refresh_token']})")
     except (AuthError, OSError, ValueError) as error:
-        # Не отказ стартовать: сессию можно активировать и после запуска, а мост, падающий из-за
-        # протухшего файла, уносит с собой и /health, по которому это видно.
+        # Not a reason to refuse to start: the session can be activated after startup too, and
+        # a bridge that crashes over a stale file takes down /health with it, which is where
+        # this would be visible.
         bridge.log(f"ВНИМАНИЕ: сессия недоступна ({error}) — выполните python3 grokauth.py login")
 
     try:

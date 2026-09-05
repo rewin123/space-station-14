@@ -14,20 +14,22 @@ using Robust.Shared.Log;
 namespace Content.AiBench;
 
 /// <summary>
-/// Цепочка провайдеров: порядок обхода, липкость, сны и то, что уходит в провод.
+/// The provider chain: traversal order, stickiness, sleep, and what actually goes over the wire.
 ///
 /// <para>
-/// Тесты намеренно без поднятого сервера. Проверяемое здесь — политика отказов и сериализация, а
-/// цена интеграционного теста (полный сервер с прототипами) для такой логики означала бы, что её
-/// просто не будут проверять. Ради этого роутер и принимает <see cref="LlmProfileConfig"/> вместо
-/// прототипа, часы через делегат, а фабрику клиентов — параметром.
+/// The tests deliberately run without a live server. What's checked here is the failure policy and
+/// serialization, and the cost of an integration test (a full server with prototypes) for this kind
+/// of logic would mean it simply wouldn't get tested. That's why the router accepts an
+/// <see cref="LlmProfileConfig"/> instead of a prototype, a clock via a delegate, and a client
+/// factory as a parameter.
 /// </para>
 /// <para>
-/// Там, где проверяется <em>провод</em>, тест поднимает настоящий <see cref="HttpListener"/> на
-/// loopback и смотрит на пришедшее тело. Иначе пришлось бы повторить в тесте ту же логику сборки
-/// запроса и проверить её саму на себе — а сломать надо ровно то, что до профилей уходило всегда:
-/// <c>top_k</c>, <c>min_p</c>, <c>cache_prompt</c> и <c>id_slot</c> в адрес провайдера, который
-/// отвечает на неизвестное поле кодом 400.
+/// Where the <em>wire</em> itself is checked, the test spins up a real <see cref="HttpListener"/>
+/// on loopback and inspects the body that arrives. Otherwise the test would have to repeat the same
+/// request-building logic and check it against itself — and what needs to be caught is exactly what
+/// used to leak through to every provider before profiles existed: <c>top_k</c>, <c>min_p</c>,
+/// <c>cache_prompt</c>, and <c>id_slot</c> sent to a provider that responds to an unknown field with
+/// a 400.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -36,9 +38,9 @@ public sealed class LlmRouterTests
 {
     private static ISawmill Sawmill => new LogManager().GetSawmill("llm-router-test");
 
-    // ----------------------------------------------------------------- заготовки
+    // ----------------------------------------------------------------- fixtures
 
-    /// <summary>Клиент, отвечающий по сценарию и считающий обращения.</summary>
+    /// <summary>A client that answers according to a scripted scenario and counts calls.</summary>
     private sealed class FakeClient : ILlmClient
     {
         private readonly Queue<Func<LlmResponse>> _script = new();
@@ -70,7 +72,7 @@ public sealed class LlmRouterTests
         public FakeClient Disposed()
             => Then(() => throw new ObjectDisposedException("HttpClient"));
 
-        /// <summary>Повторять последний шаг сценария бесконечно.</summary>
+        /// <summary>Repeat the last scenario step indefinitely.</summary>
         public bool Repeat { get; set; } = true;
 
         private Func<LlmResponse>? _last;
@@ -142,7 +144,7 @@ public sealed class LlmRouterTests
             }
             catch
             {
-                // Временная папка — если не удалилась, тест это не должен ронять.
+                // A temp folder — if it fails to delete, that shouldn't fail the test.
             }
         }
     }
@@ -150,7 +152,7 @@ public sealed class LlmRouterTests
     private static Task<LlmResponse> Ask(ILlmClient client) =>
         client.ChatAsync(new[] { ChatMessageDto.User("привет") }, null, CancellationToken.None);
 
-    // -------------------------------------------------------------- обход цепочки
+    // -------------------------------------------------------------- chain traversal
 
     [Test]
     public async Task WalksTheChainAndSleepsWhatFailed()
@@ -183,7 +185,7 @@ public sealed class LlmRouterTests
         await Ask(router);
         var primaryCalls = h.C("primary").Calls;
 
-        // Три хода спустя, но раньше ai.llm_recheck_seconds.
+        // Three turns later, but before ai.llm_recheck_seconds.
         h.Now = h.Now.AddSeconds(30);
         await Ask(router);
         await Ask(router);
@@ -208,14 +210,14 @@ public sealed class LlmRouterTests
         await Ask(router);
         Assert.That(router.CurrentProfile, Is.EqualTo("backup"));
 
-        // Позже и порога проверки, и сна упавшего профиля.
+        // Later than both the recheck threshold and the failed profile's sleep.
         h.Now = h.Now.AddSeconds(400);
         var response = await Ask(router);
 
         Assert.That(response.Profile, Is.EqualTo("primary"), "после паузы главный профиль обязан быть проверен");
     }
 
-    // --------------------------------------------------------------------- квота
+    // --------------------------------------------------------------------- quota
 
     [Test]
     public async Task QuotaSleepsUntilTheResetTheProviderNamed()
@@ -230,8 +232,8 @@ public sealed class LlmRouterTests
 
         await Ask(router);
 
-        // Час спустя — то есть уже после дефолтного ai.llm_quota_cooldown_seconds, но раньше
-        // названного провайдером срока.
+        // An hour later — i.e. already past the default ai.llm_quota_cooldown_seconds, but before
+        // the deadline named by the provider.
         h.Now = h.Now.AddMinutes(61);
         Assert.That(state.IsAvailable("primary", out _), Is.False,
             "срок из Retry-After должен побеждать дефолтный час: у подписки каждая проба — обращение, " +
@@ -256,9 +258,9 @@ public sealed class LlmRouterTests
 
         var callsBefore = h.C("primary").Calls;
 
-        // Ровно то, что делает ResetLlmClient на каждом рестарте раунда: новый клиент, новый роутер,
-        // прочитанное с диска состояние. Раундов за сутки десятки, и без персиста каждый из них
-        // заново лез бы в исчерпанную подписку.
+        // Exactly what ResetLlmClient does on every round restart: a new client, a new router, state
+        // read back from disk. There are dozens of rounds per day, and without persistence each of
+        // them would hammer the exhausted subscription all over again.
         var reread = h.NewState();
         using var second = h.Build(reread, "primary", "backup");
         var response = await Ask(second);
@@ -268,15 +270,15 @@ public sealed class LlmRouterTests
             "после рестарта роутера спящий профиль не должен пробоваться вовсе");
     }
 
-    // ------------------------------------------------------------------ перелогин
+    // ------------------------------------------------------------------ relogin
 
     [Test]
     public async Task ReloginMarksTheProfileDeadAndStopsRetrying()
     {
         using var h = new Harness();
 
-        // Ровно тот текст, каким это пришло на живой машине: одноразовый refresh-токен успел
-        // использовать другой клиент.
+        // The exact text as it arrived on the live machine: another client had already used up
+        // the one-time refresh token.
         h.C("primary").Http(401, "Codex refresh token was already consumed by another client");
         h.C("backup").Ok();
 
@@ -289,7 +291,7 @@ public sealed class LlmRouterTests
         Assert.That(state.IsAvailable("primary", out var why), Is.False);
         Assert.That(why, Does.Contain("401"));
 
-        // Сутки спустя — «мёртв» само не проходит, в отличие от сна.
+        // A day later — "dead" doesn't clear on its own, unlike sleep.
         h.Now = h.Now.AddDays(1);
         await Ask(router);
 
@@ -300,7 +302,7 @@ public sealed class LlmRouterTests
         Assert.That(state.IsAvailable("primary", out _), Is.True, "aiagent llm revive должен снимать метку");
     }
 
-    // ----------------------------------------------------- что НЕ повод для смены
+    // ----------------------------------------------------- what is NOT a reason to switch
 
     [Test]
     public async Task TruncationIsNotAReasonToSwitch()
@@ -338,8 +340,8 @@ public sealed class LlmRouterTests
         Assert.That(h.C("primary").Calls, Is.EqualTo(2), "один повтор на месте, не больше и не меньше");
         Assert.That(response.Profile, Is.EqualTo("backup"));
 
-        // Пустой ответ — не признак того, что провайдер лежит, так что спать он не должен: иначе
-        // одна неудача семплирования выключала бы главную модель на пять минут.
+        // An empty answer isn't a sign that the provider is down, so it shouldn't be put to sleep:
+        // otherwise a single sampling failure would take the main model offline for five minutes.
         Assert.That(state.IsAvailable("primary", out _), Is.True);
     }
 
@@ -353,9 +355,9 @@ public sealed class LlmRouterTests
         var state = h.NewState();
         using var router = h.Build(state, "only");
 
-        // Пустое assistant-сообщение в истории — реальный инцидент: после него DeepSeek отвечал
-        // HTTP 400 на все последующие запросы до конца раунда. Лучше отказ, который цикл агента
-        // умеет пережить, чем ответ, который отравит диалог.
+        // An empty assistant message in the history is a real incident: after it, DeepSeek answered
+        // HTTP 400 to every subsequent request for the rest of the round. Better a failure the
+        // agent loop can survive than a response that poisons the conversation.
         Assert.ThrowsAsync<LlmException>(async () => await Ask(router));
     }
 
@@ -376,7 +378,7 @@ public sealed class LlmRouterTests
             "четыре отдельных ERROR'а в журнале читаются как четыре инцидента — причины должны быть рядом");
     }
 
-    // ------------------------------------------------------------ ручной выбор
+    // ------------------------------------------------------------ manual selection
 
     [Test]
     public async Task ManualPinIsTriedEvenWhileSleeping()
@@ -399,7 +401,7 @@ public sealed class LlmRouterTests
         Assert.That(why, Does.Contain("primary"));
     }
 
-    // --------------------------------------------------------------- учёт расхода
+    // --------------------------------------------------------------- spend accounting
 
     [Test]
     public async Task CountsCallsAndMoneySeparately()
@@ -428,16 +430,16 @@ public sealed class LlmRouterTests
         Assert.That(snap.WindowCalls, Is.EqualTo(1));
         Assert.That(snap.WindowTokens, Is.EqualTo(50_020));
 
-        // 1000 промахнувшихся × 0.44 + 49000 из кэша × 0.014 + 20 выданных × 1.32, всё за миллион.
+        // 1000 uncached × 0.44 + 49000 from cache × 0.014 + 20 output × 1.32, all per million.
         var expected = 1000 / 1e6 * 0.44 + 49_000 / 1e6 * 0.014 + 20 / 1e6 * 1.32;
         Assert.That(snap.DaySpendUsd, Is.EqualTo(expected).Within(1e-9),
             "промах и попадание в кэш стоят по-разному в тридцать раз — считать их одинаково значит " +
             "ошибиться в счёте на порядок");
     }
 
-    // --------------------------------------------------------- диалект в проводе
+    // --------------------------------------------------------- dialect on the wire
 
-    /// <summary>Настоящий HTTP-приёмник: тело запроса проверяется таким, каким его увидит провайдер.</summary>
+    /// <summary>A real HTTP receiver: the request body is checked exactly as the provider will see it.</summary>
     private sealed class BodyCatcher : IDisposable
     {
         private readonly HttpListener _listener = new();
@@ -487,7 +489,7 @@ public sealed class LlmRouterTests
             }
             catch
             {
-                // Приёмник мог уже закрыться сам.
+                // The receiver may have already closed itself.
             }
         }
     }
@@ -511,14 +513,15 @@ public sealed class LlmRouterTests
         return catcher.Body;
     }
 
-    // ------------------------------------------- разобранный клиент не хоронит провайдеров
+    // ------------------------------------------- a disposed client doesn't bury providers with it
 
     /// <summary>
-    /// Гонка рестарта раунда: ResetLlmClient уже разобрал клиентов, а прощальная компакция ещё
-    /// ходит в модель. ObjectDisposedException при этом — смерть экземпляра, а не провайдера, и в
-    /// общий (переживающий раунды) счётчик она попадать не должна: иначе свежая цепочка
-    /// следующего раунда получает все звенья в кулдауне и три минуты отвечает
-    /// «ни один провайдер не ответил за 0с» (наблюдалось живьём 25.08.2026, раунд после 19:11).
+    /// A round-restart race: ResetLlmClient has already disposed the clients, but a farewell
+    /// compaction is still calling into the model. An ObjectDisposedException here is the death of
+    /// the instance, not of the provider, and it must not land in the shared (round-surviving)
+    /// counter: otherwise the next round's fresh chain gets every link in cooldown and answers
+    /// "no provider responded in 0s" for three minutes (observed live on 2026-08-25, the round
+    /// after 19:11).
     /// </summary>
     [Test]
     public void DisposedClientDoesNotPoisonSharedState()
@@ -531,11 +534,11 @@ public sealed class LlmRouterTests
 
         var oldRouter = h.Build(state, "a", "b");
 
-        // Прощальный вызов через разобранный клиент: исключение уходит наверх как есть...
+        // A farewell call through the disposed client: the exception propagates up as-is...
         Assert.ThrowsAsync<ObjectDisposedException>(() =>
             oldRouter.ChatAsync(new[] { ChatMessageDto.User("проба") }, null, CancellationToken.None));
 
-        // ...и оба звена остаются живыми в общем счётчике: «b» даже не пробовали.
+        // ...and both links stay alive in the shared counter: "b" wasn't even tried.
         Assert.Multiple(() =>
         {
             Assert.That(state.IsAvailable("a", out var whyA), Is.True, $"a усыплён: {whyA}");
@@ -543,7 +546,7 @@ public sealed class LlmRouterTests
             Assert.That(h.C("b").Calls, Is.Zero, "разобран весь экземпляр — идти по цепочке некуда");
         });
 
-        // Новый раунд: свежие клиенты, тот же счётчик — первый же ход обязан пройти по «a».
+        // A new round: fresh clients, the same counter — the very first turn must go through "a".
         h.Clients["a"] = new FakeClient("a").Ok();
         var newRouter = h.Build(state, "a", "b");
 
@@ -553,11 +556,12 @@ public sealed class LlmRouterTests
         Assert.That(response.Profile, Is.EqualTo("a"), "свежая цепочка не должна наследовать чужую смерть");
     }
 
-    // --------------------------------------------------- vLLM и его null-поля в ответе
+    // --------------------------------------------------- vLLM and its null fields in the response
 
     /// <summary>
-    /// Ответ vLLM с натуры (25.08.2026, vllm-0.27.1), сокращён только текст рассуждения.
-    /// Незаполненные поля протокола vLLM шлёт как <c>null</c>, а не опускает — в каждом ответе.
+    /// A real vLLM response captured live (2026-08-25, vllm-0.27.1); only the reasoning text has
+    /// been shortened. vLLM sends unfilled protocol fields as <c>null</c> rather than omitting them
+    /// — in every single response.
     /// </summary>
     private const string VllmCompletion =
         """
@@ -578,9 +582,9 @@ public sealed class LlmRouterTests
         """;
 
     /// <summary>
-    /// Разбор обязан пережить null-поля vLLM — сутки немого ИИ (24–25.08.2026) случились ровно
-    /// здесь: <c>"prompt_tokens_details": null</c> ронял каждый ход исключением из
-    /// <c>TryGetProperty</c> по Null-элементу, при том что сам запрос проходил с кодом 200.
+    /// Parsing must survive vLLM's null fields — a full day of a mute AI (2026-08-24 to 08-25)
+    /// happened exactly here: <c>"prompt_tokens_details": null</c> made every turn throw from
+    /// <c>TryGetProperty</c> on a Null element, even though the request itself came back with a 200.
     /// </summary>
     [Test]
     public async Task VllmNullFieldsDoNotBreakParsing()
@@ -621,9 +625,9 @@ public sealed class LlmRouterTests
             Assert.That(body, Does.Not.Contain("id_slot"));
             Assert.That(body, Does.Contain("\"thinking\""), "объект thinking — единственное, что DeepSeek ждёт сверх OpenAI");
 
-            // Усилие идёт ВНУТРИ thinking, и полем верхнего уровня его дублировать нельзя: два
-            // источника одной настройки с непредсказуемым победителем. Проверяется по числу
-            // вхождений, потому что подстрока `reasoning_effort` есть и внутри объекта тоже.
+            // The effort level goes INSIDE thinking, and it must not be duplicated as a top-level
+            // field: two sources for one setting with an unpredictable winner. Checked by occurrence
+            // count, because the substring `reasoning_effort` also appears inside the object itself.
             Assert.That(Occurrences(body, "reasoning_effort"), Is.EqualTo(1));
             Assert.That(OrderOfKeys(body), Does.Not.Contain("reasoning_effort"));
         });
@@ -641,9 +645,9 @@ public sealed class LlmRouterTests
             Assert.That(body, Does.Contain("\"cache_prompt\":true"));
             Assert.That(body, Does.Contain("\"id_slot\":0"));
 
-            // Уровень размышления у llama.cpp задаётся флагом запуска --chat-template-kwargs, а
-            // поле в теле он принимает и молча игнорирует. Настройка, которая выглядит рабочей и
-            // ничего не делает, хуже отсутствующей.
+            // llama.cpp's reasoning level is set by the --chat-template-kwargs launch flag, and it
+            // accepts the body field and silently ignores it. A setting that looks like it works
+            // and does nothing is worse than one that's simply missing.
             Assert.That(body, Does.Not.Contain("\"thinking\""));
             Assert.That(body, Does.Not.Contain("reasoning_effort"));
         });
@@ -662,9 +666,10 @@ public sealed class LlmRouterTests
     [Test]
     public async Task StrictOpenAiNeverGetsAnEffortLevelItDoesNotKnow()
     {
-        // `ai.thinking_effort` один на всех профилей, и «off» осмысленно только у DeepSeek, где это
-        // объект {"type":"disabled"}. У OpenAI такого значения нет: `reasoning_effort: "off"` — это
-        // HTTP 400 на каждом ходу, и роутер честно счёл бы подписочный профиль несовместимым.
+        // `ai.thinking_effort` is one setting for all profiles, and "off" is only meaningful for
+        // DeepSeek, where it's the object {"type":"disabled"}. OpenAI has no such value:
+        // `reasoning_effort: "off"` is an HTTP 400 on every turn, and the router would honestly
+        // consider the subscription profile incompatible.
         foreach (var effort in new[] { "off", "none", "xhigh", "чтотопопало" })
         {
             var body = await CapturedBody(LlmDialect.OpenAiCompat, effort);
@@ -678,9 +683,10 @@ public sealed class LlmRouterTests
     {
         var body = await CapturedBody(LlmDialect.LlamaCpp, "");
 
-        // Порядок полей — не косметика: llama.cpp переиспользует KV-кэш до первого разошедшегося
-        // токена, и живой сервер держит на этом реюз 97.9%. Эталон зафиксирован, чтобы правка
-        // порядка объявления в ChatRequestDto роняла тест, а не производительность.
+        // Field order isn't cosmetic: llama.cpp reuses the KV cache up to the first diverging
+        // token, and the live server holds a 97.9% reuse rate on that. The reference order is
+        // pinned so that a change to declaration order in ChatRequestDto breaks the test, not
+        // performance.
         var keys = OrderOfKeys(body);
 
         Assert.That(keys, Is.EqualTo(new[]
@@ -704,7 +710,7 @@ public sealed class LlmRouterTests
         return count;
     }
 
-    /// <summary>Имена полей верхнего уровня в порядке появления.</summary>
+    /// <summary>Top-level field names in the order they appear.</summary>
     private static List<string> OrderOfKeys(string json)
     {
         var keys = new List<string>();
@@ -754,7 +760,7 @@ public sealed class LlmRouterTests
         await catcher.Done;
     }
 
-    /// <summary>Приёмник, отвечающий 429 с заданным <c>Retry-After</c>.</summary>
+    /// <summary>A receiver that responds with 429 and a given <c>Retry-After</c>.</summary>
     private sealed class BodyCatcher429 : IDisposable
     {
         private readonly HttpListener _listener = new();
@@ -797,12 +803,12 @@ public sealed class LlmRouterTests
             }
             catch
             {
-                // Уже закрыт.
+                // Already closed.
             }
         }
     }
 
-    // ------------------------------------------------------------- контекст
+    // ------------------------------------------------------------- context
 
     [Test]
     public async Task ContextWindowFollowsTheServingProfile()
@@ -853,8 +859,8 @@ public sealed class LlmRouterTests
         using var router = new RoutingLlmClient(chain, state, new LlmRouterOptions(300, 3600, 300, 240),
             Sawmill, () => h.Now);
 
-        // Настоящий клиент, но с ctxProbe: None он не должен никуда ходить — иначе тест бы завис на
-        // недостижимом 127.0.0.1:1.
+        // A real client, but with ctxProbe: None it must not make any call — otherwise the test
+        // would hang on the unreachable 127.0.0.1:1.
         var ctx = await router.GetContextSizeAsync(CancellationToken.None);
 
         Assert.That(ctx, Is.EqualTo(128_000),

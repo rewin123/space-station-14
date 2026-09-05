@@ -7,26 +7,26 @@ using System.Text.Json.Serialization;
 namespace Content.Server.AiAgent.Llm;
 
 /// <summary>
-/// Что роутер знает про каждый профиль и что обязан помнить между раундами.
+/// What the router knows about each profile and what it must remember across rounds.
 ///
 /// <para>
-/// <b>Зачем это переживает рестарт.</b> <c>ResetLlmClient()</c> выбрасывает клиента на каждом
-/// рестарте раунда — сознательно, чтобы правка <c>ai.endpoint</c> подхватывалась без перезапуска
-/// сервера. Раундов за сутки десятки. Если состояние жить внутри клиента, то каждый рестарт будет
-/// заново стучаться в исчерпанную подписку и добивать остаток недельного пула — причём именно
-/// тогда, когда его и так нет. Поэтому cooldown'ы, время сброса и флаг «нужен перелогин» лежат в
-/// файле, а не в памяти клиента.
+/// <b>Why this survives a restart.</b> <c>ResetLlmClient()</c> discards the client on every round
+/// restart — deliberately, so that an edit to <c>ai.endpoint</c> takes effect without restarting the
+/// server. There are dozens of rounds per day. If the state lived inside the client, every restart
+/// would knock on an exhausted subscription again and finish off the rest of the weekly pool — right
+/// when it's already gone. So cooldowns, reset times, and the "needs re-login" flag live in the
+/// file, not in the client's memory.
 /// </para>
 /// <para>
-/// <b>Зачем счётчики.</b> Ни OpenAI, ни xAI не публикуют настоящий потолок: у Codex известно только
-/// окно (250–2000 обращений к Luna за пять часов) и факт существования недельного лимита, у Grok
-/// Build — что пул недельный и общий на все продукты Grok. Узнать потолок можно единственным
-/// способом: считать свой расход в тех же окнах и посмотреть, где начнутся отказы.
+/// <b>Why the counters.</b> Neither OpenAI nor xAI publish the actual ceiling: for Codex only the
+/// window is known (250-2000 calls to Luna over five hours) and the fact that a weekly limit exists;
+/// for Grok Build, only that the pool is weekly and shared across all Grok products. There's only one
+/// way to find the ceiling: count your own spend in the same windows and see where the failures start.
 /// </para>
 /// </summary>
 public sealed class LlmQuotaState
 {
-    /// <summary>Как часто разрешено переписывать файл из-за одних счётчиков.</summary>
+    /// <summary>How often the file is allowed to be rewritten for counters alone.</summary>
     private static readonly TimeSpan CounterSaveInterval = TimeSpan.FromSeconds(30);
 
     private readonly string _path;
@@ -46,7 +46,7 @@ public sealed class LlmQuotaState
         Load();
     }
 
-    /// <summary>Можно ли сейчас пробовать этот профиль, и если нет — почему.</summary>
+    /// <summary>Whether this profile can be tried right now, and if not — why.</summary>
     public bool IsAvailable(string id, out string why)
     {
         lock (_lock)
@@ -72,8 +72,8 @@ public sealed class LlmQuotaState
     }
 
     /// <summary>
-    /// Отложить профиль на время. Более далёкий срок побеждает: попытка после 5xx не должна
-    /// сокращать сон, назначенный исчерпанной квотой.
+    /// Defer a profile for a duration. The farther deadline wins: a retry after a 5xx must not
+    /// shorten the sleep assigned by an exhausted quota.
     /// </summary>
     public void Cooldown(string id, TimeSpan duration, string reason)
     {
@@ -96,11 +96,12 @@ public sealed class LlmQuotaState
     }
 
     /// <summary>
-    /// Профиль выключен до вмешательства человека: отозванный токен, требование перелогина,
-    /// отклонённый ключ.
+    /// The profile is disabled until a human intervenes: a revoked token, a required re-login,
+    /// a rejected key.
     ///
-    /// Повторять такое бессмысленно — само оно не починится. Тихо деградировать тоже нельзя: ровно
-    /// так однажды агент простоял весь раунд, и в журнале это выглядело как будто его закардили.
+    /// Retrying that is pointless — it won't fix itself. Silently degrading is also not an option:
+    /// that's exactly how the agent once stood idle for a whole round, and in the log it looked
+    /// like it had been carded.
     /// </summary>
     public void MarkDead(string id, string reason)
     {
@@ -116,7 +117,7 @@ public sealed class LlmQuotaState
         }
     }
 
-    /// <summary>Снять и смерть, и сон — команда <c>aiagent llm revive</c> и успешный ход.</summary>
+    /// <summary>Lift both the death and the sleep — the <c>aiagent llm revive</c> command and a successful turn.</summary>
     public void Revive(string id)
     {
         lock (_lock)
@@ -132,7 +133,7 @@ public sealed class LlmQuotaState
         }
     }
 
-    /// <summary>Записать удачный ход: обращения, токены и, для платных, деньги.</summary>
+    /// <summary>Record a successful turn: calls, tokens, and, for paid profiles, money.</summary>
     public void NoteSuccess(LlmProfileConfig profile, LlmResponse response)
     {
         lock (_lock)
@@ -170,7 +171,7 @@ public sealed class LlmQuotaState
         }
     }
 
-    /// <summary>Снимок для <c>aiagent llm</c>. Копия, чтобы читателю не понадобился замок.</summary>
+    /// <summary>A snapshot for <c>aiagent llm</c>. A copy so the reader doesn't need the lock.</summary>
     public ProfileSnapshot Snapshot(string id)
     {
         lock (_lock)
@@ -193,7 +194,7 @@ public sealed class LlmQuotaState
         }
     }
 
-    /// <summary>Дописать файл немедленно — на остановке сервера.</summary>
+    /// <summary>Flush the file immediately — on server shutdown.</summary>
     public void Flush()
     {
         lock (_lock)
@@ -202,7 +203,7 @@ public sealed class LlmQuotaState
         }
     }
 
-    // ------------------------------------------------------------------ внутри
+    // ------------------------------------------------------------------ internal
 
     private ProfileState Get(string id)
     {
@@ -254,8 +255,8 @@ public sealed class LlmQuotaState
 
             var json = JsonSerializer.Serialize(new FileDto { Profiles = _profiles }, FileJson);
 
-            // Через временный файл: файл читается на старте, и обрезанный на середине записи он
-            // сбросил бы все cooldown'ы разом — то есть ровно в тот момент, когда они нужнее всего.
+            // Via a temp file: the file is read at startup, and if it were truncated mid-write it
+            // would reset all cooldowns at once — right at the moment they're needed most.
             var tmp = _path + ".tmp";
             File.WriteAllText(tmp, json);
             File.Move(tmp, _path, overwrite: true);
@@ -284,8 +285,8 @@ public sealed class LlmQuotaState
         }
         catch (Exception e)
         {
-            // Порченый файл не должен мешать серверу подняться: худшее, что случится, — забытые
-            // cooldown'ы, а это одна лишняя проба на профиль.
+            // A corrupted file must not stop the server from starting: the worst that happens is
+            // forgotten cooldowns, which is just one extra probe per profile.
             _sawmill.Warning($"не удалось прочитать {_path}, начинаю с чистого состояния: {e.Message}");
             _profiles.Clear();
         }
@@ -354,7 +355,7 @@ public sealed class LlmQuotaState
     }
 }
 
-/// <summary>Состояние одного профиля для вывода в консоль.</summary>
+/// <summary>The state of one profile for console output.</summary>
 public sealed record ProfileSnapshot(
     string Id,
     string? DeadReason,

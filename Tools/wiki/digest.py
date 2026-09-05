@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Сварить из прототипов читаемый источник для агента pi.
+"""Cook a readable source for the pi agent out of the prototypes.
 
-Две категории вики — химия и кухня — на самом деле пустые страницы: в guidebook там стоит
-<GuideReagentGroupEmbed> и <GuideMicrowaveGroupEmbed>, а содержимое игра собирает из прототипов на
-лету. Дать модели сырой YAML нельзя: 294 КиБ отступов и служебных полей, из которых половина
-контекста уйдёт на `- type:` и `!type:`.
+Two wiki categories — chemistry and cooking — are actually empty pages: the guidebook has
+<GuideReagentGroupEmbed> and <GuideMicrowaveGroupEmbed> there, and the game assembles the
+content from prototypes on the fly. Feeding the model raw YAML won't work: 294 KiB of
+indentation and boilerplate fields, half of which context would go to `- type:` and `!type:`.
 
-Поэтому здесь YAML сворачивается в строчки, которые человек читает вслух:
+So here the YAML is folded into lines a human can read aloud:
 
     Трикордразин (Tricordrazine) ×3 ← Dylovene 1 + Inaprovaline 1
 
-Результат кладётся в wiki_skills/.source/ и попадает в репозиторий вместе со статьями: это
-ровно тот текст, который видел агент, и без него нельзя проверить, откуда он взял цифру.
+The result is placed into wiki_skills/.source/ and goes into the repository alongside the
+articles: this is exactly the text the agent saw, and without it there's no way to check
+where it got a number from.
 
     python3 Tools/wiki/digest.py
 """
@@ -25,11 +26,11 @@ OUT = Path("wiki_skills/.source")
 
 
 class Loader(yaml.SafeLoader):
-    """Тег `!type:HealthChange` — не мусор, а имя эффекта, и выбрасывать его нельзя.
+    """The `!type:HealthChange` tag is not junk, it's the effect's name, and can't be dropped.
 
-    Раньше теги просто стирались регуляркой, и список эффектов реагента превращался в набор
-    безымянных словарей: видно, что урона на -1.5, не видно, лечение это или отравление. Здесь
-    имя тега кладётся в поле `__type__` и доезжает до текста.
+    The tags used to just get stripped by a regex, and a reagent's effect list turned into a
+    set of unnamed dicts: you could see -1.5 damage, but not whether it was healing or harm.
+    Here the tag's name is placed into the `__type__` field and carries through to the text.
     """
 
 
@@ -48,7 +49,7 @@ def load(path):
 
 
 def locale():
-    """reagent-name-bicaridine → «bicaridine». Имена и описания живут в локали, не в прототипе."""
+    """reagent-name-bicaridine → "bicaridine". Names and descriptions live in the locale, not the prototype."""
     strings = {}
     for path in Path("Resources/Locale/en-US/reagents").rglob("*.ftl"):
         for line in path.read_text(encoding="utf-8", errors="replace").split("\n"):
@@ -59,7 +60,7 @@ def locale():
 
 
 def amounts(block):
-    """`{Silicon: {amount: 1}, Nitrogen: 1}` → `Silicon 1 + Nitrogen 1`, с пометкой катализатора."""
+    """`{Silicon: {amount: 1}, Nitrogen: 1}` → `Silicon 1 + Nitrogen 1`, with a catalyst note."""
     parts = []
     for name, spec in (block or {}).items():
         if isinstance(spec, dict):
@@ -95,17 +96,19 @@ def reactions():
                 note.append(f"до {entry['maxTemp']} K")
             if entry.get("requiredMixerCategories"):
                 note.append("нужен миксер: " + ", ".join(entry["requiredMixerCategories"]))
-            # Поле `impact` сюда НЕ выводится, хотя выглядит заманчиво. Это `LogImpact`
-            # (ReactionPrototype.cs:68) — важность строки в админском логе, а не сила чего-либо
-            # в игре. Один раз оно уже уехало в статьи как «взрыв силы Low», и модель добросовестно
-            # переписала выдуманную механику: у творога оказалась взрывчатость.
+            # The `impact` field is NOT output here, even though it looks tempting. It's
+            # `LogImpact` (ReactionPrototype.cs:68) — the importance of a line in the admin
+            # log, not the strength of anything in-game. It already leaked into articles once
+            # as "blast force Low", and the model faithfully wrote up the fabricated mechanic:
+            # cheese ended up explosive.
             for effect in entry.get("effects") or []:
                 if isinstance(effect, dict) and effect.get("__type__") == "SpawnEntity":
                     spawn = effect.get("entity", "?")
                     made = f"{spawn} (предмет)" if made == "(без продукта)" else f"{made} + {spawn} (предмет)"
 
-            # А вот это — настоящие механики, и они обязаны быть в тексте: по ним агент
-            # предупреждает химика, что смесь рванёт. Имена типов взяты из самих прототипов.
+            # This part, though, is genuine mechanics, and it has to be in the text: the agent
+            # uses it to warn a chemist that a mix will blow up. Type names are taken straight
+            # from the prototypes.
             for effect in entry.get("effects") or []:
                 if not isinstance(effect, dict):
                     continue
@@ -132,11 +135,12 @@ def reactions():
 
 
 def damage_of(effect):
-    """Урон эффекта словами.
+    """The effect's damage, spelled out in words.
 
-    В прототипе минус — это лечение, а плюс — вред, и агент читает справочник вслух живым людям:
-    «бикаридин, Brute -1.5» в эфире звучит как отчёт об ошибке. Поэтому знак разворачивается в
-    слово здесь, один раз, а не остаётся на совести читающей модели.
+    In the prototype, minus means healing and plus means harm, and the agent reads the
+    reference library aloud to live people: "bicaridine, Brute -1.5" over comms sounds like a
+    bug report. So the sign gets spelled out into a word here, once, instead of being left to
+    the reading model's judgment.
     """
     dmg = effect.get("damage")
     if isinstance(dmg, dict):
@@ -156,7 +160,7 @@ def damage_of(effect):
 
 
 def condition_of(effect):
-    """`с 15 ед.` — порог передозировки. Это главное, что врач хочет знать про лекарство."""
+    """`from 15 u.` is the overdose threshold. It's the main thing a doctor wants to know about a drug."""
     notes = []
     for cond in effect.get("conditions") or []:
         if not isinstance(cond, dict):
@@ -175,7 +179,7 @@ def condition_of(effect):
 
 
 def effects_of(entry):
-    """Что реагент делает в организме — построчно, в порядке из прототипа."""
+    """What the reagent does inside the body — one line per effect, in prototype order."""
     out = []
     for where, block in (entry.get("metabolisms") or {}).items():
         for effect in (block or {}).get("effects") or []:

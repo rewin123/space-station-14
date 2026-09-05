@@ -47,11 +47,11 @@ public sealed class AiStation : IAsyncDisposable
     public const string MapProto = "Box";
 
     /// <summary>
-    /// Карта этого стенда. Обычно <see cref="MapProto"/>, но сценарий может попросить другую.
+    /// This bench's map. Usually <see cref="MapProto"/>, but a scenario can ask for a different one.
     ///
-    /// Нужно, потому что вопросы связности отсеков на разных картах разные: «дойти от бара до
-    /// реактора» на Box и на Packed — не один и тот же вопрос, и проверять его на карте, которой
-    /// нет в ротации, значит проверять не то.
+    /// Needed because compartment-connectivity questions differ across maps: "get from the bar to
+    /// the reactor" is not the same question on Box as on Packed, and checking it on a map that
+    /// isn't in rotation means checking the wrong thing.
     /// </summary>
     public string Map { get; private set; } = MapProto;
 
@@ -73,7 +73,7 @@ public sealed class AiStation : IAsyncDisposable
     public static Task<AiStation> Create(ScriptedLlmClient llm = null) =>
         Build(llm ?? new ScriptedLlmClient());
 
-    /// <summary>Тот же стенд, но на названной карте.</summary>
+    /// <summary>The same bench, but on the named map.</summary>
     public static Task<AiStation> CreateOnMap(string map) =>
         Build(new ScriptedLlmClient(), map);
 
@@ -107,10 +107,10 @@ public sealed class AiStation : IAsyncDisposable
             cfg.SetCVar(CCVars.GameMap, w.Map);
             cfg.SetCVar(CCVars.GameLobbyEnabled, false);
 
-            // Мир не должен вставать на паузу: в пуле нет игроков, а `game.auto_pause_empty`
-            // по умолчанию замораживает симуляцию именно в этом случае — CurTick перестаёт расти,
-            // и агент, чья петля живёт на реальном времени, по уговору не делает ни одного хода.
-            // Тесты петли после этого просто не дожидаются вызова модели.
+            // The world must not pause: there are no players in the pool, and `game.auto_pause_empty`
+            // freezes the simulation by default in exactly this case — CurTick stops advancing, and
+            // the agent, whose loop runs on real time, correspondingly makes zero turns. Loop tests
+            // then simply never live to see the model get called.
             cfg.SetCVar(CVars.GameAutoPauseEmpty, false);
             cfg.SetCVar(AiCVars.Enabled, true);
 
@@ -125,17 +125,19 @@ public sealed class AiStation : IAsyncDisposable
             cfg.SetCVar(AiCVars.TickSeconds, 1f);
             cfg.SetCVar(AiCVars.TickSecondsIdle, 2f);
 
-            // Классический набор инструментов — БАЗА СТЕНДА, а не наследство боевого умолчания.
+            // The classic toolset is the BENCH'S BASELINE, not an inheritance from the production
+            // default.
             //
-            // 20.08.2026 `ai.script_mode` включили по умолчанию на бою, и `BorgScriptTests`
-            // немедленно упал: он заводит ядро, потом включает режим скрипта и проверяет, что
-            // робот уже скриптовый, а ядро осталось на своём наборе. С включённым умолчанием
-            // ядро оказывалось скриптовым ещё до первой строки теста.
+            // On 20.08.2026 `ai.script_mode` was turned on by default in production, and
+            // `BorgScriptTests` immediately broke: it spins up a core, then enables script mode and
+            // checks that the borg is already scripted while the core stayed on its own toolset.
+            // With the default turned on, the core would already be scripted before the test's first
+            // line ran.
             //
-            // Чинится не тестом, а здесь: четыре сотни сценариев написаны под классический набор,
-            // и зависеть от боевой настройки, которую владелец вправе переключить командой в
-            // консоли, они не должны. Кому нужен режим скрипта — включает его сам через
-            // `SetScriptMode(true)`, и тогда видно, что тест про него.
+            // The fix belongs here, not in the test: four hundred scenarios are written against the
+            // classic toolset, and they should not depend on a production setting that an owner is
+            // free to flip with a console command. Whoever needs script mode turns it on themselves
+            // via `SetScriptMode(true)`, and then it's visible that the test is about it.
             cfg.SetCVar(AiCVars.ScriptMode, false);
 
             cfg.SetCVar(AiCVars.DataDir, w.DataDir);
@@ -237,11 +239,11 @@ public sealed class AiStation : IAsyncDisposable
     /// <summary>
     /// Put the repository's soul files into this run's scratch data directory.
     ///
-    /// Всё семейство <c>SOUL*.md</c>, а не только основной файл: у режима «злой ИИ» своя личность
-    /// на каждый режим (<c>SOUL_ROGUE_HIDDEN.md</c>, <c>SOUL_ROGUE_OPEN.md</c>), и сценарий,
-    /// поднявший правило режима, читал бы её из пустого каталога — то есть оценивал бы базовый
-    /// промпт, думая, что оценивает режим. Вдобавок отсутствие файла режима — это ERROR в журнале,
-    /// а стенд считает ошибку в логе провалом теста.
+    /// The whole <c>SOUL*.md</c> family, not just the main file: the "rogue AI" mode has its own
+    /// personality per mode (<c>SOUL_ROGUE_HIDDEN.md</c>, <c>SOUL_ROGUE_OPEN.md</c>), and a scenario
+    /// that raised that mode's flag would read it from an empty directory — meaning it would be
+    /// grading the base prompt while thinking it was grading the mode. On top of that, a missing
+    /// mode file is an ERROR in the journal, and the bench treats a logged error as a test failure.
     /// </summary>
     private void CopySoul()
     {
@@ -276,7 +278,7 @@ public sealed class AiStation : IAsyncDisposable
     /// Map coordinates of a navigation beacon by name — "Bridge", "Atmospherics", "Medical".
     ///
     /// These are the labels the crew uses on the radio and the same ones the agent's own
-    /// <c>map</c> tool reports, so a scenario phrased as "открой дверь в атмос" can be set up
+    /// <c>map</c> tool reports, so a scenario phrased as "open the door to atmos" can be set up
     /// against the place the crew would actually mean.
     /// </summary>
     public async Task<Vector2?> Beacon(string name)
@@ -508,10 +510,10 @@ public sealed class AiStation : IAsyncDisposable
     public Task<ToolResult> Invoke(string tool, string argsJson = "{}") => InvokeOn(Brain, tool, argsJson);
 
     /// <summary>
-    /// То же, но на конкретном агенте.
+    /// The same thing, but on a specific agent.
     ///
-    /// Появилось вместе со вторым телом: <see cref="Invoke"/> всегда адресует мозг в ядре, и
-    /// проверить инструмент борга через него нельзя в принципе.
+    /// Came in together with the second body: <see cref="Invoke"/> always addresses the brain in
+    /// the core, and there is no way to check a borg's tool through it at all.
     /// </summary>
     public async Task<ToolResult> InvokeOn(EntityUid agent, string tool, string argsJson = "{}")
     {
@@ -525,10 +527,11 @@ public sealed class AiStation : IAsyncDisposable
     }
 
     /// <summary>
-    /// Инструмент, которому нужно РЕАЛЬНОЕ время: скрипт ходит, спит и ждёт долгие действия.
+    /// A tool that needs REAL time: the script walks, sleeps, and waits on long-running actions.
     ///
-    /// <see cref="InvokeOn"/> считает тики и на пустом сервере прокручивает девятьсот штук за доли
-    /// секунды — для скрипта это «не дождался» там, где он работает штатно.
+    /// <see cref="InvokeOn"/> counts ticks and spins through nine hundred of them in a fraction of a
+    /// second on an empty server — for a script that reads as "gave up waiting" in a case where it's
+    /// actually working as intended.
     /// </summary>
     public async Task<ToolResult> InvokeSlow(EntityUid agent, string tool, string argsJson = "{}", int seconds = 120)
     {
@@ -547,22 +550,23 @@ public sealed class AiStation : IAsyncDisposable
         return await task;
     }
 
-    /// <summary>Перевести следующего заведённого агента в режим скрипта.</summary>
+    /// <summary>Switch the next spun-up agent into script mode.</summary>
     public Task SetScriptMode(bool on) => Post(() =>
         Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
             .SetCVar(AiCVars.ScriptMode, on));
 
     /// <summary>
-    /// Окно, после которого скрипт уходит в фон.
+    /// The window after which a script moves to the background.
     ///
-    /// Тесты про ожидание задирают его нарочно: иначе всякий скрипт длиннее секунды уезжает в фон,
-    /// и проверять пришлось бы досылку наблюдения вместо того, ради чего тест написан.
+    /// Tests about waiting deliberately crank this up: otherwise any script longer than a second
+    /// moves to the background, and what would have to be checked is the follow-up observation
+    /// delivery instead of the thing the test was actually written for.
     /// </summary>
     public Task SetScriptForeground(int ms) => Post(() =>
         Pair.Server.ResolveDependency<Robust.Shared.Configuration.IConfigurationManager>()
             .SetCVar(AiCVars.ScriptForegroundMs, ms));
 
-    /// <summary>Провод конкретного агента — тут видно, смешались ли режимы.</summary>
+    /// <summary>A specific agent's wire — this is where you can see whether modes got mixed up.</summary>
     public Task<string> WireOf(EntityUid agent) => Read(() => System.GetSession(agent).Registry.WireJson());
 
     public async Task<T> Read<T>(Func<T> fn)
@@ -575,10 +579,11 @@ public sealed class AiStation : IAsyncDisposable
     public async Task Post(Action act) => await Pair.Server.WaitPost(act);
 
     /// <summary>
-    /// Кто это, где стоит и какого размера — для сообщения упавшего теста.
+    /// Who this is, where it stands, and what size it is — for a failed test's message.
     ///
-    /// «Быстрый путь потерял одну сущность из 2794» — не диагноз, а повод гадать. Имя, прототип и
-    /// размах рамки в тайлах превращают ту же строку в указание, куда смотреть.
+    /// "The fast path lost one entity out of 2794" isn't a diagnosis, it's an invitation to guess.
+    /// A name, a prototype, and a bounding box extent in tiles turn that same line into a pointer to
+    /// where to look.
     /// </summary>
     public async Task<string> Describe(EntityUid uid) => await Read(() =>
     {
@@ -655,14 +660,15 @@ public sealed class AiStation : IAsyncDisposable
     }
 
     /// <summary>
-    /// Положить в рабочий каталог минимальный справочник.
+    /// Put a minimal reference library into the working directory.
     ///
     /// <para>
-    /// Не косметика. <c>/wiki_ru</c> смонтирован только на чтение, и пустой каталог под чтение —
-    /// это <c>Error</c> в лог: «агент разучился» иначе разбирают сутками, поэтому сигнал громкий
-    /// намеренно. А стенд валит любой тест, чей сервер написал хоть одну ошибку. Заглушить сигнал
-    /// ради зелёных тестов значило бы выключить единственную сигнализацию о пропавшей библиотеке;
-    /// вместо этого стенд получает настоящий справочник, пусть и крошечный.
+    /// Not cosmetic. <c>/wiki_ru</c> is mounted read-only, and an empty directory under a read mount
+    /// is an <c>Error</c> in the journal: "the agent forgot how" would otherwise take days to
+    /// diagnose, so the signal is deliberately loud. And the bench fails any test whose server wrote
+    /// even a single error. Muting the signal for the sake of green tests would mean disabling the
+    /// only alarm for a missing library; instead the bench gets a real reference library, tiny as
+    /// it is.
     /// </para>
     /// </summary>
     private static void SeedLibrary(string dataDir)

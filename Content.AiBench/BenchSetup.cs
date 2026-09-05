@@ -17,19 +17,19 @@ namespace Content.AiBench;
 public sealed class BenchSetup
 {
     /// <summary>
-    /// Сторож на случай, если суита зависнет.
+    /// A watchdog in case the suite hangs.
     ///
     /// <para>
-    /// Сорок пять минут, а не двадцать (19.08.2026). Двадцати перестало хватать честному прогону:
-    /// сценарных тестов стало больше (киборги поддержки, боевые инструменты, витрина отладчика), и
-    /// полная суита занимает около двадцати двух минут. Сторож при этом срабатывал на ЗДОРОВОМ
-    /// прогоне и валил всё, что не успело пройти, — девяносто с лишним падений с ошибками пула
-    /// вместо одной строки про таймаут. Такой сторож хуже отсутствующего: он не ловит зависание,
-    /// а маскирует результат.
+    /// Forty-five minutes, not twenty (19.08.2026). Twenty stopped being enough for an honest run:
+    /// the number of scenario tests grew (support borgs, combat tools, the debugger roster), and the
+    /// full suite now takes around twenty-two minutes. The watchdog was firing on a HEALTHY run and
+    /// failing everything that had not finished yet — ninety-plus failures with pool errors instead
+    /// of a single timeout line. A watchdog like that is worse than none at all: it does not catch a
+    /// hang, it masks the result.
     /// </para>
     /// <para>
-    /// Число надо держать с запасом ко времени прогона, а не подгонять впритык. Если суита снова
-    /// подойдёт к порогу — резать её на части по фикстурам, а не двигать порог дальше.
+    /// The number needs headroom over the run time, not a tight fit. If the suite approaches the
+    /// threshold again, split it into fixtures rather than pushing the threshold further out.
     /// </para>
     /// </summary>
     private static TimeSpan TotalTimeLimit => TimeSpan.FromMinutes(45);

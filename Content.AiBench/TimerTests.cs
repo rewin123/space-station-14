@@ -10,25 +10,26 @@ using Robust.Shared.Configuration;
 namespace Content.AiBench;
 
 /// <summary>
-/// Будильники агента: три инструмента, которыми он назначает себе следующий ход.
+/// The agent's timers: three tools it uses to schedule its own next turn.
 ///
-/// Проверяется не «инструмент вернул ok», а то, ради чего он заведён: сработавший таймер обязан
-/// доехать до наблюдения тем же путём, что и речь экипажа, и разбудить петлю. Тул, отчитавшийся
-/// об успехе, пока агент продолжает спать, — это ровно тот баг, который здесь ловится.
+/// What is checked here is not "the tool returned ok" but the reason it exists at all: a fired
+/// timer must reach the observation by the same route as crew speech, and it must wake the loop. A
+/// tool that reports success while the agent is still asleep is exactly the bug this catches.
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
 public sealed class TimerTests
 {
-    // ------------------------------------------------------------------ хранилище
+    // ------------------------------------------------------------------ the store
 
     private static TimerStore Store() => new();
 
     [Test]
     public void Set_WithTheSameName_Reschedules_RatherThanAddingATwin()
     {
-        // «Напомни ещё через десять минут» — самая частая правка собственного плана. Второй таймер
-        // с тем же именем означал бы два срабатывания на одно дело и нечем снять нужный.
+        // "Remind me again in ten minutes" is the most common edit to one's own plan. A second
+        // timer under the same name would mean two firings for one task, with no way to cancel the
+        // right one.
         var store = Store();
         var now = TimeSpan.FromMinutes(10);
 
@@ -86,8 +87,9 @@ public sealed class TimerTests
     [Test]
     public void TakeDue_RearmsARepeatFromTheMomentItFired_NotFromItsOldDeadline()
     {
-        // Иначе таймер, проспавший паузу сервера, отстрелялся бы столько раз, сколько интервалов
-        // уместилось в простой, — и агент получил бы пачку одинаковых напоминаний об одном деле.
+        // Otherwise a timer that slept through a server pause would fire as many times as the
+        // interval fit into the downtime, handing the agent a pile of identical reminders for one
+        // task.
         var store = Store();
         store.Set("обход", "проверить атмос", TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5),
             TimeSpan.Zero, max: 8);
@@ -137,11 +139,11 @@ public sealed class TimerTests
         });
     }
 
-    // ---------------------------------------------------------------- живой сервер
+    // ---------------------------------------------------------------- live server
 
     /// <summary>
-    /// Остановить петлю, оставив сессию: обход таймеров живёт в тике, а не в петле, и без этого
-    /// петля вычитала бы наблюдение раньше проверки.
+    /// Stop the loop while keeping the session: the timer sweep lives in the tick, not in the loop,
+    /// and without this the loop would consume the observation before the check runs.
     /// </summary>
     private static async Task Freeze(AiWorld w)
     {
@@ -149,7 +151,7 @@ public sealed class TimerTests
         await w.Pair.Server.WaitRunTicks(5);
     }
 
-    /// <summary>Опустить нижнюю границу срока: ждать боевые полминуты в тестах незачем.</summary>
+    /// <summary>Lower the floor on the duration: there is no reason to wait a real half-minute in tests.</summary>
     private static async Task AllowShortTimers(AiWorld w)
     {
         var cfg = w.Pair.Server.ResolveDependency<IConfigurationManager>();
@@ -170,7 +172,8 @@ public sealed class TimerTests
 
         var session = await w.Read(() => w.System.GetSession(w.Brain)!);
 
-        // Пробуждение снимается ДО вычитки: сигнал одноразовый, и наблюдение его не восстановит.
+        // The wake signal is cleared BEFORE the read: it is one-shot, and the observation will not
+        // restore it.
         await PoolManager.WaitUntil(w.Pair.Server, () => session.Queue.Count > 0, maxTicks: 600);
 
         var woken = session.Woken.CurrentCount;
@@ -247,7 +250,7 @@ public sealed class TimerTests
     [Test]
     public async Task DelTimer_OnAWrongName_SaysWhatIsActuallyThere()
     {
-        // Промах по имени — норма; оставить модель гадать второй раз — это потерянный ход.
+        // A wrong name is normal; leaving the model to guess a second time wastes a whole turn.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -269,8 +272,9 @@ public sealed class TimerTests
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
-        // Граница поджимает, а не отказывает: отказ стоил бы второго вызова из отпущенных на ход,
-        // а настоящий срок всё равно назван в ответе — скрытого состояния не возникает.
+        // The floor clamps rather than refuses: a refusal would cost a second call out of the ones
+        // allotted for the turn, and the real duration is stated in the response anyway — no hidden
+        // state results.
         var set = await w.Invoke("new_timer", """{"name":"частый","msg":"а","duration":1}""");
         var json = set.ToJson();
 

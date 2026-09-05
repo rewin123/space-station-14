@@ -31,28 +31,30 @@ public sealed class AiCVars
         CVarDef.Create("ai.dry_run", false, CVar.SERVERONLY);
 
     /// <summary>
-    /// Потолок на число одновременно живых агентов — ядро и борги вместе.
+    /// Ceiling on the number of simultaneously live agents — the core and the borgs together.
     ///
     /// <para>
-    /// Проверяется в <c>StationAiAgentSystem.StartSession</c>, то есть в одном месте на оба тела.
-    /// Раньше стоял только на захвате ядра и считал там же боргов — из-за чего робот, занявший
-    /// тело первым, отбирал у мозга место в ядре.
+    /// Checked in <c>StationAiAgentSystem.StartSession</c>, that is, in one place for both bodies.
+    /// It used to sit only on core claiming and count the borgs there too — which meant a robot
+    /// that claimed a body first stole the core slot from the brain.
     /// </para>
     /// <para>
-    /// Восемь, и число не с потолка: ровно столько нужно открытому режиму злого ИИ — ядро плюс
-    /// семь тел, шесть боевых и одно инженерное (<c>supportBorgs</c> в <c>rogue_ai.yml</c>).
+    /// Eight, and the number is not arbitrary: that is exactly how many the open rogue AI mode
+    /// needs — the core plus seven bodies, six combat and one engineering (<c>supportBorgs</c> in
+    /// <c>rogue_ai.yml</c>).
     ///
     /// <para>
-    /// Умолчание обязано вмещать тот режим, который форк везёт с собой. Стояло четыре, а отряд
-    /// вырос до семи 01.09.2026, и на умолчаниях это давало тихую половинчатость: либо часть
-    /// корпусов оставалась без агента и стояла столбом, либо тела разбирали весь лимит и мозг не
-    /// садился в ЯДРО — режим злого ИИ без злого ИИ, без единой ошибки в журнале. Меняя
-    /// <c>supportBorgs</c>, меняйте и это число.
+    /// The default has to accommodate the mode the fork ships with. It stood at four, and the squad
+    /// grew to seven on 01.09.2026, and on the old default that produced quiet half-measures: either
+    /// some hulls went without an agent and stood there like statues, or the bodies claimed the
+    /// whole limit and the brain could not sit in the CORE — rogue AI mode with no rogue AI, and not
+    /// a single error in the log. When changing <c>supportBorgs</c>, change this number too.
     /// </para>
     /// <para>
-    /// Прежнее умолчание в единицу защищало односотовый llama-server, у которого два агента
-    /// вытесняют префикс-кэш друг друга, — но эта защита живёт не здесь, а в цепочке профилей
-    /// (<c>AgentBody.LlmChain</c>): агенту с чужой моделью чужой слот не мешает.
+    /// The previous default of one protected a single-slot llama-server, where two agents evict
+    /// each other's prefix cache — but that protection does not live here, it lives in the profile
+    /// chain (<c>AgentBody.LlmChain</c>): an agent with a different model does not contend for
+    /// somebody else's slot.
     /// </para>
     /// </summary>
     public static readonly CVarDef<int> MaxAgents =
@@ -139,69 +141,71 @@ public sealed class AiCVars
     public static readonly CVarDef<float> RequestTimeout =
         CVarDef.Create("ai.request_timeout", 180f, CVar.SERVERONLY);
 
-    // ------------------------------------------------------------ цепочка моделей
+    // ------------------------------------------------------------ model chain
 
     /// <summary>
-    /// Главная модель и порядок фаллбеков: id прототипов <c>aiLlmProfile</c> через запятую,
-    /// например <c>codex,grok,deepseek,local</c>. Первый — главный.
+    /// Primary model and fallback order: comma-separated ids of <c>aiLlmProfile</c> prototypes,
+    /// e.g. <c>codex,grok,deepseek,local</c>. The first one is primary.
     ///
     /// <para>
-    /// Пусто — вести себя как раньше: один эндпоинт из <c>ai.endpoint</c> / <c>ai.model</c>. Это не
-    /// временная мера, а рабочий режим: когда профили ещё не разложены или один из них сломал
-    /// раунд, откат должен быть одной строкой в консоли, а не пересборкой с киком всех игроков.
+    /// Empty — behave as before: a single endpoint from <c>ai.endpoint</c> / <c>ai.model</c>. That
+    /// is not a stopgap but a working mode: while profiles are not yet laid out, or one of them
+    /// broke the round, the rollback has to be one line in the console, not a rebuild that kicks
+    /// every player.
     /// </para>
     /// <para>
-    /// Порядок живёт здесь, а не в YAML профилей, ровно потому же: сам набор провайдеров — это
-    /// данные, а вот кто из них сейчас главный — операционное решение, и менять его надо на живом
-    /// сервере. Локальный профиль стоит держать последним: цепочка, целиком уехавшая в интернет,
-    /// кончается вместе с интернетом.
+    /// The order lives here rather than in the profile YAML for exactly the same reason: the set of
+    /// providers itself is data, but which of them is currently primary is an operational decision,
+    /// and it has to be changed on a live server. The local profile is worth keeping last: a chain
+    /// that has entirely moved to the internet ends together with the internet.
     /// </para>
     /// </summary>
     public static readonly CVarDef<string> LlmChain =
         CVarDef.Create("ai.llm_chain", "", CVar.SERVERONLY);
 
     /// <summary>
-    /// SOCKS-прокси для профилей с <c>proxy: Socks</c>. Пусто — такие профили пойдут напрямую.
+    /// SOCKS proxy for profiles with <c>proxy: Socks</c>. Empty — such profiles go direct.
     ///
-    /// <c>SocketsHttpHandler</c> понимает <c>socks4://</c>, <c>socks4a://</c> и <c>socks5://</c> с
-    /// .NET 6, так что своей библиотеки не нужно. Локальные профили обязаны стоять на
-    /// <c>proxy: None</c>: запрос на loopback, ушедший в удалённый выход, просто зависает.
+    /// <c>SocketsHttpHandler</c> understands <c>socks4://</c>, <c>socks4a://</c> and <c>socks5://</c>
+    /// since .NET 6, so no separate library is needed. Local profiles must be set to
+    /// <c>proxy: None</c>: a request to loopback sent out through a remote proxy simply hangs.
     /// </summary>
     public static readonly CVarDef<string> LlmSocksProxy =
         CVarDef.Create("ai.llm_socks_proxy", "socks5://127.0.0.1:10808", CVar.SERVERONLY);
 
-    /// <summary>Сколько профиль спит после обычного отказа — сеть, 5xx, таймаут. Секунды.</summary>
+    /// <summary>How long a profile sleeps after an ordinary failure — network, 5xx, timeout. Seconds.</summary>
     public static readonly CVarDef<float> LlmCooldownSeconds =
         CVarDef.Create("ai.llm_cooldown_seconds", 300f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Сколько спать после исчерпания квоты, когда провайдер не сказал, когда сброс. Секунды.
+    /// How long to sleep after quota exhaustion, when the provider did not say when it resets. Seconds.
     ///
-    /// Час, а не пять минут, и это не осторожность. Подписочная квота — окно с известным концом:
-    /// у Codex пятичасовое, у Grok Build недельный пул. Пробы в исчерпанное окно ничего не
-    /// возвращают, но каждая из них — обращение, то есть они тратят ровно то, чего уже нет.
-    /// Если провайдер прислал <c>Retry-After</c>, это значение не используется вовсе — берётся
-    /// названный им срок.
+    /// An hour, not five minutes, and this is not caution. A subscription quota is a window with a
+    /// known end: five hours for Codex, a weekly pool for Grok Build. Probes into an exhausted
+    /// window return nothing, but each one is still a request — that is, they spend exactly the
+    /// thing that is already gone. If the provider sent <c>Retry-After</c>, this value is not used
+    /// at all — the deadline it named is used instead.
     /// </summary>
     public static readonly CVarDef<float> LlmQuotaCooldownSeconds =
         CVarDef.Create("ai.llm_quota_cooldown_seconds", 3600f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Как часто пробовать вернуться на главный профиль после ухода на фаллбек. Секунды.
+    /// How often to try returning to the primary profile after falling back. Seconds.
     ///
-    /// Проба не бесплатна: смена провайдера обесценивает префиксный кэш на обеих сторонах, а живой
-    /// сервер держит реюз 97.9% и экономит этим десятки тысяч токенов на каждом ходу. Пять минут —
-    /// компромисс между «сидим на резерве всю смену» и «дёргаемся каждый ход».
+    /// A probe is not free: switching providers invalidates the prefix cache on both sides, and the
+    /// live server holds a 97.9% reuse rate, saving tens of thousands of tokens on every turn.
+    /// Five minutes is a compromise between "sit on the fallback for the whole shift" and "flap
+    /// every turn".
     /// </summary>
     public static readonly CVarDef<float> LlmRecheckSeconds =
         CVarDef.Create("ai.llm_recheck_seconds", 300f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Общий потолок на один ход поверх таймаутов отдельных профилей. Секунды.
+    /// Overall ceiling on one turn, on top of the individual profiles' timeouts. Seconds.
     ///
-    /// Четыре профиля по 150–180 с складываются в десять минут на одном ходу, и агент, который
-    /// «просто думает», для экипажа неотличим от сломанного. Роутер не начинает новую попытку, если
-    /// бюджет вышел, и обрезает текущую по остатку.
+    /// Four profiles at 150-180s each add up to ten minutes on a single turn, and an agent that is
+    /// "just thinking" is indistinguishable from a broken one to the crew. The router does not start
+    /// a new attempt once the budget is spent, and trims the current one to whatever remains.
     /// </summary>
     public static readonly CVarDef<float> LlmTotalTimeout =
         CVarDef.Create("ai.llm_total_timeout", 240f, CVar.SERVERONLY);
@@ -244,33 +248,35 @@ public sealed class AiCVars
     /// <summary>
     /// Observations buffered before the oldest are dropped (and the drop is reported).
     ///
-    /// Поднято с 200 под поток строк OBSERVED: наблюдение видит каждое действие каждого человека в
-    /// кадре, и при двухстах строках на всё про всё разговорчивый отсек за один ход агента выбирал
-    /// бы очередь целиком. Контекст модели — 256k, сотня строк в сообщении наблюдения ничего не
-    /// ломает; ломала бы потеря реплики, а от неё защищает <see cref="ObserveBuffer"/>.
+    /// Raised from 200 because of the stream of OBSERVED lines: observation sees every action of
+    /// every person in frame, and at two hundred lines for everything, a chatty compartment would
+    /// exhaust the whole queue in a single agent turn. The model's context is 256k, a hundred lines
+    /// in an observation message breaks nothing; losing a line of speech would, and that is what
+    /// <see cref="ObserveBuffer"/> guards against.
     /// </summary>
     public static readonly CVarDef<int> ObsBuffer =
         CVarDef.Create("ai.obs_buffer", 600, CVar.SERVERONLY);
 
     /// <summary>
-    /// Сколько будильников агент может держать одновременно.
+    /// How many alarms the agent may hold at once.
     ///
-    /// Потолок нужен не ради памяти — восемь записей ничего не стоят, — а ради самой петли: каждый
-    /// сработавший таймер это ход, то есть запрос к модели. Агент, поставивший напоминалку на каждое
-    /// обещание за смену, разбудил бы себя чаще, чем его будит экипаж, и перестал бы отличать
-    /// собственный фон от станции. Восемь — это примерно предел того, что он способен внятно
-    /// перечислить в строке SELF.
+    /// The ceiling is not about memory — eight records cost nothing — but about the loop itself:
+    /// every timer that fires is a turn, that is, a request to the model. An agent that set a
+    /// reminder for every promise made during the shift would wake itself more often than the crew
+    /// wakes it, and would stop being able to tell its own background noise from the station. Eight
+    /// is roughly the limit of what it can meaningfully list in the SELF line.
     /// </summary>
     public static readonly CVarDef<int> MaxTimers =
         CVarDef.Create("ai.max_timers", 8, CVar.SERVERONLY);
 
     /// <summary>
-    /// Нижняя граница срока таймера, в секундах. Она же минимальный интервал повтора.
+    /// Lower bound on a timer's duration, in seconds. Also the minimum repeat interval.
     ///
-    /// Тридцать секунд — это не «достаточно точно», а «дешевле, чем тик простоя». Повтор с
-    /// интервалом в секунду превратил бы петлю в генератор ходов и счётчик расходов на модель,
-    /// причём с самым безобидным следом в логах: агент просто всё время о чём-то думает.
-    /// Бенчмарки опускают это значение, чтобы не ждать полминуты на каждый тест.
+    /// Thirty seconds is not "accurate enough" but "cheaper than an idle tick". A repeat with a
+    /// one-second interval would turn the loop into a turn generator and a model-spend counter,
+    /// with the most innocent-looking trace in the logs: the agent is simply thinking about
+    /// something all the time. Benchmarks lower this value so as not to wait half a minute on every
+    /// test.
     /// </summary>
     public static readonly CVarDef<int> TimerMinSeconds =
         CVarDef.Create("ai.timer_min_seconds", 30, CVar.SERVERONLY);
@@ -330,131 +336,138 @@ public sealed class AiCVars
         CVarDef.Create("ai.look_limit", 300, CVar.SERVERONLY);
 
     /// <summary>
-    /// Порог предупреждения для ОДНОГО среза работы в мире. Ничего не ограничивает — только пишет
-    /// в журнал и в <c>aiagent cost</c>. Ограничивает <see cref="FrameBudgetMs"/>.
+    /// Warning threshold for a SINGLE slice of work in the world. Limits nothing — only writes to
+    /// the log and to <c>aiagent cost</c>. What actually limits it is <see cref="FrameBudgetMs"/>.
     /// </summary>
     public static readonly CVarDef<float> MainThreadBudgetMs =
         CVarDef.Create("ai.mainthread_budget_ms", 5f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Сколько миллисекунд кадра шина мира может занять под запросы агента.
+    /// How many milliseconds of frame time the world bus may spend on agent requests.
     ///
-    /// Три при тикрейте 30 — это 9% кадра. Здоровый тик на этом сервере тратит 21–26 мс из 33.3
-    /// на <c>EntitySystems</c>, так что три миллисекунды берутся из запаса, а не из чужой работы.
+    /// Three at a tickrate of 30 is 9% of a frame. A healthy tick on this server spends 21-26ms of
+    /// 33.3 on <c>EntitySystems</c>, so the three milliseconds come out of the slack, not out of
+    /// somebody else's work.
     ///
-    /// Ноль не выключает шину: один срез исполняется до первой проверки дедлайна, иначе
-    /// перегруженный сервер заморозил бы агента навсегда, и тот тихо умер бы посреди раунда.
+    /// Zero does not disable the bus: one slice always runs before the first deadline check,
+    /// otherwise an overloaded server would freeze the agent forever, and it would quietly die in
+    /// the middle of a round.
     /// </summary>
     public static readonly CVarDef<float> FrameBudgetMs =
         CVarDef.Create("ai.frame_budget_ms", 3f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Возраст, после которого обычная заявка обслуживается вперёд срочных, мс.
+    /// Age after which an ordinary request is served ahead of urgent ones, ms.
     ///
-    /// Сторож от голодания: без него поток срочных мог бы держать обзор в очереди неограниченно.
-    /// При нынешней глубине очереди (инструменты вызываются строго последовательно, в полёте одна
-    /// заявка) не срабатывает, и это нормально — страховка на будущее.
+    /// A starvation guard: without it a stream of urgent requests could keep an overview stuck in
+    /// the queue indefinitely. At the current queue depth (tools are called strictly sequentially,
+    /// one request in flight) it never fires, and that is fine — it is insurance for the future.
     /// </summary>
     public static readonly CVarDef<float> WorldPromoteMs =
         CVarDef.Create("ai.world_promote_ms", 500f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Потолок глубины очереди к миру. Обязан не срабатывать никогда — сработал, значит завёлся
-    /// параллелизм, которого в модуле нет. Отказ громкий: заявка возвращает ошибку, а не теряется.
+    /// Ceiling on the world queue's depth. It must never trigger — if it does, some concurrency has
+    /// crept in that the module does not have. The failure is loud: the request comes back with an
+    /// error rather than being silently dropped.
     /// </summary>
     public static readonly CVarDef<int> WorldQueueMax =
         CVarDef.Create("ai.world_queue_max", 256, CVar.SERVERONLY);
 
     /// <summary>
-    /// Рубильник шины. <c>false</c> — запросы уходят прямо в очередь движка, как было до неё.
+    /// Bus switch. <c>false</c> — requests go straight into the engine's own queue, as before the
+    /// bus existed.
     ///
-    /// Тот же приём, что у <see cref="LookFast"/>, и по той же причине: сервер публичный, а
-    /// пересборка выкидывает всех, кто на нём играет. Откат обязан быть командой, а не выкаткой.
+    /// The same trick as <see cref="LookFast"/>, for the same reason: the server is public, and a
+    /// rebuild kicks everyone playing on it. A rollback has to be a command, not a deployment.
     /// </summary>
     public static readonly CVarDef<bool> WorldBusEnabled =
         CVarDef.Create("ai.world_bus", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Собирать видимые сущности одним обходом дерева вместо запроса на каждый тайл.
+    /// Collect visible entities with one tree walk instead of a query per tile.
     ///
-    /// Рубильник, а не эксперимент. Медленный путь оставлен в дереве по двум причинам, и обе
-    /// стоят пятнадцати строк.
+    /// A switch, not an experiment. The slow path is kept around in the tree for two reasons, and
+    /// both are worth the fifteen lines.
     ///
-    /// Первая — доказательство: тест эквивалентности гоняет оба пути по одной станции и требует,
-    /// чтобы быстрый не потерял ничего из увиденного медленным. Утверждение «мы ничего не
-    /// сломали» либо проверяемо, либо это обещание.
+    /// The first is proof: an equivalence test runs both paths over the same station and requires
+    /// the fast one to lose nothing the slow one saw. The claim "we broke nothing" is either
+    /// checkable or it is a promise.
     ///
-    /// Вторая — откат. Сервер публичный, и пересборка с перезапуском выкидывает всех, кто на
-    /// нём играет. <c>cvar ai.look_fast false</c> из админ-консоли стоит секунды и ноль киков,
-    /// а разбираться можно потом.
+    /// The second is rollback. The server is public, and a rebuild-and-restart kicks everyone
+    /// playing on it. <c>cvar ai.look_fast false</c> from the admin console costs a second and zero
+    /// kicks, and the investigation can happen afterwards.
     /// </summary>
     public static readonly CVarDef<bool> LookFast =
         CVarDef.Create("ai.look_fast", true, CVar.SERVERONLY);
 
-    // ------------------------------------------------------------- наблюдение
+    // ------------------------------------------------------------- observation
 
     /// <summary>
-    /// Видит ли агент, что происходит рядом с его глазом.
+    /// Whether the agent sees what happens near its eye.
     ///
-    /// Общий рубильник над всеми подписками наблюдения. Сервер публичный, и если поток строк
-    /// окажется вреднее пользы, <c>cvar ai.observe false</c> из админ-консоли стоит секунды и ноль
-    /// киков — в отличие от пересборки с перезапуском.
+    /// The overall switch above every observation subscription. The server is public, and if the
+    /// stream of lines turns out more harmful than useful, <c>cvar ai.observe false</c> from the
+    /// admin console costs a second and zero kicks — unlike a rebuild-and-restart.
     /// </summary>
     public static readonly CVarDef<bool> Observe =
         CVarDef.Create("ai.observe", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Полурамка поля зрения глаза, в тайлах.
+    /// Half-extent of the eye's field of view, in tiles.
     ///
-    /// Совпадает с <c>look {"expand":0}</c> намеренно: это одно и то же поле, и расхождение значило
-    /// бы, что агент видит событие там, где обзор ничего не покажет, — или наоборот.
+    /// Deliberately matches <c>look {"expand":0}</c>: it is the same field, and a mismatch would
+    /// mean the agent sees an event somewhere the overview would show nothing — or the other way
+    /// around.
     /// </summary>
     public static readonly CVarDef<float> ObserveRange =
         CVarDef.Create("ai.observe_range", 8.5f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Какие ярлыки наблюдений включены. Пусто — все.
+    /// Which observation labels are enabled. Empty — all of them.
     ///
-    /// Список через запятую (<c>урон,выстрел,вложил</c>), ручка на случай, если в бою окажется, что
-    /// какой-то вид событий даёт поток без пользы. Сужается командой из консоли, а не выкаткой:
-    /// решать это по журналу живого сервера правильнее, чем угадывать заранее, а угадывать заранее
-    /// и вырезать кодом — значит подменять модель таблицей глаголов.
+    /// A comma-separated list (<c>урон,выстрел,вложил</c> or <c>damage,shot,inserted</c>), a knob
+    /// for when combat reveals that some kind of event produces a stream without any benefit.
+    /// Names match the agent's prompt language; the other language of the same label is accepted
+    /// too. Narrowed by a console command rather than a deployment.
     /// </summary>
     public static readonly CVarDef<string> ObserveKinds =
         CVarDef.Create("ai.observe_kinds", string.Empty, CVar.SERVERONLY);
 
     /// <summary>
-    /// Учитывать ли стены при наблюдении.
+    /// Whether to account for walls during observation.
     ///
-    /// Выключено, и это осознанная уступка. Строгая проверка — <c>StationAiVisionSystem.IsAccessible</c>,
-    /// а она разворачивает три сотни тайлов и делает broadphase-запрос на каждый. На редком вызове
-    /// (одна дверь, один клик) это незаметно; на потоке событий это возврат к тому, из-за чего
-    /// <c>look</c> держал тик секунду.
+    /// Off, and that is a deliberate concession. The strict check is
+    /// <c>StationAiVisionSystem.IsAccessible</c>, and it unrolls three hundred tiles and makes a
+    /// broadphase query for each. On a rare call (one door, one click) that is unnoticeable; on a
+    /// stream of events it is a return to what once made <c>look</c> hold up a tick for a second.
     ///
-    /// Цена выключенного состояния названа прямо: в пределах <see cref="ObserveRange"/> агент
-    /// заметит происходящее за стеной, тогда как человек на его месте увидел бы стену. Включённое
-    /// добавляет третью ступень ворот с мемо по тайлу на один тик и потолком проверок за тик.
+    /// The price of leaving it off is named plainly: within <see cref="ObserveRange"/> the agent
+    /// will notice what happens behind a wall, whereas a human in its place would see the wall. On
+    /// adds a third gate stage with a per-tile memo for one tick and a cap on checks per tick.
     /// </summary>
     public static readonly CVarDef<bool> ObserveOcclusion =
         CVarDef.Create("ai.observe_occlusion", false, CVar.SERVERONLY);
 
     /// <summary>
-    /// Сколько строк наблюдения очередь держит одновременно.
+    /// How many observation lines the queue holds at once.
     ///
-    /// Не про экономию, а про порядок вытеснения: общий потолок очереди выбрасывает старейшее
-    /// безотносительно вида, и поток OBSERVED вытолкнул бы из неё обращение по рации. Этот потолок
-    /// подрезает старейшую OBSERVED и только её, поэтому заглушить агента вознёй в кадре нельзя.
+    /// Not about economy but about eviction order: the overall queue ceiling drops the oldest entry
+    /// regardless of kind, and a stream of OBSERVED would push a radio call out of it. This ceiling
+    /// trims only the oldest OBSERVED entry, so the agent cannot be silenced by commotion in frame.
     /// </summary>
     public static readonly CVarDef<int> ObserveBuffer =
         CVarDef.Create("ai.observe_buffer", 400, CVar.SERVERONLY);
 
     /// <summary>
-    /// Потолок строгих проверок видимости за тик; работает только при <see cref="ObserveOcclusion"/>.
+    /// Ceiling on strict visibility checks per tick; only applies when
+    /// <see cref="ObserveOcclusion"/> is on.
     ///
-    /// Страховка, а не настройка. Мемо по тайлу уже схлопывает драку на одном тайле в одну проверку,
-    /// но выдумать нагрузку, где событий в кадре десятки за тик, ничего не стоит — а каждая
-    /// проверка это сотни broadphase-запросов. Сверх потолка события пропускаются, и число
-    /// пропущенных уходит в журнал: молча терять наблюдения хуже, чем терять их громко.
+    /// Insurance, not a tuning knob. The per-tile memo already collapses a fight on one tile into a
+    /// single check, but it costs nothing to imagine a load with dozens of events in frame per tick
+    /// — and each check is hundreds of broadphase queries. Beyond the ceiling, events are skipped,
+    /// and the number skipped goes to the log: silently losing observations is worse than losing
+    /// them loudly.
     /// </summary>
     public static readonly CVarDef<int> ObserveMaxChecksPerTick =
         CVarDef.Create("ai.observe_max_checks_per_tick", 4, CVar.SERVERONLY);
@@ -478,98 +491,103 @@ public sealed class AiCVars
         CVarDef.Create("ai.data_dir", "", CVar.SERVERONLY);
 
     /// <summary>
-    /// Читать ли накладку прототипов из <c>&lt;ai.data_dir&gt;/config.d/*.yml</c>.
+    /// Whether to read the prototype overlay from <c>&lt;ai.data_dir&gt;/config.d/*.yml</c>.
     ///
     /// <para>
-    /// Включено, потому что пустой или отсутствующий каталог — это ровно то же поведение, что до
-    /// накладки: сборка работает на прототипах из <c>Resources/</c>. Разбор идёт по файлам, и
-    /// сломанный файл не отменяет остальные (<see cref="Content.Server.AiAgent.Config.AiConfigOverlay"/>).
+    /// On, because an empty or missing directory is exactly the same behaviour as before the
+    /// overlay existed: the build runs on the prototypes from <c>Resources/</c>. Parsing is per
+    /// file, and a broken file does not cancel the rest
+    /// (<see cref="Content.Server.AiAgent.Config.AiConfigOverlay"/>).
     /// </para>
     /// <para>
-    /// Выключать это стоит ровно в одном случае: когда сервер ведёт себя не так, как написано в
-    /// <c>Resources/</c>, и надо ОТЛИЧИТЬ правку накладки от правки кода. <c>false</c> плюс
-    /// перезапуск возвращают сборку к тому, что лежит в репозитории, не трогая файлы в
-    /// <c>ai_data/</c>. Живьём переключать бесполезно — прототипы уже загружены; для живой
-    /// перезагрузки есть <c>aiagent config reload</c>.
+    /// It is worth turning off in exactly one case: when the server behaves differently from what
+    /// is written in <c>Resources/</c>, and you need to DISTINGUISH an overlay edit from a code
+    /// edit. <c>false</c> plus a restart returns the build to what is in the repository, without
+    /// touching the files in <c>ai_data/</c>. Toggling it live is useless — the prototypes are
+    /// already loaded; for a live reload there is <c>aiagent config reload</c>.
     /// </para>
     /// </summary>
     public static readonly CVarDef<bool> ConfigOverlay =
         CVarDef.Create("ai.config_overlay", true, CVar.SERVERONLY);
 
-    // ------------------------------------------------- резервное питание без инженеров
+    // ------------------------------------------------- backup power without engineers
     //
-    // Здесь же, по той же причине, что и ai.station_name ниже: форк владеет ровно одним классом
-    // [CVarDefs], и завести второй ради трёх строк — значит положить новый файл в чужое дерево.
+    // Placed here for the same reason as ai.station_name below: the fork owns exactly one
+    // [CVarDefs] class, and starting a second one for three lines would mean dropping a new file
+    // into someone else's tree.
 
     /// <summary>
-    /// Ставить ли резервный генератор, когда на смене нет инженеров.
+    /// Whether to deploy a backup generator when there are no engineers on shift.
     ///
-    /// Рубильник по той же причине, что у <see cref="LookFast"/>: сервер публичный, пересборка
-    /// кикает всех, поэтому откат обязан быть командой из консоли, а не выкаткой.
+    /// A switch for the same reason as <see cref="LookFast"/>: the server is public, a rebuild kicks
+    /// everyone, so a rollback has to be a console command, not a deployment.
     /// </summary>
     public static readonly CVarDef<bool> BackupPower =
         CVarDef.Create("ai.backup_power", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Мощность резервного контура, ватты.
+    /// Backup circuit power, watts.
     ///
     /// <para>
-    /// Шестьдесят киловатт — цифра ДО замера, а не после, и это важно знать. Все опорные числа в
-    /// апстримовом гайдбуке («батарей хватит на 5–10 минут», отсюда 340–670 кВт потребления)
-    /// написаны для полного экипажа. Сколько тянет пустая станция, неизвестно: лампа берёт 5 Вт,
-    /// и на смене из одного человека почти всё оборудование спит. Мерить надо консольной командой
-    /// <c>powerstat</c> на живом раунде и ставить с запасом ×1.5.
+    /// Sixty kilowatts is a figure from BEFORE measurement, not after, and that matters to know. All
+    /// the reference numbers in the upstream guidebook ("batteries will last 5-10 minutes", hence
+    /// 340-670kW of consumption) are written for a full crew. How much an empty station draws is
+    /// unknown: a lamp takes 5W, and on a one-person shift almost all the equipment is asleep. It
+    /// needs to be measured with the <c>powerstat</c> console command in a live round and set with
+    /// a x1.5 margin.
     /// </para>
     /// <para>
-    /// Для сравнения: солнечный массив на карте Packed — 98 кВт номинала (и ноль на главной сети,
-    /// потому что он к ней не подключён), PACMAN — 30 кВт, SuperPACMAN — 50, апстримовый
-    /// DebugGenerator — 300.
+    /// For comparison: the solar array on the Packed map is 98kW nominal (and zero on the main grid,
+    /// because it is not connected to it), PACMAN is 30kW, SuperPACMAN is 50, and the upstream
+    /// DebugGenerator is 300.
     /// </para>
     /// </summary>
     public static readonly CVarDef<int> BackupPowerWatts =
         CVarDef.Create("ai.backup_power_watts", 60000, CVar.SERVERONLY);
 
     /// <summary>
-    /// Множитель поверх мощности резервного контура.
+    /// Multiplier on top of the backup circuit's power.
     ///
     /// <para>
-    /// Заведён потому, что первый же боевой раунд вскрыл дырку: мощность известных станций лежит в
-    /// прототипе (<c>backup_power.yml</c>), а прототипы читаются при старте процесса — то есть
-    /// подкрутить число на живом сервере было нечем, и пришлось бы пересобирать и кикать
-    /// играющих. Множитель действует на ЛЮБОЙ источник — и таблицу, и
-    /// <see cref="BackupPowerWatts"/>, — и читается на раздаче должностей, поэтому вступает в силу
-    /// со следующего раунда.
+    /// Added because the very first live round exposed a hole: known stations' power lives in a
+    /// prototype (<c>backup_power.yml</c>), and prototypes are read at process start — meaning there
+    /// was no way to tweak the number on a live server, and it would have taken a rebuild and
+    /// kicking everyone playing. The multiplier applies to ANY source — both the table and
+    /// <see cref="BackupPowerWatts"/> — and is read at job assignment, so it takes effect starting
+    /// with the next round.
     /// </para>
     /// <para>
-    /// Пропорции между станциями при этом сохраняются: таблица остаётся относительной шкалой, а
-    /// множитель сдвигает её целиком. Если окажется, что прокси «APC × 1200» занижает везде
-    /// одинаково, лечится одной командой вместо тринадцати правок.
+    /// Proportions between stations are preserved: the table remains a relative scale, and the
+    /// multiplier shifts it as a whole. If it turns out that the "APC x 1200" proxy underestimates
+    /// everywhere by the same amount, it is fixed with one command instead of thirteen edits.
     /// </para>
     /// </summary>
     public static readonly CVarDef<float> BackupPowerScale =
         CVarDef.Create("ai.backup_power_scale", 1f, CVar.SERVERONLY);
 
     /// <summary>
-    /// Какой департамент считается «инженерной сменой».
+    /// Which department counts as the "engineering shift".
     ///
-    /// Читается из прототипа департамента, а не списком роль-за-ролью в коде: форк, добавивший
-    /// свою инженерную должность, учтётся сам. Это же и задел на перенос аддона на чужой форк —
-    /// там состав отдела почти наверняка другой.
+    /// Read from the department prototype rather than a role-by-role list in code: a fork that adds
+    /// its own engineering job gets counted automatically. This also lays the groundwork for
+    /// porting the addon to a different fork — there the department's roster is almost certainly
+    /// different.
     /// </summary>
     public static readonly CVarDef<string> BackupPowerDepartment =
         CVarDef.Create("ai.backup_power_department", "Engineering", CVar.SERVERONLY);
 
     /// <summary>
-    /// Имя станции. Пустое — как в ваниле: генератор карты, «TG Box Station 14-Alpha».
+    /// Station name. Empty — as in vanilla: the map's generator, "TG Box Station 14-Alpha".
     ///
-    /// Живёт в пространстве <c>ai.</c>, хотя про агента не про него. Форк владеет ровно одним
-    /// классом <c>[CVarDefs]</c>, и заводить второй ради одной строки — хуже, чем поставить её
-    /// сюда с этим объяснением: любой другой вариант означал бы новый файл в чужом дереве.
+    /// Lives under the <c>ai.</c> namespace even though it has nothing to do with the agent. The
+    /// fork owns exactly one <c>[CVarDefs]</c> class, and starting a second one for a single line
+    /// would be worse than putting it here with this explanation: any other option would mean a new
+    /// file in someone else's tree.
     /// </summary>
     public static readonly CVarDef<string> StationName =
         CVarDef.Create("ai.station_name", "", CVar.SERVERONLY);
 
-    // ----------------------------------------------------------------- отладка
+    // ----------------------------------------------------------------- debug
 
     /// <summary>
     /// The agent event bus, for an external debugger.
@@ -590,10 +608,10 @@ public sealed class AiCVars
     /// nobody is registered as a subscriber.
     ///
     /// <para>
-    /// 2048, а не прежние 512, потому что агентов теперь до четырёх: кадров вчетверо больше, а
-    /// всплеск компакции — это четыре <c>history.replaced</c> с полными телами, который выбивает
-    /// кольцо за один заход. Симптом переполнения обманчив: клиент не теряет данные, он их
-    /// перекачивает, и выглядит это как «отладчик постоянно моргает без причины».
+    /// 2048, not the previous 512, because there can now be up to four agents: four times as many
+    /// frames, and a compaction burst is four <c>history.replaced</c> events with full bodies, which
+    /// blows through the ring in one pass. The overflow symptom is misleading: the client does not
+    /// lose data, it re-fetches it, and it looks like "the debugger keeps blinking for no reason".
     /// </para>
     /// </summary>
     public static readonly CVarDef<int> DebugRing =
@@ -624,182 +642,203 @@ public sealed class AiCVars
     public static readonly CVarDef<string> DebugToken =
         CVarDef.Create("ai.debug_token", "", CVar.SERVERONLY | CVar.CONFIDENTIAL);
 
-    // ------------------------------------------------------------- режим «злой ИИ»
+    // ------------------------------------------------------------- rogue AI mode
 
     /// <summary>
-    /// Раздавать ли ИИ двери, которых он штатно не касается: бластдвери, ставни, часть внешних
-    /// шлюзов.
+    /// Whether to grant the AI doors it does not touch by default: blast doors, shutters, some
+    /// external airlocks.
     ///
-    /// Все три ручки ниже <b>перекрывают прототип правила</b>, а не дополняют его: включённое в
-    /// прототипе можно выключить отсюда, но не наоборот. Так и задумано — это аварийный тормоз на
-    /// живом сервере, а не второй набор настроек режима. Читаются на раздаче должностей, то есть
-    /// вступают в силу со следующего раунда.
+    /// All three knobs below <b>override the rule prototype</b> rather than add to it: what is on
+    /// in the prototype can be turned off from here, but not the other way around. That is by
+    /// design — this is an emergency brake on a live server, not a second set of mode settings.
+    /// Read at job assignment, so they take effect starting with the next round.
     /// </summary>
     public static readonly CVarDef<bool> RogueGrantDoors =
         CVarDef.Create("ai.rogue_grant_doors", true, CVar.SERVERONLY);
 
-    /// <summary>Раздавать ли доступ ко всему, у чего есть интерфейс: консоли, вентили, панели.</summary>
+    /// <summary>Whether to grant access to everything with an interface: consoles, valves, panels.</summary>
     public static readonly CVarDef<bool> RogueGrantConsoles =
         CVarDef.Create("ai.rogue_grant_consoles", true, CVar.SERVERONLY);
 
-    /// <summary>Раздавать ли турели и их панели управления.</summary>
+    /// <summary>Whether to grant turrets and their control panels.</summary>
     public static readonly CVarDef<bool> RogueGrantTurrets =
         CVarDef.Create("ai.rogue_grant_turrets", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Ставить ли на станцию киборгов поддержки, перечисленных в прототипе правила.
+    /// Whether to deploy the support borgs listed in the rule prototype onto the station.
     ///
-    /// Тот же аварийный тормоз: выключить перечисленное в прототипе отсюда можно, включить
-    /// невыключенное — нет. Отдельная ручка от раздачи доступа потому, что и отказывают они по
-    /// разному: доступ можно оставить, а роботов убрать, если вечер идёт слишком тяжело для
-    /// экипажа.
+    /// The same emergency brake: what is listed in the prototype can be turned off from here,
+    /// turning on what is not enabled cannot. A separate knob from access granting because they
+    /// fail differently too: access can be left in place while the robots are removed, if the
+    /// evening turns out too hard for the crew.
     /// </summary>
     public static readonly CVarDef<bool> RogueSupportBorgs =
         CVarDef.Create("ai.rogue_support_borgs", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// В открытом режиме выдавать ассистента и тем, кто просил «оставить в лобби, если должность
-    /// занята».
+    /// In the open mode, also grant Assistant to those who asked to "stay in the lobby if the job is
+    /// taken".
     ///
-    /// Без этого закрытие должностей избирательно не пускает на сервер часть игроков — с их точки
-    /// зрения без всякой причины. Выключается, если окажется, что лечение хуже болезни: тогда
-    /// такие игроки просто останутся в лобби, как и просили.
+    /// Without this, closing jobs selectively locks out part of the playerbase — with no reason
+    /// visible from their point of view. Turned off if it turns out the cure is worse than the
+    /// disease: then such players simply stay in the lobby, as they asked.
     /// </summary>
     public static readonly CVarDef<bool> RogueForceOverflow =
         CVarDef.Create("ai.rogue_force_overflow", true, CVar.SERVERONLY);
 
-    // ------------------------------------------------------------------ режим скрипта
+    // ------------------------------------------------------------------ script mode
 
     /// <summary>
-    /// Инструменты идут через обёртку на Lua, а не отдельными вызовами модели.
+    /// Tools go through a Lua wrapper instead of separate model calls.
     ///
     /// <para>
-    /// Зачем. Замер боевого прогона борга: 661 обращение к модели на 680 вызовов инструментов —
-    /// ровно один круг через LLM на каждое элементарное действие, по 14 секунд и 41k промпт-токенов
-    /// за «шагни на тайл». Сборка АМЭ в такой арифметике не помещается в раунд. В режиме скрипта
-    /// модель пишет программу, и цикл «дойти, взять, донести, распаковать» стоит одного обращения.
+    /// Why. A measurement of a live borg run: 661 model calls for 680 tool calls — exactly one
+    /// round trip through the LLM per elementary action, at 14 seconds and 41k prompt tokens for
+    /// "step onto the tile". Assembling an AME does not fit into a round under that arithmetic. In
+    /// script mode the model writes a program, and the "walk there, pick up, carry, unpack" loop
+    /// costs one call.
     /// </para>
     /// <para>
-    /// Режим — свойство агента, и он ровно один: набор инструментов либо классический, либо
-    /// скриптовый. Отдельному телу переключается полем <c>AgentBody.ScriptMode</c>, чтобы можно
-    /// было держать ядро на классическом наборе, а борга — на скриптах, и сравнивать.
+    /// The mode is a property of the agent, and there is exactly one of it: the tool set is either
+    /// classic or scripted. Toggled per body with the <c>AgentBody.ScriptMode</c> field, so the core
+    /// can be kept on the classic set while a borg runs on scripts, for comparison.
     /// </para>
     /// <para>
-    /// <b>С 20.08.2026 умолчание — включено.</b> Решение владельца. Прежнее <c>false</c> было
-    /// осторожностью новой фичи, а не выводом из замеров: замеры как раз против него — один круг
-    /// через модель на каждый шаг по тайлу стоит 14 секунд и 41k токенов, и на четырёх агентах
-    /// разом это уже не «дороже», а «не помещается в раунд». Откат — <c>cvar ai.script_mode
-    /// false</c> на живом сервере, без пересборки; действует со следующей занятой сессии, потому
-    /// что режим решается один раз при сборке тела (см. <c>AiBorgSystem.Prompt</c>).
+    /// <b>Since 20.08.2026 the default is enabled.</b> An owner's decision. The previous
+    /// <c>false</c> was new-feature caution, not a conclusion from measurements: the measurements
+    /// actually argue against it — one round trip through the model per tile step costs 14 seconds
+    /// and 41k tokens, and across four agents at once that is no longer "more expensive" but
+    /// "does not fit in a round". The rollback is <c>cvar ai.script_mode false</c> on a live server,
+    /// no rebuild; it takes effect starting with the next claimed session, because the mode is
+    /// decided once when the body is assembled (see <c>AiBorgSystem.Prompt</c>).
     /// </para>
     /// </summary>
     public static readonly CVarDef<bool> ScriptMode =
         CVarDef.Create("ai.script_mode", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Сколько ждать скрипт, прежде чем отпустить его в фон.
+    /// Language of the agent's prompt, observations and tool replies: <c>ru</c> or <c>en</c>.
     ///
-    /// Короткий скрипт обязан ответить в том же вызове — иначе модель платит лишний круг за
-    /// «посмотри вокруг». Длинный уходит в фон и досылает итог наблюдением.
+    /// Frozen on the body at session start, same as <see cref="ScriptMode"/>: the frozen prefix,
+    /// the tool schemas and the JSON keys the Lua prelude reads must stay one language for the
+    /// whole session. Flip it on a live server with <c>cvar ai.language en</c>; it takes effect
+    /// on the next claimed session, no rebuild. The agent speaks the language of its prompt.
+    /// SOUL.md, CURATOR.md and the skill library are files — write them in the same language.
+    /// </summary>
+    public static readonly CVarDef<string> Language =
+        CVarDef.Create("ai.language", "ru", CVar.SERVERONLY);
+
+    /// <summary>
+    /// How long to wait for a script before letting it go into the background.
+    ///
+    /// A short script must reply within the same call — otherwise the model pays an extra round
+    /// trip for "look around". A long one goes to the background and delivers its result later as
+    /// an observation.
     /// </summary>
     public static readonly CVarDef<int> ScriptForegroundMs =
         CVarDef.Create("ai.script_foreground_ms", 1000, CVar.SERVERONLY);
 
     /// <summary>
-    /// Сколько скриптов может идти одновременно.
+    /// How many scripts may run at once.
     ///
-    /// Тело у агента одно, и два скрипта, оба двигающие его, — это не параллелизм, а драка за
-    /// ноги. Двойка оставляет место наблюдающему скрипту рядом с работающим.
+    /// The agent has one body, and two scripts both moving it is not concurrency but a fight over
+    /// its legs. Two leaves room for a watching script alongside a working one.
     /// </summary>
     public static readonly CVarDef<int> ScriptMaxProcesses =
         CVarDef.Create("ai.script_max_processes", 2, CVar.SERVERONLY);
 
     /// <summary>
-    /// Потолок жизни скрипта в реальных секундах — в отличие от будильников, которые живут в
-    /// раундовом времени. На паузе раундовые часы стоят, и раундовый потолок не наступил бы
-    /// никогда как раз тогда, когда он нужен.
+    /// Ceiling on a script's lifetime in real seconds — unlike alarms, which live in round time.
+    /// Round time stops on pause, and a round-time ceiling would never arrive exactly when it is
+    /// needed.
     /// </summary>
     public static readonly CVarDef<int> ScriptMaxSeconds =
         CVarDef.Create("ai.script_max_seconds", 300, CVar.SERVERONLY);
 
-    /// <summary>Сколько инструментов один скрипт может позвать. Предохранитель, а не регулятор темпа.</summary>
+    /// <summary>How many tools a single script may call. A fuse, not a pacing knob.</summary>
     public static readonly CVarDef<int> ScriptMaxCalls =
         CVarDef.Create("ai.script_max_calls", 400, CVar.SERVERONLY);
 
-    /// <summary>Потолок инструкций Lua: единственная защита от <c>while true do end</c>.</summary>
+    /// <summary>Ceiling on Lua instructions: the only defence against <c>while true do end</c>.</summary>
     public static readonly CVarDef<int> ScriptMaxSteps =
         CVarDef.Create("ai.script_max_steps", 5_000_000, CVar.SERVERONLY);
 
-    /// <summary>Сколько строк вывода держать на процесс; старые вытесняются с отметкой о потере.</summary>
+    /// <summary>How many output lines to keep per process; older ones are evicted with a loss marker.</summary>
     public static readonly CVarDef<int> ScriptOutputLines =
         CVarDef.Create("ai.script_output_lines", 200, CVar.SERVERONLY);
 
     /// <summary>
-    /// Завершать раунд, когда с сервера ушёл последний игрок.
+    /// End the round when the last player has left the server.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Без этого пустой сервер остаётся в том же раунде навсегда, и первый зашедший через сутки
-    /// попадает не на новую смену, а в остывший труп предыдущей: станция разгерметизирована,
-    /// экипаж мёртв, злой ИИ уже победил. Формально раунд идёт, играть в нём нечего.
+    /// Without this, an empty server stays in the same round forever, and the first person to join
+    /// a day later does not get a fresh shift but the cold corpse of the previous one: the station
+    /// depressurized, the crew dead, the rogue AI already victorious. Formally the round is running;
+    /// there is nothing to play in it.
     /// </para>
     /// <para>
-    /// Токены при этом не горят и без нас: <c>game.auto_pause_empty</c> останавливает симуляцию, а
-    /// сборка наблюдения на паузе возвращает «нечего делать» (см. <c>BuildObservationAsync</c>).
-    /// То есть эта настройка не про расход, а про то, чтобы следующий игрок получил чистую смену.
+    /// Tokens are not burned regardless: <c>game.auto_pause_empty</c> halts the simulation, and
+    /// building an observation while paused returns "nothing to do" (see
+    /// <c>BuildObservationAsync</c>). So this setting is not about spend, but about the next player
+    /// getting a clean shift.
     /// </para>
     /// </remarks>
     public static readonly CVarDef<bool> EndRoundWhenEmpty =
         CVarDef.Create("ai.end_round_when_empty", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Завершать раунд, когда станционный ИИ убит. Работает только в режимах злого ИИ.
+    /// End the round when the station AI is killed. Only applies in rogue AI modes.
     /// </summary>
     /// <remarks>
-    /// Смысл ровно тот же, что у ядерной бомбы в апстримовом режиме операции: антагонист один, и
-    /// когда его не стало, играть больше не во что. Экипаж без допусков, с мёртвым ИИ и тремя
-    /// вставшими роботами будет просто ждать шаттла. Вне режимов злого ИИ проверка не действует —
-    /// в обычной смене гибель ИИ это происшествие, а не конец истории.
+    /// The exact same reasoning as the nuclear bomb in the upstream operative mode: there is a
+    /// single antagonist, and once it is gone, there is nothing left to play for. A crew with no
+    /// clearances, a dead AI and three inert robots would simply wait for the shuttle. Outside rogue
+    /// AI modes the check does not apply — in an ordinary shift, the AI dying is an incident, not
+    /// the end of the story.
     /// </remarks>
     public static readonly CVarDef<bool> EndRoundOnAiDeath =
         CVarDef.Create("ai.end_round_on_ai_death", true, CVar.SERVERONLY);
 
     /// <summary>
-    /// Держать тела роботов вне обычных ограничений дальности репликации (PVS).
+    /// Keep robot bodies outside the usual replication range limits (PVS).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>ВЫКЛЮЧЕНО, И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ.</b> Правка родилась 20.08.2026 как лечение
-    /// петли полных ресинков и сделала ровно обратное. Один и тот же игрок, два раунда подряд:
-    /// 11 ресинков за 10 100 тиков без неё (1.1 на тысячу) против 89 за 5 100 с ней (17.4 на
-    /// тысячу) — <b>в шестнадцать раз хуже</b>. Медианное отставание клиента выросло с 10 тиков до
-    /// 36. В журнале раунда 162 первый ресинк стоит через восемнадцать строк после захвата тела и
-    /// дальше не прекращается, при том что роботы за весь раунд не сделали ни шага.
+    /// <b>OFF, AND THIS IS A MEASUREMENT, NOT CAUTION.</b> The change was born on 20.08.2026 as a
+    /// cure for a full-resync loop and did exactly the opposite. The same player, two rounds in a
+    /// row: 11 resyncs over 10,100 ticks without it (1.1 per thousand) against 89 over 5,100 with it
+    /// (17.4 per thousand) — <b>sixteen times worse</b>. Median client lag grew from 10 ticks to 36.
+    /// In round 162's log the first resync lands eighteen lines after body claim and does not stop
+    /// after that, even though the robots did not take a single step for the whole round.
     /// </para>
     /// <para>
-    /// <b>Почему стало хуже.</b> Постоянная репликация не убирает вход сущности в зону видимости,
-    /// а делает его вечным. Разбор <c>PvsSystem.Overrides.cs</c>: список постоянных сущностей
-    /// раскрывается вместе со ВСЕМ поддеревом (у инженерного тела это 26 сущностей — модули и
-    /// предметы в их руках), перебирается для каждой сессии, обрабатывается ДО обычных чанков
-    /// (<c>PvsSystem.cs:321</c> против <c>:324</c>) и — в отличие от <c>AddPvsChunk</c> — не имеет
-    /// ни проверки корня, ни выхода по исчерпании бюджета. То есть поддеревья роботов первыми
-    /// съедают бюджет входа, вытесняя из состояния остальную станцию.
+    /// <b>Why it got worse.</b> Permanent replication does not remove the entity's entry into the
+    /// visibility zone — it makes that entry eternal. Reading <c>PvsSystem.Overrides.cs</c>: the
+    /// list of permanent entities is expanded together with its WHOLE subtree (26 entities for an
+    /// engineering body — the modules and the items in their hands), iterated for every session,
+    /// processed BEFORE ordinary chunks (<c>PvsSystem.cs:321</c> versus <c>:324</c>) and — unlike
+    /// <c>AddPvsChunk</c> — has neither a root check nor a budget-exhaustion exit. That means the
+    /// robots' subtrees eat the entry budget first, pushing the rest of the station out of state.
     /// </para>
     /// <para>
-    /// Поле оставлено намеренно: стенду нужен отрицательный контроль. Воспроизведение, которое не
-    /// умеет показать ухудшение от заведомо вредной правки, ничего не доказывает и про полезную.
+    /// The field is left in place deliberately: the bench needs a negative control. A reproduction
+    /// that cannot show a regression from a change known to be harmful proves nothing about a
+    /// beneficial one either.
     /// </para>
     /// </remarks>
     public static readonly CVarDef<bool> BorgPvsOverride =
         CVarDef.Create("ai.borg_pvs_override", false, CVar.SERVERONLY);
 
     /// <summary>
-    /// Печатать в журнал шаги робота строками <c>NET TRACE kind=borg_move</c>. Ноль — молчать.
+    /// Print robot movement steps to the log as <c>NET TRACE kind=borg_move</c> lines. Zero — stay
+    /// silent.
     /// </summary>
     /// <remarks>
-    /// Прежде читался движковый <c>net.pvs_trace</c> из форкового патча PVS. Патчи движка сняты
-    /// 30.08.2026 ради замера на чистом апстриме, и вместе с ними исчез тот cvar — а трасса
-    /// движения нужна независимо от того, пропатчен движок или нет.
+    /// Used to read the engine's own <c>net.pvs_trace</c> from the fork's PVS patch. The engine
+    /// patches were removed on 30.08.2026 for a measurement against clean upstream, and that cvar
+    /// disappeared with them — but the movement trace is needed regardless of whether the engine is
+    /// patched.
     /// </remarks>
     public static readonly CVarDef<int> BorgMoveTrace =
         CVarDef.Create("ai.borg_move_trace", 0, CVar.SERVERONLY);

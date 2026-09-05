@@ -37,12 +37,12 @@ public interface IAgentEventSink
     void SkillsReloaded(IReadOnlyCollection<Skill> skills);
 
     /// <summary>
-    /// Одна заметка о человеке целиком. Пустой <see cref="PlayerNote.Entries"/> значит, что заметки
-    /// больше нет, — см. <see cref="AgentEventKind.PlayerNoteUpdated"/>.
+    /// One person's note in full. An empty <see cref="PlayerNote.Entries"/> means the note no longer
+    /// exists — see <see cref="AgentEventKind.PlayerNoteUpdated"/>.
     /// </summary>
     void PlayerNoteUpdated(PlayerNote note);
 
-    /// <summary>Хранилище заметок перечитано с диска; вот те, что уцелели.</summary>
+    /// <summary>The notes store was re-read from disk; these are the ones that survived.</summary>
     void PlayerNotesReloaded(IReadOnlyCollection<PlayerNote> notes);
 
     /// <summary>

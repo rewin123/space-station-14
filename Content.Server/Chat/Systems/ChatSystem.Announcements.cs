@@ -1,6 +1,7 @@
-// FORK PATCH К3 (docs/upstream-patches.md): три RaiseLocalEvent(new StationAnnouncementEvent(...))
-// ниже — единственная правка этого файла. Объявление доставляется чат-пакетом в СЕССИИ игроков,
-// а у мозга агента сессии нет, поэтому иначе он не слышит ни одного объявления вовсе.
+// FORK PATCH K3 (docs/upstream-patches.md): the three RaiseLocalEvent(new StationAnnouncementEvent(...))
+// calls below are the only patch in this file. An announcement is delivered as a chat packet to
+// players' SESSIONS, and the agent brain has no session, so without this it wouldn't hear a
+// single announcement at all.
 using Content.Server.AiAgent;
 using Content.Shared.Chat;
 using Content.Shared.Database;

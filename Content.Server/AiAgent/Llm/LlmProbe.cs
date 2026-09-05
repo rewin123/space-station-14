@@ -11,44 +11,46 @@ using Robust.Shared.Log;
 namespace Content.Server.AiAgent.Llm;
 
 /// <summary>
-/// Живая проверка одного профиля: дойти до провайдера теми же полями, какими ходит агент.
+/// A live check of one profile: reach the provider using the same fields the agent uses.
 ///
 /// <para>
-/// <b>Зачем она есть.</b> Настройка эндпоинта ломается тихо, и это её главное свойство. Модель не
-/// та, что в <c>/v1/models</c>; <c>ctxLimit</c> завышен вдвое против настоящего <c>n_ctx</c>;
-/// <c>reportsCache: true</c> у провайдера, который про кэш не сообщает; <c>reasoningEffort: off</c>
-/// у эндпоинта, который это поле молча игнорирует; наконец, <c>timeoutSeconds</c> не меньше
-/// <c>ai.llm_total_timeout</c> — и тогда фаллбек не пробуется НИКОГДА. Ни одна из пяти поломок не
-/// даёт ошибки при старте. Первые четыре видны через сутки по счетам и по журналу, пятая — только
-/// в тот вечер, когда голова цепочки ляжет.
+/// <b>Why it exists.</b> Endpoint configuration breaks silently, and that's its main property. The
+/// model isn't the one listed in <c>/v1/models</c>; <c>ctxLimit</c> is set twice as high as the real
+/// <c>n_ctx</c>; <c>reportsCache: true</c> on a provider that doesn't report cache; <c>reasoningEffort:
+/// off</c> on an endpoint that silently ignores that field; and finally <c>timeoutSeconds</c> not
+/// smaller than <c>ai.llm_total_timeout</c> — in which case the fallback is NEVER tried. None of
+/// these five breakages produces an error at startup. The first four surface a day later through
+/// bills and the log, the fifth only on the evening the head of the chain goes down.
 /// </para>
 /// <para>
-/// Поэтому проверка не спрашивает «отвечает ли адрес», а сверяет ЗАЯВЛЕННОЕ в профиле с тем, что
-/// провайдер делает на самом деле, и печатает расхождения. Запрос идёт через
-/// <see cref="LlamaClient"/> и <see cref="LlamaClient.CreateHttp"/>, то есть с тем же прокси, тем
-/// же ключом и тем же диалектом, что боевой ход: проверка, ходящая другим путём, проверяет не то,
-/// что играет.
+/// So the check doesn't ask "does the address respond" — it compares what the profile CLAIMS against
+/// what the provider actually does, and prints the discrepancies. The request goes through
+/// <see cref="LlamaClient"/> and <see cref="LlamaClient.CreateHttp"/>, i.e. with the same proxy, the
+/// same key, and the same dialect as a live turn: a check that takes a different path checks
+/// something other than what actually plays.
 /// </para>
 /// <para>
-/// <b>Стоит денег.</b> Это настоящее обращение к модели: у платного профиля — токены, у подписки —
-/// доля окна. Один запрос на профиль, промпт в несколько слов, <c>max_tokens</c> не трогается
-/// (у профиля он свой) — но нулём это не назвать, и вызывать её в цикле не стоит.
+/// <b>It costs money.</b> This is a real call to the model: tokens for a paid profile, a slice of the
+/// window for a subscription. One request per profile, a prompt of a few words, <c>max_tokens</c>
+/// untouched (the profile has its own) — but it can't be called free, and it shouldn't be called in
+/// a loop.
 /// </para>
 /// </summary>
 public static class LlmProbe
 {
-    /// <summary>Короткий промпт: ответ по существу не нужен, нужен факт ответа и его метрики.</summary>
+    /// <summary>A short prompt: the answer's substance doesn't matter, only the fact of a reply and its metrics.</summary>
     private const string Ping = "Ответь одним словом: работает.";
 
     /// <summary>
-    /// Проверить профиль и вернуть строки отчёта — по одной на факт.
+    /// Check a profile and return report lines — one per fact.
     /// </summary>
     /// <param name="keyNote">
-    /// Откуда взялся ключ, уже в печатном виде: «ai_data/deepseek.key, 35 символов» или «ФАЙЛА
-    /// НЕТ». Собирается снаружи, потому что путь к <c>ai_data/</c> знает система, а не клиент.
+    /// Where the key came from, already in printable form: "ai_data/deepseek.key, 35 characters" or
+    /// "NO FILE". Assembled outside, because the path to <c>ai_data/</c> is known by the system, not
+    /// by the client.
     /// </param>
-    /// <param name="compactHighDefault">Печатное <c>ai.compact_high</c> — на случай, если у профиля своего нет.</param>
-    /// <param name="totalTimeout"><c>ai.llm_total_timeout</c>: бюджет всего хода на всю цепочку.</param>
+    /// <param name="compactHighDefault">The printed <c>ai.compact_high</c> — in case the profile has no value of its own.</param>
+    /// <param name="totalTimeout"><c>ai.llm_total_timeout</c>: the budget for the whole turn across the entire chain.</param>
     public static async Task<List<string>> RunAsync(
         AiLlmProfilePrototype profile,
         LlmEndpoint endpoint,
@@ -66,10 +68,11 @@ public static class LlmProbe
             $"  ключ: {keyNote}",
         };
 
-        // ------------------------------------------------------------ сверка чисел, до сети
+        // ------------------------------------------------------------ number checks, before the network
         //
-        // Эти три расхождения видны без единого запроса, и печатаются они ПЕРВЫМИ намеренно: если
-        // провайдер вдобавок лежит, отчёт всё равно скажет то, что можно починить прямо сейчас.
+        // These three discrepancies are visible without a single request, and they're printed
+        // FIRST on purpose: if the provider is also down, the report will still say what can be
+        // fixed right now.
 
         var compactHigh = profile.CompactHigh > 0 ? profile.CompactHigh : compactHighDefault;
 
@@ -95,7 +98,8 @@ public static class LlmProbe
 
         if (listed == null)
         {
-            // Не ошибка: /v1/models есть не у всех, и наш мост к подписке — как раз такой случай.
+            // Not an error: not everyone has /v1/models, and our bridge to the subscription is
+            // exactly such a case.
             lines.Add("  /v1/models: не ответил — сверить имя модели нечем, это нормально для мостов");
         }
         else if (listed.Count == 0)
@@ -112,7 +116,7 @@ public static class LlmProbe
                       (listed.Count > 8 ? $" и ещё {listed.Count - 8}" : ""));
         }
 
-        // ------------------------------------------------------------------- контекст
+        // ------------------------------------------------------------------- context
 
         using var client = new LlamaClient(endpoint, sampling, sawmill);
 
@@ -137,7 +141,7 @@ public static class LlmProbe
                       $"на печатное ai.compact_high ({compactHighDefault})");
         }
 
-        // ----------------------------------------------------------------- живой запрос
+        // ----------------------------------------------------------------- live request
 
         try
         {
@@ -160,9 +164,9 @@ public static class LlmProbe
                 $"  токены: промпт {answer.PromptTokens} (из кэша {answer.CachedTokens}), " +
                 $"выдача {answer.CompletionTokens}, размышление {answer.ReasoningTokens}"));
 
-            // Кэш. Первый запрос по холодному префиксу законно даёт ноль, поэтому обратная сторона
-            // — обещали кэш, а его нет — здесь НЕ ошибка, а замечание: отличить холодный старт от
-            // вранья в профиле одним запросом нельзя.
+            // Cache. The first request on a cold prefix legitimately gives zero, so the opposite
+            // side — cache was promised but there isn't one — is NOT an error here, just a remark:
+            // one request can't tell a cold start apart from a lie in the profile.
             if (answer.CachedTokens > 0 && !profile.ReportsCache)
             {
                 lines.Add("  reportsCache: false, а кэш провайдер сообщает — поставьте true, " +
@@ -174,8 +178,9 @@ public static class LlmProbe
                           "«префикс-кэш сломан» идёт каждый ход, значит reportsCache: true здесь враньё");
             }
 
-            // Размышление. Поле уходит молча и молча игнорируется — это ровно та поломка, которую
-            // на Grok 4.6 удалось поймать только замером, и повторять замер руками больше не надо.
+            // Thinking. The field is sent silently and silently ignored — this is exactly the
+            // breakage that on Grok 4.6 could only be caught by measuring, and the measurement no
+            // longer needs to be repeated by hand.
             var effort = string.IsNullOrWhiteSpace(profile.ReasoningEffort)
                 ? sampling.ThinkingEffort
                 : profile.ReasoningEffort;
@@ -207,12 +212,12 @@ public static class LlmProbe
     }
 
     /// <summary>
-    /// <c>GET /v1/models</c> → список идентификаторов, или null, если эндпоинт так не умеет.
+    /// <c>GET /v1/models</c> → a list of identifiers, or null if the endpoint doesn't support this.
     /// </summary>
     /// <remarks>
-    /// Разница между null и пустым списком несущая. Мост к подписке (<c>Tools/grokbridge</c>) на
-    /// этот путь не отвечает вовсе, и печатать из-за этого «моделей нет» значило бы обвинить
-    /// исправный профиль.
+    /// The distinction between null and an empty list is load-bearing. The bridge to the
+    /// subscription (<c>Tools/grokbridge</c>) doesn't respond on this path at all, and printing
+    /// "no models" because of that would mean blaming a healthy profile.
     /// </remarks>
     private static async Task<List<string>?> ListModelsAsync(HttpClient http, string baseUrl, CancellationToken ct)
     {

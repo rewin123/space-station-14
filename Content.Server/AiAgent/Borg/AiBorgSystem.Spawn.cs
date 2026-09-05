@@ -13,20 +13,22 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Куда ставить робота.
+/// Where to place a borg.
 ///
 /// <para>
-/// Живёт в системе, а не в консольной команде, ровно потому, что первая версия жила в команде — и
-/// тесты, спавнившие борга «где-нибудь рядом с ядром», проверяли не то. Комната ИИ-ядра заперта:
-/// робот в ней сообщает «не нашёл дороги» на любую цель, и это <b>правильный</b> ответ, просто
-/// заданный из неправильного места. Место постановки — часть механики, а не удобство оператора.
+/// Lives in the system rather than in the console command for exactly the reason the first
+/// version lived in the command: tests that spawned a borg "somewhere near the core" were testing
+/// the wrong thing. The AI core room is sealed off: a borg placed there reports "couldn't find a
+/// route" to any target, and that is the <b>correct</b> answer, just given from the wrong place.
+/// Placement is part of the mechanic, not operator convenience.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
 {
     /// <summary>
-    /// Кого ставит <c>aiborg spawn</c> без уточнения. Режим злого ИИ передаёт свои прототипы
-    /// явно: у боевого робота и тип другой, и личность другая.
+    /// What <c>aiborg spawn</c> places without further specification. The evil-AI mode passes its
+    /// own prototypes explicitly: a combat borg has both a different type and a different
+    /// personality.
     /// </summary>
     public const string DefaultChassis = "AiBorgChassis";
 
@@ -34,9 +36,9 @@ public sealed partial class AiBorgSystem
     [Dependency] private TurfSystem _turf = default!;
 
     /// <summary>
-    /// Найти станции пригодное место и поставить туда робота.
+    /// Find a suitable spot on the station and place a borg there.
     /// </summary>
-    /// <param name="beaconName">Часть названия маяка, или <c>null</c> — любой подходящий.</param>
+    /// <param name="beaconName">Part of a beacon's name, or <c>null</c> for any suitable one.</param>
     public bool TrySpawnBorg(string? beaconName, out EntityUid borg, out string reason, EntProtoId? proto = null)
     {
         borg = default;
@@ -63,8 +65,8 @@ public sealed partial class AiBorgSystem
             return false;
         }
 
-        // Перебираем маяки, а не берём первый: маяк — это, как правило, вывеска на стене, и
-        // свободного пола рядом с конкретным может не найтись.
+        // We iterate over beacons instead of taking the first one: a beacon is typically a sign
+        // on a wall, and there may be no free floor near a particular one.
         foreach (var beacon in beacons)
         {
             if (!TryFreeTileNear(grid, beacon.Position, out var where))
@@ -80,51 +82,53 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Клетки, на которые мы уже кого-то поставили в этом раунде.
+    /// Tiles we have already placed someone on this round.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Нужен потому, что <c>IsTileBlocked</c> НЕ ВИДИТ только что заспавненного робота. Режим
-    /// ставит троих одним заходом, в одном кадре; физическая фикстура у новой сущности появляется
-    /// сразу, а вот дерево broadphase, по которому и спрашивает <c>IsTileBlocked</c>, обновляется
-    /// на следующем шаге физики. Внутри одного кадра запрос честно отвечает «свободно» про клетку,
-    /// где уже кто-то стоит.
+    /// Needed because <c>IsTileBlocked</c> does NOT SEE a just-spawned borg. The mode places three
+    /// of them in one pass, in a single frame; a new entity's physics fixture appears immediately,
+    /// but the broadphase tree that <c>IsTileBlocked</c> actually queries only updates on the next
+    /// physics step. Within a single frame, the query honestly reports "free" for a tile someone
+    /// is already standing on.
     /// </para>
     /// <para>
-    /// На боевом раунде 159 это дало трёх роботов в одной точке буквально друг в друге. Добавление
-    /// <c>CollisionGroup.MobMask</c> к проверке эту половину беды не лечит по той же причине —
-    /// смотреть просто некуда, дерево ещё пустое. Поэтому учёт свой.
+    /// On live round 159 this put three borgs at the exact same point, literally inside each
+    /// other. Adding <c>CollisionGroup.MobMask</c> to the check doesn't fix this half of the
+    /// problem for the same reason — there is simply nothing to look at yet, the tree is still
+    /// empty. Hence our own bookkeeping.
     /// </para>
     /// <para>
-    /// Живёт до конца раунда, а не до конца пачки: робот, поставленный консолью посреди смены,
-    /// тоже не должен встать в того, кого режим поставил на старте.
+    /// Lives until the end of the round, not just the end of a batch: a borg placed via console
+    /// mid-shift also shouldn't land on top of one the mode placed at round start.
     /// </para>
     /// </remarks>
     private readonly HashSet<(EntityUid Grid, Vector2i Tile)> _takenTiles = new();
 
-    /// <summary>Забыть занятые клетки — карта следующего раунда будет другой.</summary>
+    /// <summary>Forget the taken tiles — the next round's map will be different.</summary>
     public void ForgetTakenTiles() => _takenTiles.Clear();
 
-    /// <summary>Сетка станции: та, на которой стоит ИИ-ядро НАСТОЯЩЕЙ станции.</summary>
+    /// <summary>The station's grid: the one the REAL station's AI core stands on.</summary>
     /// <remarks>
     /// <para>
-    /// <b>Проверка на принадлежность станции обязательна, и это починка (20.08.2026).</b> Прежняя
-    /// версия брала первое попавшееся ядро из запроса по компоненту и объявляла его сетку
-    /// станцией. Ядро на карте не одно: своё есть у Central Command, и порядок обхода
-    /// <c>EntityQueryEnumerator</c> ничем не обещает, что первым попадётся наше.
+    /// <b>The check for station membership is mandatory, and this is a fix (2026-08-20).</b> The
+    /// previous version took whatever core came up first from the component query and declared
+    /// its grid the station. There is more than one core on the map: Central Command has its own,
+    /// and the iteration order of <c>EntityQueryEnumerator</c> makes no promise that ours comes
+    /// first.
     /// </para>
     /// <para>
-    /// На боевом раунде 159 попалось чужое: все три киборга поддержки встали на сетке
-    /// <c>Central Command</c> в точке (21.5, −30.5), за сотни тайлов от станции, координаты
-    /// которой лежат в диапазоне 200–400. Экипаж их не видел и не слышал, а сами они не могли
-    /// сдвинуться и честно докладывали «не вижу пола ни под собой, ни у цели» — навигационной
-    /// карты станции под ними, разумеется, не было. Режим при этом рапортовал «киборгов
-    /// поддержки: 3 из 3», то есть выглядел исправным.
+    /// On live round 159 it picked someone else's: all three support cyborgs ended up on the
+    /// <c>Central Command</c> grid at point (21.5, -30.5), hundreds of tiles from the station,
+    /// whose coordinates lie in the 200-400 range. The crew never saw or heard them, and they
+    /// couldn't move themselves either, honestly reporting "I don't see floor under me or the
+    /// target" — there was, of course, no station navigation map under them. Meanwhile the mode
+    /// reported "support cyborgs: 3 of 3", i.e. it looked healthy.
     /// </para>
     /// <para>
-    /// <see cref="StationMemberComponent"/> — ровно тот признак, который отличает сетку станции от
-    /// любой другой на карте: его вешает <c>StationSystem</c> при <c>Adding grid N to station</c>.
-    /// Центком, шаттлы и обломки его не носят.
+    /// <see cref="StationMemberComponent"/> is exactly the marker that distinguishes the station's
+    /// grid from any other grid on the map: <c>StationSystem</c> attaches it on
+    /// <c>Adding grid N to station</c>. Central Command, shuttles, and debris don't carry it.
     /// </para>
     /// </remarks>
     public bool TryFindGrid(out EntityUid grid)
@@ -148,22 +152,22 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Ближайший тайл, на котором можно стоять и с которого есть куда идти.
+    /// The nearest tile that can be stood on and that has somewhere to go from it.
     /// </summary>
     /// <remarks>
-    /// Проверяется не только «не стена и не космос», но и наличие полигона навмеша: тайл может быть
-    /// физически проходим и при этом не входить в граф путепоиска, и тогда робот встанет намертво,
-    /// сообщая «не нашёл дороги» даже на соседний тайл.
+    /// Checks not only "not a wall and not space" but also whether a navmesh polygon exists: a
+    /// tile can be physically walkable and still not be part of the pathfinding graph, and then
+    /// the borg would get stuck solid, reporting "couldn't find a route" even to the adjacent tile.
     /// </remarks>
     public bool TryFreeTileNear(EntityUid grid, Vector2 origin, out EntityCoordinates where)
     {
-        // Два прохода. Сначала ищем тайл, который И проходим, И уже попал в граф путепоиска;
-        // если такого нет — довольствуемся просто проходимым.
+        // Two passes. First we look for a tile that is BOTH walkable AND already in the
+        // pathfinding graph; if there is none, we settle for merely walkable.
         //
-        // Двухпроходность не педантизм, а следствие тайминга: чанки навмеша строятся асинхронно
-        // после старта раунда, и в первые секунды GetPoly возвращает null ВЕЗДЕ. Однопроходная
-        // версия с обязательным полигоном отказывалась ставить робота вообще — «рядом с маяками
-        // не нашлось свободного пола» на полностью нормальной станции.
+        // The two passes aren't pedantry but a consequence of timing: navmesh chunks build
+        // asynchronously after round start, and for the first few seconds GetPoly returns null
+        // EVERYWHERE. A single-pass version requiring a polygon refused to place a borg at all —
+        // "no free floor near the beacons" on an otherwise completely normal station.
         return TryFreeTileNear(grid, origin, requireNavmesh: true, out where)
                || TryFreeTileNear(grid, origin, requireNavmesh: false, out where);
     }
@@ -183,7 +187,8 @@ public sealed partial class AiBorgSystem
             {
                 for (var dy = -radius; dy <= radius; dy++)
                 {
-                    // Только рамка текущего радиуса — внутренность проверена на прошлых витках.
+                    // Only the border of the current radius — the interior was checked on
+                    // previous passes.
                     if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dy) != radius)
                         continue;
 
@@ -195,11 +200,11 @@ public sealed partial class AiBorgSystem
                     if (_turf.IsSpace(tileRef) || _turf.IsTileBlocked(tileRef, CollisionGroup.Impassable))
                         continue;
 
-                    // МОБЫ ТОЖЕ ЗАНИМАЮТ ТАЙЛ. Проверка выше их не видит: у робота маска
-                    // MobMask, а не Impassable, и тайл под уже стоящим корпусом считался
-                    // свободным. Режим ставит троих подряд одним вызовом на маяк, и все трое
-                    // получали ОДНУ И ТУ ЖЕ клетку — на раунде 159 все три оказались в точке
-                    // (21.5, −30.5) буквально друг в друге.
+                    // MOBS OCCUPY A TILE TOO. The check above doesn't see them: a borg has the
+                    // MobMask, not Impassable, and the tile under an already-standing body was
+                    // considered free. The mode places three in a row with one call per beacon,
+                    // and all three would get the SAME tile — on round 159 all three ended up at
+                    // point (21.5, -30.5), literally inside each other.
                     if (_turf.IsTileBlocked(tileRef, CollisionGroup.MobMask))
                         continue;
 

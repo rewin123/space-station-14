@@ -9,18 +9,20 @@ using Robust.Shared.Log;
 namespace Content.AiBench;
 
 /// <summary>
-/// Тело-заглушка для тестов, которые заводят <see cref="AgentSession"/> напрямую, без мира.
+/// A stub body for tests that spin up an <see cref="AgentSession"/> directly, with no world.
 ///
 /// <para>
-/// Такие тесты проверяют петлю, ящик оператора и журнал — то есть ровно ту часть агента, которая
-/// от тела не зависит. Раньше первым аргументом конструктора шёл <c>EntityUid</c>, и они передавали
-/// <c>default</c>; теперь там <see cref="AgentBody"/>, и <c>default</c> означал бы <c>null</c>.
+/// Such tests exercise the loop, the operator inbox, and the journal — exactly the part of the
+/// agent that does not depend on the body. The constructor's first argument used to be an
+/// <c>EntityUid</c>, and they passed <c>default</c>; now it takes an <see cref="AgentBody"/>, and
+/// <c>default</c> there would mean <c>null</c>.
 /// </para>
 /// <para>
-/// <b>Это не формальность.</b> Ровно так три теста и сломались при переходе: <c>Body</c> оказался
-/// <c>null</c>, петля падала на первом же обращении к нему, ловила исключение своим общим
-/// обработчиком и уходила в разреженный режим — то есть отказ выглядел как «ход просто не
-/// случился», без единого слова о причине. Заглушка существует, чтобы этого больше не повторилось.
+/// <b>This is not a formality.</b> Exactly three tests broke this way during the migration:
+/// <c>Body</c> turned out to be <c>null</c>, the loop threw on its very first access to it, the
+/// exception was caught by its own general handler, and it fell back into a degraded mode — so the
+/// failure looked like "the turn just didn't happen", with no word about why. This stub exists so
+/// that never happens again.
 /// </para>
 /// </summary>
 public static class StubAgentBody
@@ -43,11 +45,12 @@ public static class StubAgentBody
     };
 
     /// <summary>
-    /// Файловая система во временном каталоге — чтобы тело-заглушка было полноценным.
+    /// A filesystem in a temp directory — so the stub body is fully functional.
     ///
     /// <para>
-    /// Пустая заглушка вместо неё вернула бы <c>null</c> из <c>Vfs.Memory</c>, и тесты петли
-    /// падали бы не там, где сломались, — ровно та болезнь, против которой этот класс и заведён.
+    /// An empty stub in its place would return <c>null</c> from <c>Vfs.Memory</c>, and loop tests
+    /// would fail somewhere other than where they actually broke — exactly the ailment this class
+    /// exists to prevent.
     /// </para>
     /// </summary>
     private static Vfs Scratch(string id)

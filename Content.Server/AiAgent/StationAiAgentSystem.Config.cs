@@ -12,33 +12,34 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Реконфигурация без пересборки: накладка прототипов, проверка эндпоинта, обзор режимов.
+/// Reconfiguration without a rebuild: the prototype overlay, endpoint probing, and a mode overview.
 ///
 /// <para>
-/// Отдельным файлом, потому что это операционный слой, а не игровой: ничего отсюда не вызывается
-/// из петли хода. Всё, что здесь есть, существует ради одного вопроса — «почему сервер ведёт себя
-/// не так, как написано в конфиге» — и отвечает на него ДО раунда, а не по журналу через сутки.
+/// Kept in a separate file because this is an operational layer, not a gameplay one: nothing here
+/// gets called from the turn loop. Everything in it exists for one question — "why is the server
+/// behaving differently from what's in the config" — and answers it BEFORE the round, rather than
+/// from the log a day later.
 /// </para>
 /// </summary>
 public sealed partial class StationAiAgentSystem
 {
     private AiConfigOverlay.OverlayReport? _overlay;
 
-    /// <summary>Что накладка сделала в последний раз. Null — её ни разу не читали.</summary>
+    /// <summary>What the overlay did last time. Null means it has never been read.</summary>
     public AiConfigOverlay.OverlayReport? Overlay => _overlay;
 
     /// <summary>
-    /// Прочитать <c>ai_data/config.d/*.yml</c> поверх прототипов из <c>Resources/</c>.
+    /// Read <c>ai_data/config.d/*.yml</c> on top of the prototypes from <c>Resources/</c>.
     /// </summary>
     /// <param name="live">
-    /// Живая перезагрузка (из консоли) против стартовой. Разница — в способе доложить об изменении
-    /// системам; подробности в <see cref="AiConfigOverlay.Load"/>.
+    /// A live reload (from the console) versus a startup one. The difference is in how the change
+    /// gets reported to systems; see <see cref="AiConfigOverlay.Load"/> for details.
     /// </param>
     /// <remarks>
-    /// Живая перезагрузка меняет ДАННЫЕ, а не уже существующие сущности. Правило раунда,
-    /// поставленное на старте, продолжит жить со старыми полями до конца смены — новые значения
-    /// достанутся следующему раунду. Профили модели переберутся раньше: клиент собирается на
-    /// первом ходу агента, и <c>aiagent release</c> заставит собрать его заново.
+    /// A live reload changes DATA, not entities that already exist. A round rule set up at start
+    /// keeps living with its old fields until the end of the shift — the new values go to the next
+    /// round. Model profiles switch over sooner: the client is built on the agent's first turn, and
+    /// <c>aiagent release</c> forces it to be built again.
     /// </remarks>
     public AiConfigOverlay.OverlayReport LoadOverlay(bool live)
     {
@@ -46,15 +47,15 @@ public sealed partial class StationAiAgentSystem
         return _overlay;
     }
 
-    // ------------------------------------------------------------------ профили
+    // ------------------------------------------------------------------ profiles
 
     /// <summary>
-    /// Собрать всё, что нужно, чтобы сходить к профилю: прототип, адрес и параметры.
+    /// Gather everything needed to reach a profile: the prototype, the address, and the parameters.
     /// </summary>
     /// <remarks>
-    /// Тем же <c>EndpointFor</c>/<c>SamplingFor</c>, что и боевой ход. Собрать проверке свой
-    /// адрес значило бы проверять не то, что играет: половина поломок настройки — это прокси,
-    /// ключ и диалект, то есть ровно те поля, которые здесь и вычисляются.
+    /// Uses the same <c>EndpointFor</c>/<c>SamplingFor</c> as a live turn. Building a separate address
+    /// just for the probe would mean testing something other than what's actually in play: half of
+    /// config breakage is the proxy, the key, and the dialect — exactly the fields computed here.
     /// </remarks>
     public bool TryProfile(
         string id,
@@ -76,12 +77,12 @@ public sealed partial class StationAiAgentSystem
         return true;
     }
 
-    /// <summary>Все известные профили, по алфавиту.</summary>
+    /// <summary>All known profiles, alphabetically.</summary>
     public IEnumerable<AiLlmProfilePrototype> Profiles() =>
         _protoMan.EnumeratePrototypes<AiLlmProfilePrototype>().OrderBy(p => p.ID, StringComparer.Ordinal);
 
     /// <summary>
-    /// Цепочка, по которой сейчас пошёл бы новый агент ядра: своя у режима, иначе общая.
+    /// The chain a new core agent would take right now: the mode's own if it has one, else the shared one.
     /// </summary>
     public IReadOnlyList<string> ActiveChain()
     {
@@ -93,7 +94,7 @@ public sealed partial class StationAiAgentSystem
         return raw.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     }
 
-    /// <summary>Откуда взялся ключ профиля, в печатном виде. Значение не показывается никогда.</summary>
+    /// <summary>Where the profile's key came from, in printable form. The value itself is never shown.</summary>
     public string KeyNote(AiLlmProfilePrototype profile)
     {
         if (string.IsNullOrWhiteSpace(profile.KeyFile))
@@ -122,26 +123,26 @@ public sealed partial class StationAiAgentSystem
         }
     }
 
-    // -------------------------------------------------------------------- проверка
+    // -------------------------------------------------------------------- probe
 
     private int _probing;
 
     /// <summary>
-    /// Сходить к каждому профилю по-настоящему и доложить расхождения.
+    /// Actually reach every profile and report the discrepancies.
     /// </summary>
     /// <param name="write">
-    /// Куда писать. Вызывается ВСЕГДА на главном потоке — консольная оболочка привязана к сессии
-    /// админа и писать в неё из чужого потока нельзя.
+    /// Where to write. ALWAYS called on the main thread — the console shell is bound to the admin's
+    /// session and cannot be written to from a foreign thread.
     /// </param>
     /// <remarks>
     /// <para>
-    /// Не блокирует главный поток, и это не украшение: облачный профиль отвечает секунды, а
-    /// таймаут у него — минуты. Синхронная проверка на сервере с людьми означала бы зависший
-    /// такт ровно в тот момент, когда админ пытается понять, почему ИИ молчит.
+    /// Doesn't block the main thread, and that's not decoration: a cloud profile responds in seconds,
+    /// but its timeout is in minutes. A synchronous check on a server with real players would mean a
+    /// frozen tick at exactly the moment an admin is trying to figure out why the AI is silent.
     /// </para>
     /// <para>
-    /// Одновременно идёт одна проверка. Второй вызов не встаёт в очередь, а отказывается: это
-    /// платные запросы, и два отчёта вперемешку в одной консоли всё равно нечитаемы.
+    /// Only one probe runs at a time. A second call doesn't queue up — it's refused: these are paid
+    /// requests, and two reports interleaved in the same console are unreadable anyway.
     /// </para>
     /// </remarks>
     public bool StartProbe(IReadOnlyList<string> ids, Action<string> write)
@@ -164,7 +165,7 @@ public sealed partial class StationAiAgentSystem
         var total = _cfg.GetCVar(AiCVars.LlmTotalTimeout);
         var sawmill = _sawmill;
 
-        // Захвачено значением до ухода в фон: читать cvar'ы с чужого потока нельзя.
+        // Captured by value before going to the background: cvars cannot be read from a foreign thread.
         Task.Run(async () =>
         {
             try
@@ -204,12 +205,12 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Строка отчёта — на главный поток, и молча, если писать уже некому.
+    /// A report line — dispatched to the main thread, and silently dropped if there's no one left to write to.
     /// </summary>
     /// <remarks>
-    /// Админ, закрывший консоль или отвалившийся по сети, — обычный исход долгой проверки, а не
-    /// повод залить журнал стеками. Строка при этом не теряется: <see cref="LlmProbe"/> пишет
-    /// собственный лог, и отчёт целиком остаётся в журнале сервера.
+    /// An admin who closed the console or dropped off the network is a normal outcome of a long
+    /// probe, not a reason to flood the log with stack traces. The line isn't lost either way:
+    /// <see cref="LlmProbe"/> writes its own log, and the full report stays in the server log.
     /// </remarks>
     private void Post(Action<string> write, string line)
     {
@@ -223,14 +224,14 @@ public sealed partial class StationAiAgentSystem
             }
             catch (Exception)
             {
-                // Консоль отвалилась. См. комментарий выше.
+                // The console dropped off. See the comment above.
             }
         });
     }
 
-    // --------------------------------------------------------------------- режимы
+    // --------------------------------------------------------------------- modes
 
-    /// <summary>Пресет, его правило ИИ и то, во что это правило разрешилось.</summary>
+    /// <summary>The preset, its AI rule, and what that rule resolved to.</summary>
     public sealed record ModeView(
         string Preset,
         string Rule,
@@ -246,12 +247,12 @@ public sealed partial class StationAiAgentSystem
         IReadOnlyList<string> Beacons);
 
     /// <summary>
-    /// Все пресеты, у которых есть правило с <see cref="RogueAiRuleComponent"/>.
+    /// Every preset that has a rule with <see cref="RogueAiRuleComponent"/>.
     /// </summary>
     /// <remarks>
-    /// Читается из ПРОТОТИПОВ, а не из живого раунда, и потому отвечает на вопрос «что будет,
-    /// если выпадет этот режим» — тот самый, который иначе решается чтением трёх YAML подряд и
-    /// держанием в голове того, что накладка могла их переписать.
+    /// Read from PROTOTYPES, not from a live round, so it answers the question "what would happen if
+    /// this mode came up" — the very question that would otherwise mean reading three YAML files in a
+    /// row and keeping in your head whatever the overlay might have rewritten in them.
     /// </remarks>
     public List<ModeView> Modes()
     {

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Сборка потока в один ответ — единственное место, где мост может соврать незаметно.
+Assembling the stream into one response — the one place where the bridge could lie unnoticed.
 
-Оборванный аргумент вызова инструмента не выглядит ошибкой: он выглядит как решение агента.
-Поэтому здесь записанные потоки, а не заглушки, и проверяется не «не упало», а склейка.
+A truncated tool-call argument doesn't look like an error: it looks like the agent's
+decision. That's why this uses recorded streams instead of stubs, and checks not "it didn't
+crash" but the assembly itself.
 
-Запуск: python3 -m unittest discover -s Tools/grokbridge
+Run: python3 -m unittest discover -s Tools/grokbridge
 """
 
 import unittest
@@ -14,7 +15,7 @@ from grokbridge import assemble
 
 
 def sse(*frames: str):
-    """Поток, как его отдаёт HTTPResponse: байтовые строки с переводом строки."""
+    """A stream exactly as HTTPResponse yields it: byte strings with a trailing newline."""
     return [(frame + "\n").encode("utf-8") for frame in frames]
 
 
@@ -38,8 +39,8 @@ class AssembleText(unittest.TestCase):
         self.assertEqual(result["object"], "chat.completion")
 
     def test_размышления_не_попадают_в_реплику(self):
-        # Склейка размышлений с ответом превратила бы внутренний монолог в речь агента в игре —
-        # то есть в утечку замысла злого ИИ прямо в общий эфир.
+        # Merging the reasoning into the reply would turn the internal monologue into the
+        # agent's in-game speech — i.e. a leak of an evil AI's plan straight into public chat.
         result = assemble(
             sse(
                 'data: {"choices":[{"delta":{"reasoning_content":"надо соврать про реактор"}}]}',
@@ -53,7 +54,7 @@ class AssembleText(unittest.TestCase):
         self.assertNotIn("соврать", str(result["choices"][0]["message"]))
 
     def test_комментарии_и_пустые_строки_пропускаются(self):
-        # Двоеточием шлют keep-alive, чтобы соединение не закрыл посредник.
+        # A leading colon sends keep-alive, so an intermediary doesn't close the connection.
         result = assemble(
             sse(
                 ": keep-alive",
@@ -66,7 +67,7 @@ class AssembleText(unittest.TestCase):
         self.assertEqual(result["choices"][0]["message"]["content"], "ок")
 
     def test_битый_кадр_не_роняет_остальной_ответ(self):
-        # Ответ без одного токена лучше отсутствующего ответа: ход агента стоит минуты.
+        # A response missing one token beats no response at all: an agent's turn costs minutes.
         result = assemble(
             sse(
                 'data: {"choices":[{"delta":{"content":"пол"}}]}',
@@ -118,8 +119,9 @@ class AssembleToolCalls(unittest.TestCase):
         self.assertEqual(result["choices"][0]["finish_reason"], "tool_calls")
 
     def test_имя_повторённое_в_каждом_кадре_не_задваивается(self):
-        # Не гипотетика: провайдеры, шлющие вызов целиком в каждом кадре, встречаются, и склейка
-        # без защиты дала бы инструмент «movemovemove», которого в списке нет.
+        # Not hypothetical: providers that send the whole call in every frame do exist, and
+        # concatenation without a guard would produce a tool named "movemovemove" that isn't
+        # in the list.
         result = assemble(
             sse(
                 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c",'
@@ -162,8 +164,8 @@ class AssembleToolCalls(unittest.TestCase):
         self.assertEqual(result["choices"][0]["finish_reason"], "tool_calls")
 
     def test_пустой_поток_даёт_валидный_пустой_ответ(self):
-        # Пустой ответ агент переживает — он его отобьёт нудджем; а вот KeyError в мосте
-        # выглядел бы как 502 и увёл бы цепочку на следующий профиль без нужды.
+        # The agent survives an empty response — it gets nudged past it; but a KeyError in the
+        # bridge would look like a 502 and needlessly push the chain to the next profile.
         result = assemble(sse("data: [DONE]"), "grok-4.6")
         self.assertEqual(result["choices"][0]["message"]["content"], "")
         self.assertEqual(result["choices"][0]["finish_reason"], "stop")
@@ -171,8 +173,8 @@ class AssembleToolCalls(unittest.TestCase):
 
 class AssembleUsage(unittest.TestCase):
     def test_расход_берётся_из_последнего_кадра(self):
-        # Без usage счётчик `aiagent cost` показывает нули, и понять, куда ушла недельная квота
-        # Grok, становится нечем.
+        # Without usage the `aiagent cost` counter shows zeros, and there's no way left to
+        # figure out where the weekly Grok quota went.
         result = assemble(
             sse(
                 'data: {"choices":[{"delta":{"content":"да"},"finish_reason":"stop"}]}',
@@ -189,7 +191,7 @@ class AssembleUsage(unittest.TestCase):
         self.assertEqual(result["usage"]["completion_tokens_details"]["reasoning_tokens"], 215)
 
     def test_без_usage_поле_не_выдумывается(self):
-        # Уверенный ноль хуже отсутствия: по нему нельзя отличить дешёвый ход от неизвестного.
+        # A confident zero is worse than absence: it can't be told apart from a cheap turn.
         result = assemble(
             sse('data: {"choices":[{"delta":{"content":"да"},"finish_reason":"stop"}]}', "data: [DONE]"),
             "grok-4.6",

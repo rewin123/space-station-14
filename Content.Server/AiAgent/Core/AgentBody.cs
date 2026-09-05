@@ -4,165 +4,175 @@ using Content.Server.AiAgent.Tools;
 namespace Content.Server.AiAgent.Core;
 
 /// <summary>
-/// Тело, в котором живёт агент, — и единственное, что ядро агента о мире знает.
+/// The body the agent lives in — and the only thing the agent core knows about the world.
 ///
 /// <para>
-/// Шов здесь не изобретён, а <b>назван</b>. Он уже существовал неявно: <c>StartSession</c>
-/// принимал десять аргументов, из которых шесть были станционно-специфичными, а всё остальное —
-/// общим. Пока эти шесть жили отдельными методами одного класса, «ядро» и «Station AI» были одним
-/// куском кода, хотя <see cref="AgentSession"/> в своём док-комменте честно утверждает, что мира не
-/// касается. Этот класс переводит утверждение в проверяемое: чтобы завести агента в новом теле,
-/// достаточно собрать <see cref="AgentBody"/> — трогать петлю, диалог, компакцию или маршрутизацию
-/// моделей не нужно.
+/// The seam here wasn't invented, only <b>named</b>. It already existed implicitly: <c>StartSession</c>
+/// took ten arguments, six of which were station-specific and the rest common. As long as those six
+/// lived as separate methods of one class, the "core" and "Station AI" were one lump of code, even
+/// though <see cref="AgentSession"/>'s own doc comment honestly claims it doesn't touch the world.
+/// This class turns that claim into something checkable: to bring an agent up in a new body, it's
+/// enough to assemble an <see cref="AgentBody"/> — no need to touch the loop, dialogue, compaction,
+/// or model routing.
 /// </para>
 /// <para>
-/// Класс, а не интерфейс, и делегаты, а не абстрактные методы, — потому что кодовая база уже
-/// построена на делегатах (см. конструктор <see cref="AgentSession"/>), и интерфейс заставил бы
-/// каждое тело быть <c>EntitySystem</c>. Тело собирается системой, а <b>не является</b> ею.
+/// A class, not an interface, and delegates rather than abstract methods — because the codebase is
+/// already built on delegates (see the <see cref="AgentSession"/> constructor), and an interface
+/// would force every body to be an <c>EntitySystem</c>. A body is assembled by a system, but is
+/// <b>not</b> one.
 /// </para>
 /// </summary>
 public sealed class AgentBody
 {
-    /// <summary>Сущность, которой агент ЯВЛЯЕТСЯ: мозг в ядре, шасси борга.</summary>
+    /// <summary>The entity the agent IS: the brain in the core, the borg's chassis.</summary>
     public required EntityUid Owner { get; init; }
 
     /// <summary>
-    /// Устойчивый идентификатор агента: <c>core</c>, <c>borg-1</c>.
+    /// The agent's stable identifier: <c>core</c>, <c>borg-1</c>.
     ///
     /// <para>
-    /// Им названы файл сессии, папка памяти, сессия отладочной шины и саймилл. До этого поля
-    /// идентификатор был константой <c>"current"</c>, и второй агент молча писал бы диалог в тот же
-    /// файл — то есть восстанавливал бы после рестарта чужую память как свою.
+    /// It names the session file, the memory folder, the debug bus session, and the simill. Before
+    /// this field existed, the identifier was the constant <c>"current"</c>, and a second agent would
+    /// silently write its dialogue to the same file — that is, would restore someone else's memory as
+    /// its own after a restart.
     /// </para>
     /// </summary>
     public required string Id { get; init; }
 
-    /// <summary>Как тело зовут в игре. Должно совпадать с тем, как агента зовёт его SOUL-файл.</summary>
+    /// <summary>What the body is called in-game. Must match how the agent's SOUL file names it.</summary>
     public required string Name { get; init; }
 
-    /// <summary>Имя файла личности внутри каталога агента.</summary>
+    /// <summary>The name of the personality file inside the agent's directory.</summary>
     public required string SoulFile { get; init; }
 
     /// <summary>
-    /// Файловая система этого агента: справочник, свои записи, свои заметки, своя память.
+    /// This agent's filesystem: the roster, its own records, its own notes, its own memory.
     ///
     /// <para>
-    /// Своя у каждого тела, и это главное, что изменилось. Раньше память, скиллы и заметки о людях
-    /// жили в одном экземпляре на процесс, и боевой киборг таскал в своём префиксе двадцать
-    /// килобайт библиотеки Станционного ИИ — включая досье на экипаж, которые ему нечем применить
-    /// и знать которые он не должен. Общим остался только справочник, и общим одним экземпляром,
-    /// а не копией на тело.
+    /// Its own per body, and that's the main thing that changed. Memory, skills, and notes about
+    /// people used to live in a single instance per process, and a combat cyborg carried twenty
+    /// kilobytes of the Station AI's library in its prefix — including crew dossiers it has no use
+    /// for and shouldn't know. Only the roster stayed shared, and shared as one instance, not a copy
+    /// per body.
     /// </para>
     /// <para>
-    /// Здесь, а не в системе, ровно по той же причине, что и всё остальное в этом классе: чтобы
-    /// завести агента в новом теле, достаточно собрать <see cref="AgentBody"/>.
+    /// It's here, not in the system, for exactly the same reason as everything else in this class:
+    /// to bring an agent up in a new body, it's enough to assemble an <see cref="AgentBody"/>.
     /// </para>
     /// </summary>
     public required Vfs.Vfs Vfs { get; init; }
 
     /// <summary>
-    /// Откуда тело смотрит и слышит.
+    /// Where the body looks and listens from.
     ///
     /// <para>
-    /// У ядра это <c>StationAiCoreComponent.RemoteEntity</c> — камера, которую можно увести от
-    /// самого ядра. У борга это он сам. Ворота потока <c>OBSERVED</c> считают расстояние именно
-    /// отсюда, поэтому делегат, а не поле: у ядра точка меняется в течение раунда.
+    /// For the core, this is <c>StationAiCoreComponent.RemoteEntity</c> — a camera that can be moved
+    /// away from the core itself. For a borg, it's the borg itself. The <c>OBSERVED</c> stream's gate
+    /// measures distance from exactly here, which is why it's a delegate rather than a field: for the
+    /// core, this point changes over the course of a round.
     /// </para>
     /// <para>
-    /// <c>null</c> означает «тело сейчас не видит» (ядро без камеры, выключенный борг), и это
-    /// нормальный путь, а не ошибка.
+    /// <c>null</c> means "the body currently doesn't see" (core without a camera, powered-down borg),
+    /// and that's a normal path, not an error.
     /// </para>
     /// </summary>
     public required Func<EntityUid?> Eye { get; init; }
 
-    /// <summary>Живо ли тело настолько, чтобы принимать ходы.</summary>
+    /// <summary>Whether the body is alive enough to take turns.</summary>
     public required Func<bool> Alive { get; init; }
 
-    /// <summary>Зона 0 системного промпта. Зовётся только при старте сессии и при компакции.</summary>
+    /// <summary>Zone 0 of the system prompt. Called only at session start and on compaction.</summary>
     public required Func<string> BuildPrompt { get; init; }
 
-    /// <summary>Строка SELF — единственная часть наблюдения, которую пишет тело, а не мир.</summary>
+    /// <summary>The SELF line — the only part of the observation the body writes, rather than the world.</summary>
     public required Func<AgentSession, string> SelfLine { get; init; }
 
     /// <summary>
-    /// Дать телу дописать наблюдения перед тем, как очередь будет слита в ход. Главный поток.
+    /// Let the body append to the observations before the queue is flushed into a turn. Main thread.
     ///
     /// <para>
-    /// Существует ради восприятия, которое считается <b>по требованию</b>, а не приходит событием.
-    /// У борга это разность поля зрения: сравнить видимое сейчас с видимым в прошлый ход можно
-    /// только обойдя радиус, и делать это тридцать раз в секунду не за что — а вот один раз за ход
-    /// в точности вовремя.
+    /// Exists for perception that's computed <b>on demand</b> rather than arriving as an event. For a
+    /// borg this is the field-of-view diff: comparing what's visible now to what was visible last turn
+    /// can only be done by walking the radius, and there's no reason to do that thirty times a second —
+    /// but doing it once per turn, exactly on time, makes sense.
     /// </para>
     /// </summary>
     public Action<AgentSession>? BeforeObservation { get; init; }
 
     /// <summary>
-    /// Набор инструментов этого тела.
+    /// This body's toolset.
     ///
     /// <para>
-    /// Именно здесь тела расходятся сильнее всего: у ядра есть <c>device_action</c> и
-    /// <c>move_camera</c>, у борга — руки и ноги. Общие инструменты (память, навыки, таймеры,
-    /// <c>noop</c>) регистрируются обоими и живут в общем месте.
+    /// This is exactly where bodies diverge the most: the core has <c>device_action</c> and
+    /// <c>move_camera</c>, a borg has hands and legs. The shared tools (memory, skills, timers,
+    /// <c>noop</c>) are registered by both and live in a common place.
     /// </para>
     /// </summary>
     public required Action<AgentSession, AiToolRegistry> RegisterTools { get; init; }
 
     /// <summary>
-    /// Объявление на всю станцию, или <c>null</c>, если телу нечем.
+    /// A station-wide announcement, or <c>null</c> if the body has no means for it.
     ///
     /// <para>
-    /// У борга нечем: <c>announce</c> в теле Station AI работает через встроенную
-    /// <c>CommunicationsConsoleComponent</c>, которой у шасси нет. Отсутствие способности выражено
-    /// <c>null</c>, а не инструментом, который всегда отказывает.
+    /// A borg has no means: <c>announce</c> in the Station AI body works through the built-in
+    /// <c>CommunicationsConsoleComponent</c>, which the chassis doesn't have. The absence of the
+    /// capability is expressed as <c>null</c>, not as a tool that always refuses.
     /// </para>
     /// </summary>
     public Func<AgentSession, string, Task>? Announce { get; init; }
 
-    /// <summary>Сказать вслух (текст, канал) — для нетулзовой речи, которую ловит петля.</summary>
+    /// <summary>Speak aloud (text, channel) — for non-tool speech that the loop catches.</summary>
     public required Func<AgentSession, string, string?, Task<bool>> Speak { get; init; }
 
     /// <summary>
-    /// Радиоканалы, доступные телу в данном режиме.
+    /// The radio channels available to the body in a given mode.
     ///
     /// <para>
-    /// Раньше это была статическая константа, снятая с прототипа <c>AiHeld</c>. У борга набор
-    /// другой (см. <c>base_borg_chassis.yml</c>), и константа сделала бы его либо глухим, либо
-    /// говорящим в каналы, которых у него нет.
+    /// This used to be a static constant lifted from the <c>AiHeld</c> prototype. A borg has a
+    /// different set (see <c>base_borg_chassis.yml</c>), and a constant would have made it either
+    /// deaf or talking into channels it doesn't have.
     /// </para>
     /// </summary>
     public required Func<AgentMode, string[]> ChannelsFor { get; init; }
 
     /// <summary>
-    /// Своя цепочка профилей модели, или <c>null</c> — брать общую <c>ai.llm_chain</c>.
+    /// This body's own model profile chain, or <c>null</c> to use the shared <c>ai.llm_chain</c>.
     ///
     /// <para>
-    /// Существует ради одной вполне физической причины: два агента на одном слоте llama-server
-    /// вытесняют префиксы друг друга и платят полный prefill каждый ход. Развести их по разным
-    /// профилям дешевле, чем делить контекст пополам.
+    /// Exists for one entirely physical reason: two agents on the same llama-server slot evict each
+    /// other's prefixes and pay a full prefill every turn. Splitting them across separate profiles is
+    /// cheaper than splitting the context in half.
     /// </para>
     /// </summary>
     public string? LlmChain { get; init; }
 
     /// <summary>
-    /// Режим инструментов этого тела: <c>true</c> — скрипты, <c>false</c> — классический набор,
-    /// <c>null</c> — как сказано в <c>ai.script_mode</c>.
+    /// This body's tool mode: <c>true</c> — scripts, <c>false</c> — the classic toolset,
+    /// <c>null</c> — whatever <c>ai.script_mode</c> says.
     ///
     /// <para>
-    /// Переопределение на тело нужно ровно для одного: держать ядро на классическом наборе, а
-    /// борга — на скриптах, и сравнивать их на одной смене. Внутри одного агента наборы не
-    /// смешиваются никогда.
+    /// The per-body override exists for exactly one thing: keeping the core on the classic toolset
+    /// while the borg runs on scripts, so they can be compared on the same shift. Within a single
+    /// agent, the toolsets never mix.
     /// </para>
     /// </summary>
     public bool? ScriptMode { get; init; }
 
     /// <summary>
-    /// Проводить ли разбор (куратора) на компакции этого тела.
+    /// Prompt language, frozen at body assembly like <see cref="ScriptMode"/>.
+    /// Default Russian so a body assembled in a test without setting it keeps the old prefix.
+    /// </summary>
+    public Locale.AgentLang Language { get; init; }
+
+    /// <summary>
+    /// Whether to run the review (curator) on this body's compaction.
     ///
     /// <para>
-    /// У боргов выключен решением владельца 01.09.2026. Причина в цене: разбор — это отдельный
-    /// многошаговый диалог поверх КОПИИ всей истории, и на живой смене он стоил роботу до минуты
-    /// молчания на каждую свёртку, а свёртка у четырёх агентов приходит часто. Ядру он остаётся:
-    /// станционный ИИ — единственный, чьи записи переживают смену и накапливаются годами.
+    /// Turned off for borgs by the owner's decision on 2026-09-01. The reason is cost: the review is a
+    /// separate multi-step dialogue over a COPY of the whole history, and on a live shift it cost the
+    /// robot up to a minute of silence per compaction, and compaction comes often with four agents.
+    /// The core keeps it: the station AI is the only one whose records outlive the shift and
+    /// accumulate over years.
     /// </para>
     /// </summary>
     public bool Curate { get; init; } = true;

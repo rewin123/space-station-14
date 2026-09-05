@@ -4,46 +4,47 @@ using System.Linq;
 namespace Content.Server.AiAgent.Perception;
 
 /// <summary>
-/// Один заведённый агентом таймер.
+/// One timer the agent has set.
 /// </summary>
 /// <param name="DueAt">
-/// Раундовое время срабатывания, а не реальное. Это единственный правильный выбор здесь:
-/// <c>game.auto_pause_empty</c> замораживает симуляцию на пустом сервере, вместе с ней стоит
-/// <c>CurTime</c> и стоит раундовый час, который агент видит в каждом наблюдении. Таймер на
-/// реальном времени в этот момент продолжал бы тикать и разбудил бы агента посреди паузы — то есть
-/// заставил бы его действовать в мире, который не сделал ни одного тика, и заплатить за это модели.
+/// Round time of firing, not wall-clock time. That's the only correct choice here:
+/// <c>game.auto_pause_empty</c> freezes the simulation on an empty server, and <c>CurTime</c> freezes
+/// along with it, as does the round hour the agent sees in every observation. A wall-clock timer would
+/// keep ticking through that and wake the agent up mid-pause — i.e. force it to act in a world that
+/// hasn't advanced a single tick, and pay a model call for it.
 /// </param>
 /// <param name="Every">
-/// Интервал повтора, или null для одноразового. После срабатывания повторный таймер встаёт заново
-/// от МОМЕНТА СРАБАТЫВАНИЯ, а не от прошлого срока: иначе таймер, проспавший паузу, отстрелялся бы
-/// столько раз, сколько интервалов уместилось в простой, и агент получил бы пачку одинаковых
-/// напоминаний об одном и том же.
+/// Repeat interval, or null for a one-shot. After firing, a repeating timer is rearmed from the MOMENT
+/// IT FIRED, not from its previous due time: otherwise a timer that slept through a pause would fire
+/// once for every interval that fit inside the downtime, and the agent would get a stack of identical
+/// reminders about the same thing.
 /// </param>
 public sealed record AgentTimer(string Name, string Message, TimeSpan DueAt, TimeSpan? Every);
 
-/// <summary>Что вышло из попытки завести таймер. Отказ всегда называет причину словами для модели.</summary>
+/// <summary>What came out of trying to set a timer. A refusal always names the reason in words for the model.</summary>
 public sealed record TimerSetResult(bool Ok, string Message, AgentTimer? Timer = null, bool Replaced = false);
 
 /// <summary>
-/// Будильники агента: единственный способ для него самому вернуться к делу, о котором сейчас
-/// договорились, а сделать надо потом.
+/// The agent's alarms: the only way for it to bring itself back to something just agreed on that has
+/// to happen later.
 ///
-/// Без них у петли ровно два повода начать ход — кто-то заговорил или истёк тик простоя, — и
-/// «проверю через десять минут» превращалось в обещание, которое нечем сдержать: следующий ход
-/// приходил по чужой реплике, с другим контекстом, и о проверке никто не вспоминал. Сработавший
-/// таймер входит в ту же <see cref="ObservationQueue"/>, что и речь экипажа, и будит петлю тем же
-/// сигналом — для агента это такое же событие мира, как оклик по рации.
+/// Without them the loop has exactly two reasons to start a turn — someone spoke, or an idle tick
+/// expired — and "I'll check back in ten minutes" became a promise with nothing to keep it: the next
+/// turn would arrive off someone else's line, in a different context, and the check-in would never
+/// come up again. A fired timer goes into the same <see cref="ObservationQueue"/> as crew speech, and
+/// wakes the loop with the same signal — to the agent it's a world event just like a radio call.
 ///
-/// Хранилище живёт в <see cref="AgentState"/> (правило: переживает ход — живёт там) и не знает ни
-/// про сущности, ни про часы: время ему передают снаружи. Замок нужен потому, что писать сюда
-/// может поток агента (инструменты), а вычитывать — главный поток (тик) и поток отладочной шины.
+/// The store lives in <see cref="AgentState"/> (rule: survives the turn, lives there) and knows
+/// nothing about entities or clocks: time is handed to it from outside. A lock is needed because
+/// writes can come from the agent thread (tools), while reads come from the main thread (the tick)
+/// and from the debug bus thread.
 /// </summary>
 public sealed class TimerStore
 {
     private readonly object _lock = new();
     private readonly List<AgentTimer> _timers = new();
 
-    /// <summary>Дольше раунда таймеру жить незачем: сессия всё равно кончится вместе со сменой.</summary>
+    /// <summary>No point a timer outliving the round: the session ends along with the shift anyway.</summary>
     public static readonly TimeSpan MaxDelay = TimeSpan.FromHours(2);
 
     public int Count
@@ -55,7 +56,7 @@ public sealed class TimerStore
         }
     }
 
-    /// <summary>Все таймеры по возрастанию срока. Порядок фиксирован, чтобы строка SELF не дрожала.</summary>
+    /// <summary>All timers in ascending due-time order. Order is fixed so the SELF line doesn't jitter.</summary>
     public IReadOnlyList<AgentTimer> All()
     {
         lock (_lock)
@@ -69,15 +70,15 @@ public sealed class TimerStore
     }
 
     /// <summary>
-    /// Завести таймер или переставить существующий с тем же именем.
+    /// Set a timer, or reschedule an existing one with the same name.
     ///
-    /// Совпадение имени именно переставляет, а не отказывает: «напомни ещё через десять минут» —
-    /// самая частая правка собственного плана, и отказ по занятому имени заставлял бы модель
-    /// сначала удалять, тратя второй вызов из шести, отпущенных на ход. Замена названа в ответе
-    /// словом, чтобы перезапись не выглядела как заведение второго.
+    /// A matching name reschedules rather than refuses: "remind me again in ten minutes" is the most
+    /// common edit to one's own plan, and refusing on a name already in use would force the model to
+    /// delete first, spending a second call out of the six a turn is given. The replacement is called
+    /// out by name in the response so the overwrite doesn't read as setting a second timer.
     /// </summary>
-    /// <param name="now">Текущее раундовое время.</param>
-    /// <param name="max">Потолок числа таймеров, из <c>ai.max_timers</c>.</param>
+    /// <param name="now">Current round time.</param>
+    /// <param name="max">Cap on the number of timers, from <c>ai.max_timers</c>.</param>
     public TimerSetResult Set(string name, string message, TimeSpan after, TimeSpan? every, TimeSpan now, int max)
     {
         var timer = new AgentTimer(name, message, now + after, every);
@@ -121,10 +122,10 @@ public sealed class TimerStore
     }
 
     /// <summary>
-    /// Забрать сработавшие и перевести повторные на следующий круг. Вызывается из тика.
+    /// Take the ones that fired and roll repeating ones over to the next cycle. Called from the tick.
     ///
-    /// Возвращает список, а не по одному: за один тик может подойти срок сразу у нескольких, и
-    /// отдавать их порознь значило бы разбудить агента столько же раз подряд.
+    /// Returns a list rather than one at a time: several can come due in a single tick, and handing
+    /// them out one by one would mean waking the agent that many times in a row.
     /// </summary>
     public IReadOnlyList<AgentTimer> TakeDue(TimeSpan now)
     {
@@ -152,8 +153,8 @@ public sealed class TimerStore
             if (fired == null)
                 return Array.Empty<AgentTimer>();
 
-            // Обратный порядок обхода дал бы порядок срабатывания задом наперёд; сортируем по сроку,
-            // как и всё остальное здесь, чтобы одно и то же состояние давало одни и те же байты.
+            // The reverse iteration order would give firing order back to front; sort by due time,
+            // like everything else here, so the same state always produces the same bytes.
             fired.Sort((a, b) => a.DueAt != b.DueAt
                 ? a.DueAt.CompareTo(b.DueAt)
                 : string.CompareOrdinal(a.Name, b.Name));
@@ -162,7 +163,7 @@ public sealed class TimerStore
         }
     }
 
-    /// <summary>Ближайшие по написанию имена — для внятного отказа на промах в del_timer.</summary>
+    /// <summary>Names closest by spelling — for a clear refusal on a near-miss in del_timer.</summary>
     public IReadOnlyList<string> Nearest(string name, int count = 3)
     {
         lock (_lock)
@@ -182,7 +183,7 @@ public sealed class TimerStore
             _timers.Clear();
     }
 
-    /// <summary>Восстановить снимок. Полностью замещает содержимое — снимок и есть состояние.</summary>
+    /// <summary>Restore from a snapshot. Fully replaces the contents — the snapshot is the state.</summary>
     public void Restore(IEnumerable<AgentTimer> timers)
     {
         lock (_lock)
@@ -192,6 +193,6 @@ public sealed class TimerStore
         }
     }
 
-    /// <summary>Имя сравнивается без регистра: модель пишет «Обход» и «обход» как одно и то же.</summary>
+    /// <summary>Name comparison is case-insensitive: the model treats "Patrol" and "patrol" as the same.</summary>
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 }

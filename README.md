@@ -109,8 +109,9 @@ The step-by-step version, including verification commands, is in the
 hits above 99 %. Without the cache it is several times more, so do not reorder the blocks of the
 system prompt: it is assembled so that the prefix does not change between turns.
 
-**On language.** The prompts, the agent's speech and the reference library are in Russian, and
-the agent speaks the language of its prompt. Nothing in the code is language-specific.
+**On language.** Default prompts, speech and the reference library are in Russian. `ai.language en`
+switches Station AI and cyborg prompts, observations and tool replies to English. The agent
+speaks the language of its prompt.
 
 ## Documentation
 

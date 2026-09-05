@@ -8,17 +8,17 @@ using Robust.Shared.Log;
 namespace Content.AiBench;
 
 /// <summary>
-/// Заметки о персонажах: один файл на человека, живут между сменами.
+/// Player notes: one file per person, persisting across shifts.
 ///
-/// Здесь сосредоточен весь риск подсистемы, и он проверяется без сервера. Главный тест —
-/// <see cref="Name_CannotEscapeTheDirectory"/>: имя персонажа выбирает игрок, модель подставляет
-/// его в аргумент инструмента, и оно становится путём на диске. Соседний
-/// <see cref="SkillStore.Normalise"/> санитизации не делает вовсе — там имя придумывает модель, и
-/// худшее, что бывает, это кривой заголовок.
+/// This is where all of the subsystem's risk is concentrated, and it is verified without a
+/// server. The main test is <see cref="Name_CannotEscapeTheDirectory"/>: the character's name is
+/// chosen by the player, the model substitutes it into a tool argument, and it becomes a path on
+/// disk. The neighboring <see cref="SkillStore.Normalise"/> does no sanitization at all — there
+/// the name is invented by the model, and the worst that can happen is a mangled title.
 ///
-/// Второй по важности — <see cref="Overflow_IsLocalToOnePerson"/>: он кодирует, ЗАЧЕМ хранилище
-/// пофайловое. На живом сервере общий котёл MEMORY.md упёрся в свой лимит и перестал принимать
-/// что-либо вообще; лимит на человека делает отказ локальным.
+/// The second most important test is <see cref="Overflow_IsLocalToOnePerson"/>: it encodes WHY
+/// the storage is per-file. On the live server the shared MEMORY.md pool hit its limit and
+/// stopped accepting anything at all; a per-person limit makes the failure local.
 /// </summary>
 [TestFixture]
 [Category("AiSkills")]
@@ -56,13 +56,13 @@ public sealed class PlayerNoteTests
         return store;
     }
 
-    /// <summary>Каталог, в который стор реально пишет.</summary>
+    /// <summary>The directory the store actually writes into.</summary>
     private string PeopleDir => Path.Combine(_dir, "people");
 
     private string[] PeopleFiles() =>
         Directory.Exists(PeopleDir) ? Directory.GetFiles(PeopleDir) : System.Array.Empty<string>();
 
-    // --------------------------------------------------------------------- формат
+    // --------------------------------------------------------------------- format
 
     [Test]
     public void Note_RoundTripsThroughDisk()
@@ -72,7 +72,7 @@ public sealed class PlayerNoteTests
         Assert.That(store.Add("Иван Петров", "Инженер, просил открыть атмос.", Stamp).Ok, Is.True);
         Assert.That(store.Add("Иван Петров", "Обещал вернуть карту и вернул.", Stamp).Ok, Is.True);
 
-        // Второй стор из того же каталога обязан увидеть ровно то же.
+        // A second store from the same directory is required to see exactly the same thing.
         var reloaded = NewStore();
         var read = reloaded.Read("Иван Петров");
 
@@ -89,8 +89,9 @@ public sealed class PlayerNoteTests
     [Test]
     public void DisplayName_SurvivesASlugThatCannotHoldIt()
     {
-        // Слаг лоссовый: он лишён регистра, пунктуации и кавычек. Показывать модели «иван-ржавый»
-        // вместо «Иван "Ржавый" Петров» значило бы врать ей о том, как человека зовут.
+        // The slug is lossy: it strips out case, punctuation, and quote marks. Showing the model
+        // «иван-ржавый» instead of «Иван "Ржавый" Петров» would mean lying to it about the
+        // person's actual name.
         var store = NewStore();
         store.Add("Иван «Ржавый» Петров-мл.", "Механик.", Stamp);
 
@@ -116,20 +117,21 @@ public sealed class PlayerNoteTests
     [Test]
     public void KeepsCyrillicInTheFileName()
     {
-        // Ровно как у скиллов (антаг-вор.md): читаемое имя файла — главный отладочный аффорданс,
-        // хеш вместо него грепом не найдёшь.
+        // Exactly like with skills (антаг-вор.md): a readable file name is the primary debugging
+        // affordance — you can't grep for a hash instead.
         NewStore().Add("Иван Петров", "Раз.", Stamp);
 
         Assert.That(PeopleFiles().Select(Path.GetFileName), Does.Contain("иван-петров.md"));
     }
 
-    // ------------------------------------------------------------------ безопасность
+    // ------------------------------------------------------------------ security
 
     [Test]
     public void Name_CannotEscapeTheDirectory()
     {
-        // Белый список символов, а не чёрный список опасных последовательностей: после него «..»,
-        // слэш и двоеточие невыразимы в принципе, а не «вычищены» списком, который забудут пополнить.
+        // A character allowlist, not a blocklist of dangerous sequences: after it, "..", a slash,
+        // and a colon are inexpressible in principle, not "cleaned up" by a list someone will
+        // forget to keep updated.
         var hostile = new[]
         {
             "../../SOUL",
@@ -158,7 +160,7 @@ public sealed class PlayerNoteTests
                     $"слаг не обрезан: {path}");
             }
 
-            // Ничего не появилось и не изменилось уровнем выше — там лежит SOUL.md живого агента.
+            // Nothing appeared or changed one level up — that's where the live agent's SOUL.md lives.
             var outside = Directory.GetFiles(_dir, "*", SearchOption.TopDirectoryOnly);
             Assert.That(outside, Is.Empty, "в корне ai_data не должно появиться ничего");
             Assert.That(before, Is.EqualTo(0));
@@ -185,7 +187,8 @@ public sealed class PlayerNoteTests
     [Test]
     public void ReservedWindowsNames_GetASuffix()
     {
-        // Сервер на Linux, но отладочная копия хранилища на ноутбуке не должна падать на ровном месте.
+        // The server runs on Linux, but a debug copy of the store on a laptop shouldn't crash for
+        // no reason.
         Assert.Multiple(() =>
         {
             Assert.That(PlayerNoteStore.Slugify("CON"), Is.EqualTo("con-"));
@@ -195,13 +198,13 @@ public sealed class PlayerNoteTests
         });
     }
 
-    // ----------------------------------------------------------------------- штамп
+    // ----------------------------------------------------------------------- stamp
 
     [Test]
     public void Add_StampsEveryEntry()
     {
-        // Штамп ставит стор, а не модель: модель забудет, и наполовину проштампованное хранилище
-        // хуже непроштампованного — по нему нельзя отличить прошлую смену от сегодняшней.
+        // The store applies the stamp, not the model: the model will forget, and a half-stamped
+        // store is worse than an unstamped one — you can't tell last shift's entries from today's.
         var store = NewStore();
         store.Add("Иван Петров", "Взломал шкаф.", Stamp);
 
@@ -213,8 +216,9 @@ public sealed class PlayerNoteTests
     [Test]
     public void Replace_KeepsWhateverStampTheModelWrites()
     {
-        // Правка не перештамповывается: штамп отвечает на вопрос «когда я это узнал», а
-        // переформулировка знания не меняет. Модель правит запись вместе с её штампом.
+        // An edit does not get re-stamped: the stamp answers the question "when did I learn this,"
+        // and rephrasing the knowledge doesn't change that. The model edits the entry together
+        // with its stamp.
         var store = NewStore();
         store.Add("Иван Петров", "Взломал шкаф.", Stamp);
 
@@ -224,7 +228,7 @@ public sealed class PlayerNoteTests
         Assert.That(store.Read("Иван Петров").Entries![0], Is.EqualTo($"{Stamp} Взломал шкаф ГП."));
     }
 
-    // ------------------------------------------------------------------- правки
+    // ------------------------------------------------------------------- edits
 
     [Test]
     public void Edit_CreatesAppendsReplacesAndDeletes()
@@ -277,7 +281,7 @@ public sealed class PlayerNoteTests
     [Test]
     public void RemovingTheLastEntry_DeletesTheFile()
     {
-        // Каталог, зарастающий пустыми заметками, врёт поиску о том, кого агент знает.
+        // A directory cluttered with empty notes lies to search about who the agent actually knows.
         var store = NewStore();
         store.Add("Иван Петров", "Единственная.", Stamp);
 
@@ -292,16 +296,18 @@ public sealed class PlayerNoteTests
         });
     }
 
-    // ------------------------------------------------------------------- лимиты
+    // ------------------------------------------------------------------- limits
 
     [Test]
     public void Overflow_IsLocalToOnePerson()
     {
-        // Это тест про то, ЗАЧЕМ хранилище пофайловое. В общем котле MEMORY.md одна многословная
-        // тема заперла запись обо всём остальном; здесь переполненный Иван не мешает Петру.
+        // This test is about WHY the storage is per-file. In the shared MEMORY.md pool, one
+        // verbose topic locked out recording anything else; here an overflowing Ivan doesn't
+        // block Petr.
         var store = NewStore(noteLimit: 120, maxEntry: 100);
 
-        // Записи разные: на точный дубликат Add отвечает «такая запись уже есть» и Ok=true.
+        // The entries are different: on an exact duplicate, Add responds "this entry already
+        // exists" with Ok=true.
         var filled = false;
         for (var i = 0; i < 10 && !filled; i++)
             filled = !store.Add("Иван Петров", $"запись номер {i} " + new string('а', 40), Stamp).Ok;
@@ -314,9 +320,9 @@ public sealed class PlayerNoteTests
     [Test]
     public void ShrinkingIsAllowed_EvenWhenOverTheLimit()
     {
-        // Урок MEMORY.md: если сокращение запрещать по вместимости, переполненную память нельзя
-        // починить никогда, и она запирается навсегда. Ровно так это и случилось на mcbot, когда
-        // лимит понизили под уже накопленным текстом — воспроизводим тот же сценарий.
+        // Lesson from MEMORY.md: if shrinking is blocked by capacity, an overflowing memory can
+        // never be fixed and locks up forever. That's exactly what happened on mcbot, when the
+        // limit was lowered below already accumulated text — we reproduce that same scenario.
         NewStore(noteLimit: 500, maxEntry: 200).Add("Иван Петров", new string('а', 150), Stamp);
 
         var tightened = NewStore(noteLimit: 50, maxEntry: 200);
@@ -359,7 +365,7 @@ public sealed class PlayerNoteTests
     [Test]
     public void StopsRetrying_AfterRepeatedFailures()
     {
-        // Хрупкая запись не должна выесть ход целиком и проглотить реплику, которой ждёт экипаж.
+        // A fragile write must not eat up the whole turn and swallow the line the crew is waiting for.
         var store = NewStore(noteLimit: 100, maxEntry: 60);
 
         Assert.That(store.Add("Иван Петров", new string('а', 40), Stamp).Ok, Is.True,
@@ -372,7 +378,7 @@ public sealed class PlayerNoteTests
         Assert.That(last!.Message, Does.Contain("не трать на неё этот ход"));
     }
 
-    // --------------------------------------------------------------------- загрузка
+    // --------------------------------------------------------------------- loading
 
     [Test]
     public void LoadFromDisk_SurvivesAGarbageFile()
@@ -398,7 +404,7 @@ public sealed class PlayerNoteTests
             Is.Empty);
     }
 
-    // ----------------------------------------------------------------------- поиск
+    // ----------------------------------------------------------------------- search
 
     [Test]
     public void Search_FindsBySubstringAndByMisspelling()
@@ -418,8 +424,8 @@ public sealed class PlayerNoteTests
     [Test]
     public void Search_RefusesToGuessOnGarbage()
     {
-        // У SkillStore.Nearest порога нет, и на мусорный запрос он всё равно возвращает три имени,
-        // поданных модели как «похожие». Здесь пустой ответ — законный ответ.
+        // SkillStore.Nearest has no threshold, and for a garbage query it still returns three
+        // names, served to the model as "similar." Here an empty result is a legitimate result.
         var store = NewStore();
         store.Add("Иван Петров", "Раз.", Stamp);
 
@@ -429,8 +435,8 @@ public sealed class PlayerNoteTests
     [Test]
     public void Search_IsDeterministicOnTiedDistances()
     {
-        // Без tie-break порядок при равных расстояниях задаёт обход Dictionary, то есть ответ
-        // инструмента плавает между перезагрузками.
+        // Without a tie-break, the order at equal distances is set by Dictionary iteration order,
+        // meaning the tool's answer drifts between reloads.
         var store = NewStore();
         store.Add("Аня Иванова", "Раз.", Stamp);
         store.Add("Оля Иванова", "Раз.", Stamp);

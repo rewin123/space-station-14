@@ -1,9 +1,10 @@
 #!/bin/bash
-# Прогнать оставшиеся категории подряд. Последовательно, а не параллельно: модель одна,
-# GPU одна, и два агента в неё просто встанут в очередь, зато вперемешку испортят лог.
+# Run the remaining categories one after another. Sequentially, not in parallel: there's one
+# model, one GPU, and two agents hitting it would just queue up anyway, only interleaving and
+# ruining the log.
 #
-# Порядок — по тому, где потеряно больше всего: сначала техника станции, где вика даёт
-# процедуры и десятки названий машин, в конце правила, где библиотека и так подробна.
+# The order follows where the most was lost: station technology first, where the wiki gives
+# procedures and dozens of machine names, then rules last, where the library is already detailed.
 cd /home/rewin/projects/ss14_ai || exit 1
 for cat in питание атмосфера наука мед химия строй снабжение сервис антаг должности виды общее силикон закон правила; do
   echo "############ $cat  $(date +%H:%M) ############"

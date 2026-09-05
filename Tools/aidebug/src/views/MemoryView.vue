@@ -22,7 +22,7 @@ const frozen = computed(() => parseFrozen(frozenText.value))
 const pending = computed(() => pendingEntries(live.value, frozen.value.entries))
 const used = computed(() => usedChars(live.value))
 
-/** Единственная кнопка записи — и она single-flight. */
+/** The single write button — and it's single-flight. */
 async function send(action: 'add' | 'remove', match?: string): Promise<void> {
   if (busy.value) return
 

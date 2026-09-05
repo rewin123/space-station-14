@@ -186,19 +186,20 @@ public sealed class AgentDebugServer : IDisposable
         // The debugger is served from somewhere else entirely — a static page, a dev server, a
         // file:// URL. Without this every fetch fails in the browser for a reason that never
         // appears in the server log.
-        // Кэшировать здесь нельзя НИЧЕГО, и это не перестраховка.
+        // NOTHING may be cached here, and that is not overcaution.
         //
-        // /events — длинный опрос: один и тот же URL (instance+since) запрашивается повторно, пока
-        // курсор не сдвинулся. Ответ без единой директивы кэширования браузер и промежуточные
-        // прокси вправе переиспользовать по эвристике — и тогда петля получает старый ответ, курсор
-        // не двигается, URL не меняется, и страница живёт вечно на первом ответе. Снаружи это
-        // выглядит ровно как «события не обновляются, пока не нажмёшь F5»: перезагрузка берёт новый
-        // снимок с новым seq, то есть новый URL, и на одну итерацию всё оживает.
+        // /events is a long poll: the same URL (instance+since) is requested again and again until
+        // the cursor moves. A response with not a single caching directive is fair game for a
+        // browser and intermediate proxies to reuse by heuristic — and then the loop gets back the
+        // old response, the cursor doesn't move, the URL doesn't change, and the page lives forever
+        // on the first response. From the outside this looks exactly like "events stop updating
+        // until you hit F5": a reload picks up a fresh snapshot with a new seq, i.e. a new URL, and
+        // everything comes back to life for one iteration.
         //
-        // Поймать это пробами через Node невозможно: у его fetch нет HTTP-кэша вовсе, и та же самая
-        // петля против того же сервера отрабатывает безупречно. Отсюда правило: заголовок ставится
-        // независимо от того, воспроизвелось ли — цена одна строка, а отсутствие директивы у
-        // повторяющегося GET это просто ошибка.
+        // This is impossible to catch with probes through Node: its fetch has no HTTP cache at all,
+        // and the very same loop against the very same server runs flawlessly. Hence the rule: the
+        // header is set regardless of whether the bug reproduced — the cost is one line, and a
+        // repeating GET with no caching directive is simply a bug.
         context.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
         context.Response.Headers["Pragma"] = "no-cache";
 

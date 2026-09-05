@@ -11,19 +11,20 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Накладка <c>ai_data/config.d/</c>: настройки конкретного сервера поверх прототипов форка.
+/// The <c>ai_data/config.d/</c> overlay: server-specific settings layered on top of the fork's prototypes.
 ///
 /// <para>
-/// Проверяются два свойства, и оба контринтуитивны настолько, что без теста их однажды сломают.
-/// Первое — <b>замещение, а не слияние</b>: запись с существующим id меняет прототип ЦЕЛИКОМ, и
-/// неуказанные поля садятся на умолчания типа, а не на значения из <c>Resources/</c>. Второе —
-/// <b>сломанный файл не отменяет остальные</b>: накладка правится на живом сервере, и падать
-/// целиком из-за забытой запятой она не должна.
+/// Two properties are checked here, and both are counterintuitive enough that without a test they
+/// would eventually break. The first is <b>replacement, not merging</b>: a record with an existing
+/// id replaces the prototype WHOLE, and unspecified fields fall back to the type's defaults rather
+/// than to the values from <c>Resources/</c>. The second is <b>a broken file does not cancel the
+/// rest</b>: the overlay is edited on a live server, and it must not fail entirely over one forgotten
+/// comma.
 /// </para>
 /// <para>
-/// Заодно накладка используется здесь как инструмент: она — единственный способ завести
-/// прототип профиля из теста. У <c>AiLlmProfilePrototype.ID</c> приватный сеттер (его заполняет
-/// сериализатор), так что собрать профиль конструктором нельзя.
+/// The overlay also doubles here as a tool: it is the only way to bring up a profile prototype from
+/// a test. <c>AiLlmProfilePrototype.ID</c> has a private setter (filled in by the serializer), so a
+/// profile cannot be assembled through the constructor.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -39,7 +40,7 @@ public sealed class ConfigOverlayTests
         File.WriteAllText(Path.Combine(dir, name), yaml);
     }
 
-    /// <summary>Профиля с таким id в <c>Resources/</c> нет — он целиком из накладки.</summary>
+    /// <summary>No profile with this id exists in <c>Resources/</c> — it comes entirely from the overlay.</summary>
     [Test]
     public async Task Overlay_AddsAProfileMissingFromResources()
     {
@@ -79,14 +80,14 @@ public sealed class ConfigOverlayTests
     }
 
     /// <summary>
-    /// Повторная запись замещает прототип целиком: неупомянутые поля возвращаются к умолчаниям.
+    /// Re-writing replaces the prototype whole: unmentioned fields revert to their defaults.
     /// </summary>
     /// <remarks>
-    /// Это самая дорогая ловушка накладки, и выглядит она безобидно. Человек, желающий поменять
-    /// один адрес, пишет две строки — и молча теряет диалект: <c>LlamaCpp</c> становится
-    /// <c>OpenAiCompat</c>, то есть <c>top_k</c>, <c>min_p</c> и <c>cache_prompt</c> перестают
-    /// уходить, и кэш промпта отключается. В игре это выглядит как «стало медленнее», без единой
-    /// ошибки в журнале.
+    /// This is the overlay's most expensive pitfall, and it looks harmless. Someone wanting to
+    /// change a single address writes two lines — and silently loses the dialect: <c>LlamaCpp</c>
+    /// becomes <c>OpenAiCompat</c>, meaning <c>top_k</c>, <c>min_p</c> and <c>cache_prompt</c> stop
+    /// being sent, and the prompt cache gets disabled. In-game this shows up as "things got slower",
+    /// with not a single error in the log.
     /// </remarks>
     [Test]
     public async Task Overlay_ReplacesThePrototypeWhole()
@@ -108,7 +109,7 @@ public sealed class ConfigOverlayTests
         var first = await w.Read(() => protoMan.Index<AiLlmProfilePrototype>(Profile));
         Assert.That(first.Dialect, Is.EqualTo(LlmDialect.LlamaCpp), "первая загрузка не применилась");
 
-        // «Хотел поменять только адрес».
+        // "I only wanted to change the address."
         Write(w.DataDir, "10-endpoints.yml", $"""
 - type: aiLlmProfile
   id: {Profile}
@@ -133,7 +134,7 @@ public sealed class ConfigOverlayTests
         });
     }
 
-    /// <summary>Сломанный файл не уносит с собой соседний исправный.</summary>
+    /// <summary>A broken file does not take its valid neighbor down with it.</summary>
     [Test]
     public async Task Overlay_KeepsGoingPastABrokenFile()
     {
@@ -149,9 +150,10 @@ public sealed class ConfigOverlayTests
   model: local-model
 """);
 
-        // Стенд валит тест на любом ERROR из сервера — а здесь ERROR и есть ожидаемый результат:
-        // накладка обязана громко жаловаться на неразобранный файл. Порог поднят на ОДИН вызов и
-        // сразу возвращён: любая ошибка вне этих двух строк по-прежнему роняет тест.
+        // The bench fails a test on any ERROR from the server — but here an ERROR is exactly the
+        // expected result: the overlay must complain loudly about a file it could not parse. The
+        // threshold is raised for exactly ONE call and immediately restored: any error outside
+        // these two lines still fails the test.
         var previous = w.Pair.ServerLogHandler.FailureLevel;
         w.Pair.ServerLogHandler.FailureLevel = LogLevel.Fatal;
 
@@ -179,7 +181,7 @@ public sealed class ConfigOverlayTests
         Assert.That(loaded, Is.True, "исправный файл не применился из-за соседа");
     }
 
-    /// <summary>Отсутствующий каталог — обычное состояние свежего клона, а не ошибка.</summary>
+    /// <summary>A missing directory is the normal state of a fresh clone, not an error.</summary>
     [Test]
     public async Task Overlay_IsQuietWithoutTheDirectory()
     {
@@ -200,16 +202,18 @@ public sealed class ConfigOverlayTests
     }
 
     /// <summary>
-    /// Проверка эндпоинта видит расхождения ДО того, как сходит в сеть.
+    /// The endpoint probe catches discrepancies BEFORE it ever goes out onto the network.
     /// </summary>
     /// <remarks>
-    /// Обе поломки, которые здесь ловятся, ничего не ломают при старте и ничего не пишут в журнал.
-    /// Порог свёртки не меньше окна означает, что свёртка не сработает никогда — диалог дорастёт
-    /// до края и ход кончится отказом провайдера. Таймаут не меньше <c>ai.llm_total_timeout</c>
-    /// означает, что фаллбек не пробуется вовсе: голова цепочки, зависнув, съедает бюджет хода
-    /// целиком. Второе стоило 01.09.2026 четырёх минут молчания ИИ в живом раунде.
+    /// Both breakages caught here break nothing at startup and write nothing to the log. A
+    /// compaction threshold no smaller than the context window means compaction will never fire —
+    /// the dialogue will grow to the edge and the turn will end in a provider refusal. A timeout no
+    /// smaller than <c>ai.llm_total_timeout</c> means the fallback is never tried at all: the head
+    /// of the chain, hung, eats the entire turn budget. The second one cost four minutes of AI
+    /// silence in a live round on 01.09.2026.
     ///
-    /// Эндпоинт заведомо мёртвый (порт 1): проверка обязана напечатать разбор чисел и без сети.
+    /// The endpoint is deliberately dead (port 1): the probe must print the number analysis even
+    /// with no network available.
     /// </remarks>
     [Test]
     public async Task Probe_NamesTheTwoSilentMisconfigurations()
@@ -257,7 +261,7 @@ public sealed class ConfigOverlayTests
             Assert.That(text, Does.Contain("ФАЛЛБЕК НЕ ПРОБУЕТСЯ"),
                 $"timeoutSeconds 300 при бюджете хода 240 не назван поломкой:\n{text}");
 
-            // И живой запрос всё-таки был сделан: мёртвый порт обязан быть отличим от «не проверяли».
+            // And a live request was actually made: a dead port must be distinguishable from "was not checked".
             Assert.That(text, Does.Contain("НЕ ДОШЛИ").Or.Contain("ТАЙМАУТ").Or.Contain("ОТКАЗ"),
                 $"мёртвый эндпоинт не отмечен как недоступный:\n{text}");
         });

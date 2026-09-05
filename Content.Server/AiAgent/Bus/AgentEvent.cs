@@ -48,20 +48,20 @@ public enum AgentEventKind : byte
     SkillsReloaded,
 
     /// <summary>
-    /// Одна заметка о человеке целиком, после того как запись легла на диск.
+    /// One person's note in full, after the write settled on disk.
     ///
-    /// ПУСТОЙ список записей — надгробие: заметки больше нет. Удаление последней записи сносит и
-    /// файл (каталог из пустых заметок врал бы поиску о том, кого агент знает), и отдельного вида
-    /// события на это заводить незачем — «новое целое значение этого ключа» здесь просто пусто.
-    /// Клиент, складывающий эти кадры в карту, обязан на пустом списке ключ УДАЛЯТЬ, иначе он
-    /// нарисует человека, о котором ничего не известно.
+    /// An EMPTY entries list is a tombstone: the note no longer exists. Deleting the last entry
+    /// removes the file too (a directory of empty notes would lie to search about who the agent
+    /// knows), and there is no point in a separate event kind for that — "the new whole value of
+    /// this key" is simply empty here. A client folding these frames into a map must DELETE the key
+    /// on an empty list, or it will draw a person about whom nothing is known.
     /// </summary>
     PlayerNoteUpdated,
 
     /// <summary>
-    /// Всё хранилище заметок перечитано с диска. Причина та же, что у <see cref="SkillsReloaded"/>:
-    /// перечитывание — единственный путь, которым заметка исчезает без собственного события (файл
-    /// удалили руками, или он перестал разбираться).
+    /// The whole notes store was re-read from disk. The reason is the same as for
+    /// <see cref="SkillsReloaded"/>: a reload is the only way a note disappears without an event of
+    /// its own (the file was deleted by hand, or it stopped parsing).
     /// </summary>
     PlayerNotesReloaded,
 

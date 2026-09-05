@@ -5,11 +5,11 @@ using System.Text;
 
 namespace Content.Server.AiAgent.Vfs;
 
-/// <summary>Ответ оболочки: текст для модели плюс признак, что что-то изменилось на диске.</summary>
-/// <param name="Ok">Команда выполнилась. Пустой результат поиска — это тоже успех.</param>
-/// <param name="Text">Что показать модели.</param>
-/// <param name="Mutated">Диск изменился. По этому признаку куратор решает, писать ли отчёт.</param>
-/// <param name="Hints">Ближайшие правильные значения, если ошиблись именем.</param>
+/// <summary>Shell response: text for the model plus a flag that something changed on disk.</summary>
+/// <param name="Ok">The command ran. An empty search result is also a success.</param>
+/// <param name="Text">What to show the model.</param>
+/// <param name="Mutated">Disk changed. The curator uses this flag to decide whether to write a report.</param>
+/// <param name="Hints">Nearest correct values, in case the name was wrong.</param>
 public sealed record ShellResult(bool Ok, string Text, bool Mutated = false, IReadOnlyList<string>? Hints = null)
 {
     public static ShellResult Fine(string text, bool mutated = false) => new(true, text, mutated);
@@ -19,29 +19,31 @@ public sealed record ShellResult(bool Ok, string Text, bool Mutated = false, IRe
 }
 
 /// <summary>
-/// Разбор командной строки и сами команды.
+/// Parsing the command line and the commands themselves.
 ///
 /// <para>
-/// Одна строка вместо восьми инструментов — не стилистическое решение. На прежнем развёртывании
-/// это померено прямо: 46 узких команд утопили ту же модель на том же кванте, а около тринадцати
-/// работали. Ширина набирается объединением, а не новыми записями в реестре, и шелл — самая
-/// естественная форма объединения, какая у модели вообще есть в обучении.
+/// One line instead of eight tools isn't a stylistic choice. On the previous deployment this was
+/// measured directly: 46 narrow commands drowned the same model on the same quantization, while
+/// about thirteen worked. Breadth is gained by consolidation, not by new registry entries, and a
+/// shell is the most natural form of consolidation the model has ever had in its training.
 /// </para>
 /// <para>
-/// Труб, редиректов и подстановок здесь нет и не будет. Модель охотно напишет
-/// <c>grep насос /wiki_ru | head -5</c>, и притвориться, что мы это поняли, хуже, чем отказать:
-/// частично исполненный конвейер вернёт правдоподобный, но неверный ответ. Неизвестная команда
-/// перечисляет поддерживаемые.
+/// There are no pipes, redirects, or substitutions here, and there won't be. The model will
+/// happily write <c>grep pump /wiki_ru | head -5</c>, and pretending we understood that is worse
+/// than refusing it: a partially executed pipeline returns a plausible but wrong answer. An
+/// unknown command lists the supported ones.
 /// </para>
 /// </summary>
 public sealed class Shell
 {
     /// <summary>
-    /// Потолки вывода. Без них один <c>grep</c> по полутора мегабайтам выносит окно контекста.
+    /// Output ceilings. Without them, a single <c>grep</c> over a megabyte and a half blows out the
+    /// context window.
     /// </summary>
     /// <remarks>
-    /// Усечение сообщается ВСЛУХ и всегда. Молча обрезанный вывод читается моделью как «больше
-    /// ничего нет» — то есть превращает отсутствие места в отсутствие факта, и делает это тихо.
+    /// Truncation is reported OUT LOUD, always. Silently truncated output reads to the model as
+    /// "there's nothing more" — that is, it turns lack of room into absence of fact, and does so
+    /// quietly.
     /// </remarks>
     public const int MaxHits = 40;
     public const int MaxCat = 8000;
@@ -99,10 +101,10 @@ public sealed class Shell
     private static string Arg(IReadOnlyList<string> args, int i) => i < args.Count ? args[i] : string.Empty;
 
     /// <summary>
-    /// Разбить строку на слова, уважая кавычки.
+    /// Split a line into words, respecting quotes.
     ///
-    /// Кириллица здесь штатна: разделителем считается только пробел, а не «неизвестный символ», —
-    /// иначе половина путей в этом дереве стала бы непроизносимой.
+    /// Cyrillic is normal here: only whitespace counts as a separator, not "unknown character" —
+    /// otherwise half the paths in this tree would become unspeakable.
     /// </summary>
     public static List<string> Tokenize(string line)
     {
@@ -148,7 +150,7 @@ public sealed class Shell
         return argv;
     }
 
-    // ------------------------------------------------------------------- команды
+    // ------------------------------------------------------------------- commands
 
     private ShellResult Ls(string raw, bool details)
     {
@@ -199,7 +201,7 @@ public sealed class Shell
         return ShellResult.Fine(sb.ToString().TrimEnd());
     }
 
-    /// <summary>Один уровень вглубь. Глубже не идём: дерево целиком — это тот же индекс на 16 КБ.</summary>
+    /// <summary>One level deep. We don't go deeper: the whole tree is the same 16 KB index.</summary>
     private int Descend(string raw, StringBuilder sb, string indent, int budget)
     {
         if (budget <= 0 || !VfsPath.TryParse(raw, out var path, out _))
@@ -237,8 +239,8 @@ public sealed class Shell
         if (raw.Length == 0)
             return ShellResult.No("нужен путь: cat /wiki_ru/атмосфера/насосы");
 
-        // Диапазон строк отделяется двоеточием: «путь:120-160». Так дочитывают статью, которая не
-        // влезла в потолок, не заставляя оболочку отдавать её целиком.
+        // A line range is separated by a colon: "path:120-160". This is how you finish reading an
+        // article that didn't fit under the ceiling, without forcing the shell to dump it whole.
         var (target, from, to) = SplitRange(raw);
 
         if (!VfsPath.TryParse(target, out var path, out var parseError))
@@ -326,8 +328,8 @@ public sealed class Shell
 
         if (hits.Count == 0)
         {
-            // Пусто — это успех, а не отказ: «такого слова в справочнике нет» полноценный ответ, а
-            // отказ научил бы модель, что искать было ошибкой.
+            // Empty is a success, not a failure: "that word isn't in the reference library" is a
+            // complete answer, whereas a rejection would teach the model that searching was a mistake.
             return ShellResult.Fine($"«{needle}» не встречается{(raw.Length > 0 ? " в " + raw : string.Empty)}");
         }
 
@@ -434,7 +436,7 @@ public sealed class Shell
             : ShellResult.No(result.Message, result.Hints);
     }
 
-    // ---------------------------------------------------------------- оформление
+    // ---------------------------------------------------------------- formatting
 
     private static string Format(IReadOnlyList<VfsEntry> entries, string where, bool details)
     {

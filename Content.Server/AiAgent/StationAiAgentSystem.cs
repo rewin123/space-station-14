@@ -88,35 +88,35 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     private GameTicker? _ticker;
 
     /// <summary>
-    /// Номер текущего раунда, снятый на главном потоке.
+    /// The current round number, captured on the main thread.
     ///
-    /// Нужен инструментам заметок, чтобы штамповать записи, а они работают на потоке агента и
-    /// намеренно не маршалятся — дотянуться оттуда до <see cref="GameTicker"/> нельзя. Поэтому
-    /// значение кладётся сюда там, где мы и так на главном потоке, а тулы читают только это поле:
-    /// чтение volatile int безопасно с любого потока и никого не блокирует.
+    /// Needed by the note tools to stamp entries, and they run on the agent's thread and are
+    /// deliberately not marshalled — <see cref="GameTicker"/> cannot be reached from there. So the
+    /// value is stashed here, where we're already on the main thread anyway, and the tools only ever
+    /// read this field: reading a volatile int is safe from any thread and blocks nobody.
     /// </summary>
     private volatile int _roundId;
 
-    /// <summary>Логировать паузу один раз на переход, а не каждый тик.</summary>
+    /// <summary>Log the pause once per transition, not every tick.</summary>
     private bool _notedPause;
 
-    /// <summary>То же для выключенного ai.enabled.</summary>
+    /// <summary>Same, for ai.enabled being off.</summary>
     private bool _notedDisabled;
 
     private readonly Dictionary<EntityUid, AgentSession> _sessions = new();
     private ILlmClient? _llm;
 
     /// <summary>
-    /// Сны, исчерпанные квоты и счётчики провайдеров.
+    /// Cooldowns, exhausted quotas, and provider counters.
     ///
-    /// Живёт рядом с системой, а НЕ внутри клиента, и это принципиально:
-    /// <see cref="ResetLlmClient"/> выбрасывает клиента на каждом рестарте раунда, а раундов за
-    /// сутки десятки. Внутри клиента это состояние означало бы, что каждый рестарт заново лезет в
-    /// исчерпанную подписку и добивает остаток недельного пула.
+    /// Lives next to the system, NOT inside the client, and that's essential:
+    /// <see cref="ResetLlmClient"/> throws the client away on every round restart, and there are
+    /// dozens of rounds a day. Inside the client, this state would mean every restart reaches back
+    /// into an already-exhausted subscription and burns through the rest of the weekly pool.
     /// </summary>
     private LlmQuotaState? _quota;
 
-    /// <summary>Роутер, если цепочка собрана. Null на одиночном эндпоинте и в тестах со скриптом.</summary>
+    /// <summary>The router, if a chain was assembled. Null for a single endpoint and in scripted tests.</summary>
     public ILlmRouter? Router => _llm as ILlmRouter;
 
     public IReadOnlyDictionary<EntityUid, AgentSession> Sessions => _sessions;
@@ -127,29 +127,30 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
         _sawmill = _logManager.GetSawmill("ai");
 
-        // Накладка — ПЕРВЫМ делом, до всего остального.
+        // The overlay — FIRST thing, before anything else.
         //
-        // Она переписывает прототипы, а ниже по этому же методу и по всей системе прототипы уже
-        // читаются. Прочитать значение из Resources/, а потом подменить его в ai_data/ — значит
-        // получить сервер, который наполовину работает по накладке, наполовину нет, и разницу
-        // между половинами задаёт порядок строк в Initialize. Такую поломку невозможно ни
-        // увидеть, ни объяснить.
+        // It rewrites prototypes, and further down this same method, and throughout the system,
+        // prototypes are already being read. Reading a value from Resources/ and only then swapping
+        // it out in ai_data/ would produce a server that runs half on the overlay and half not, with
+        // the line order in Initialize deciding which half is which. Breakage like that is
+        // impossible to see or explain.
         if (_cfg.GetCVar(AiCVars.ConfigOverlay))
             LoadOverlay(live: false);
 
         // Constructed here, on the main thread, so it learns which thread that is.
         _world = new WorldBus(_taskManager, _sawmill, _cfg.GetCVar(AiCVars.MainThreadBudgetMs));
 
-        // Порог живой, а не снятый один раз при старте.
+        // The threshold is live, not snapped once at startup.
         //
-        // `BudgetMs` — публичное сеттерное свойство, но записать в него было некому: значение
-        // читалось здесь и больше нигде, так что `cvar ai.mainthread_budget_ms 2` из админ-консоли
-        // молча не делал ничего. Диагностический порог, который нельзя подкрутить на живом
-        // сервере, бесполезен ровно тогда, когда нужен, — на живом сервере.
+        // `BudgetMs` is a public settable property, but there was nobody to write to it: the value
+        // used to be read here and nowhere else, so `cvar ai.mainthread_budget_ms 2` from the admin
+        // console silently did nothing. A diagnostic threshold you can't tune on a live server is
+        // useless at exactly the moment you need it — on a live server.
         _cfg.OnValueChanged(AiCVars.MainThreadBudgetMs, ms => _world.BudgetMs = ms);
 
-        // Все ручки шины — живые, по той же причине. Особенно рубильник: если шина поведёт себя
-        // не так, откатывать её командой из консоли, а не пересборкой с киком всех игроков.
+        // Every bus knob is live, for the same reason. Especially the switch: if the bus starts
+        // misbehaving, it should be rolled back with a console command, not a rebuild that kicks
+        // every player.
         _cfg.OnValueChanged(AiCVars.FrameBudgetMs, ms => _world.FrameBudgetMs = ms, true);
         _cfg.OnValueChanged(AiCVars.WorldPromoteMs, ms => _world.PromoteAfterMs = ms, true);
         _cfg.OnValueChanged(AiCVars.WorldQueueMax, n => _world.QueueMax = n, true);
@@ -159,19 +160,21 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // out of nowhere to whoever connects first.
         StartDebugBus();
 
-        // Общий слой — до первой сессии: справочник и вика игры одни на процесс, и собирать их
-        // при первом обращении значило бы дать двум потокам построить по своему экземпляру.
+        // The shared layer — before the first session: the reference library and the in-game
+        // guidebook are one per process, and building them on first access would let two threads
+        // each build their own instance.
         ReloadSharedLibrary();
 
-        // Роль Station AI закрывается для людей ДО того, как кто-либо заспавнится.
+        // The Station AI role is closed to humans BEFORE anyone spawns in.
         //
-        // Иначе форк проигрывает гонку: GameTicker спавнит игроков раньше, чем меняет рун-левел,
-        // за который мы цепляемся. Игрок с наигранными часами занимал ядро, нейросеть молча не
-        // стартовала на весь раунд — на сервере, который называется «станцией управляет
-        // нейросеть», — и единственным следом была строка в логе.
+        // Otherwise the fork loses the race: GameTicker spawns players before it changes the
+        // run-level we hook into. A player with a lot of playtime would claim the core, the neural
+        // network silently wouldn't start for the whole round — on a server whose whole premise is
+        // "a neural network runs the station" — and the only trace would be one line in the log.
         //
-        // Обратный случай не лучше: при занятом нами ядре игрок, выбравший эту роль, не влезал в
-        // контейнер и появлялся невидимым неподвижным мозгом на полу прибытия.
+        // The reverse case is no better: with the core already claimed by us, a player who picked
+        // that role wouldn't fit into the container and would spawn as an invisible, motionless
+        // brain on the arrivals floor.
         SubscribeLocalEvent<StationPostInitEvent>(OnStationPostInit);
 
         SubscribeLocalEvent<GameRunLevelChangedEvent>(OnRunLevelChanged);
@@ -200,12 +203,12 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         // so keeping both subscriptions would have delivered console announcements twice.
         SubscribeLocalEvent<StationAnnouncementEvent>(OnAnnouncement);
 
-        // Люди, приходящие на смену.
+        // People arriving for the shift.
         //
-        // Без этой подписки агент не имел НИКАКОГО способа узнать, что кто-то пришёл: в наблюдения
-        // попадали только речь, рация и объявления, поэтому молчаливый игрок для него не
-        // существовал. 15 августа так прошли все четыре захода подряд — четыре человека отыграли
-        // смену на станции, которую агент всё это время считал пустой.
+        // Without this subscription the agent had NO WAY AT ALL to learn that someone had arrived:
+        // only speech, radio and announcements made it into observations, so a silent player simply
+        // didn't exist for it. On August 15, all four rounds in a row went this way — four people
+        // played out a shift on a station the agent believed was empty the whole time.
         SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawned);
 
         // Carding moves the brain between the core and an intellicard; the mode gate follows it.
@@ -219,9 +222,9 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         SubscribeLocalEvent<LlmStationAiComponent, EntGotInsertedIntoContainerMessage>(OnBrainInserted);
         SubscribeLocalEvent<LlmStationAiComponent, EntGotRemovedFromContainerMessage>(OnBrainRemoved);
 
-        // Зрение как поток, а не как опрос: всё, что происходит рядом с глазом, приходит строкой
-        // OBSERVED. См. StationAiAgentSystem.Witness.cs — там же объяснено, почему список событий
-        // не отфильтрован по «важности».
+        // Vision as a stream, not as polling: everything happening near the eye arrives as an
+        // OBSERVED line. See StationAiAgentSystem.Witness.cs — it also explains why the event list
+        // isn't filtered by "importance".
         SubscribeWitness();
 
         _sawmill.Info(
@@ -237,30 +240,32 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         (_llm as IDisposable)?.Dispose();
         _llm = null;
 
-        // Счётчики окна и недели пишутся не чаще раза в полминуты, так что без этого остановка
-        // сервера теряла бы последние обращения — а именно недельный расход и надо копить точно:
-        // ни OpenAI, ни xAI своего потолка не публикуют, и наш счётчик — единственный источник.
+        // The window and weekly counters are written no more than once every half a minute, so
+        // without this a server shutdown would lose the most recent calls — and it's exactly the
+        // weekly spend that needs to be tracked precisely: neither OpenAI nor xAI publish their own
+        // ceiling, and our counter is the only source.
         _quota?.Flush();
     }
 
     // ------------------------------------------------------------------ lifecycle
 
-    /// <summary>Идентификатор ванильной должности, которую занимает наш агент.</summary>
+    /// <summary>Identifier of the vanilla job our agent occupies.</summary>
     private const string StationAiJob = "StationAi";
 
     /// <summary>
-    /// Как агент подписывается в эфире. Должно совпадать с тем, как его зовёт SOUL.md.
+    /// How the agent signs off over comms. Must match how SOUL.md addresses it.
     ///
-    /// Совпадает с именем станции (<see cref="AiCVars.StationName"/>) намеренно, по решению
-    /// владельца сервера. Кодом это нигде не различается — имя только присваивается сущности
-    /// и ни с чем не сравнивается, — но в эфире «Аксиома» теперь значит и место, и собеседника.
+    /// Matches the station's name (<see cref="AiCVars.StationName"/>) deliberately, by the server
+    /// owner's decision. The code never distinguishes between the two anywhere — the name is only
+    /// assigned to the entity and never compared against anything — but over comms "Аксиома" now
+    /// means both the place and the one you're talking to.
     /// </summary>
     public const string AgentName = "Аксиома";
 
     private void OnStationPostInit(ref StationPostInitEvent ev)
     {
-        // Только если агент действительно собирается занять ядро. Выключенный агент не должен
-        // отбирать у людей роль, которую сам не займёт.
+        // Only if the agent is actually about to claim a core. A disabled agent must not take away
+        // from humans a role it won't itself occupy.
         if (!_cfg.GetCVar(AiCVars.Enabled) || !_cfg.GetCVar(AiCVars.AutoClaim))
             return;
 
@@ -275,8 +280,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         if (ev.New != GameRunLevel.InRound)
             return;
 
-        // Снять номер раунда, пока мы на главном потоке. Делается ДО проверок ниже: штамп нужен
-        // заметкам независимо от того, займём ли мы ядро сами.
+        // Capture the round number while we're on the main thread. Done BEFORE the checks below: the
+        // notes need the stamp regardless of whether we end up claiming a core ourselves.
         CacheRoundId();
 
         if (!_cfg.GetCVar(AiCVars.Enabled) || !_cfg.GetCVar(AiCVars.AutoClaim))
@@ -287,19 +292,21 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         {
             _sawmill.Info($"no AI core claimed at round start: {reason}");
 
-            // Не сдаёмся с первой попытки: перебор ядер повторяется ещё несколько секунд.
+            // Don't give up after the first attempt: enumerating cores keeps retrying for a few more
+            // seconds.
             //
-            // Раунд 306 (01.09.2026) начался вообще без Станционного ИИ. В логе честная строка
-            // «no unoccupied AI core on a station (1 off-station core(s) skipped)»: на InRound в
-            // мире нашлось РОВНО ОДНО ядро — центкомовское, — а станционное к этому моменту либо
-            // ещё не заспавнилось, либо его грид ещё не был зарегистрирован станцией, и
-            // GetOwningStation честно отвечал null. Гонка редкая: за день это единственный такой
-            // раунд из семи. Но цена её — полтора часа режима злого ИИ без злого ИИ, и заметно
-            // это только тому, кто читает журнал.
+            // Round 306 (2026-09-01) started with no Station AI at all. The log had the honest line
+            // "no unoccupied AI core on a station (1 off-station core(s) skipped)": at InRound the
+            // world had EXACTLY ONE core — Central Command's — while the station's own core had
+            // either not spawned yet, or its grid hadn't been registered with the station yet, so
+            // GetOwningStation honestly returned null. The race is rare: it's the only round like
+            // this out of seven in a day. But its cost is an hour and a half of rogue AI mode with no
+            // rogue AI, and it's only noticeable to someone reading the log.
             //
-            // Повтор, а не подписка на регистрацию станции: событий тут два (спавн ядра и
-            // появление грида в составе станции), порядок между ними движок не обещает, и ловить
-            // пришлось бы оба. Пустой перебор стоит один проход по компоненту раз в секунду.
+            // A retry, not a subscription to station registration: there are two events here (the
+            // core spawning, and the grid appearing as part of the station), the engine makes no
+            // promise about their order, and both would have to be caught. An empty scan costs one
+            // pass over the component once a second.
             _coreRetryUntil = _gameTiming.CurTime + CoreClaimRetryWindow;
         }
         else
@@ -313,17 +320,20 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         ReleaseAll("round restart");
         ResetLlmClient();
 
-        // Здесь стирался CREW.md — память о людях своей смены. Его больше нет, и стирать нечего.
+        // This used to wipe CREW.md — memory of people from the agent's own shift. It's gone now, and
+        // there's nothing to wipe.
         //
-        // Замысел был против метагейминга: каждый раунд SS14 это новая вселенная с теми же именами,
-        // и запись «Иван Петров — предатель» из прошлой смены давала агенту то, чего он знать не
-        // может. Вышло наоборот. Агент перестал писать в файл, который всё равно сотрут, и сложил
-        // людей в MEMORY.md, переживающий раунды, — тот упёрся в лимит и перестал принимать что бы
-        // то ни было вообще, включая факты о станции.
+        // The intent was to prevent metagaming: every SS14 round is a new universe with the same
+        // names, and an entry like "Ivan Petrov is a traitor" carried over from the previous shift
+        // gave the agent knowledge it has no business having. It backfired. The agent stopped
+        // writing to a file that would be wiped anyway, and started stuffing people into MEMORY.md,
+        // which survives rounds — that one hit its limit and stopped accepting anything at all,
+        // including facts about the station.
         //
-        // Теперь люди живут в PlayerNoteStore, по файлу на человека, и переживают смену намеренно.
-        // От метагейминга защищает не стирание, а штамп раунда у каждой записи: агент видит, что
-        // знание из другой смены, и промпт запрещает предъявлять его как улику сегодня.
+        // People now live in PlayerNoteStore, one file per person, and deliberately survive the
+        // shift. What guards against metagaming isn't wiping — it's a round stamp on every entry: the
+        // agent can see that a piece of knowledge is from a different shift, and the prompt forbids
+        // using it as evidence today.
     }
 
     /// <summary>
@@ -347,19 +357,19 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _curator = null;
     }
 
-    /// <summary>Сколько ещё пробовать занять ядро после неудачи на старте раунда.</summary>
+    /// <summary>How much longer to keep trying to claim a core after failing at round start.</summary>
     private static readonly TimeSpan CoreClaimRetryWindow = TimeSpan.FromSeconds(30);
 
-    /// <summary>Реже раза в секунду перебирать ядра незачем: спавн карты укладывается в кадры.</summary>
+    /// <summary>No point scanning cores more than once a second: map spawning fits within a few frames.</summary>
     private static readonly TimeSpan CoreClaimRetryEvery = TimeSpan.FromSeconds(1);
 
-    /// <summary>До какого момента повторять попытку. <c>null</c> — повторять не надо.</summary>
+    /// <summary>Until when to keep retrying. <c>null</c> means no retry is needed.</summary>
     private TimeSpan? _coreRetryUntil;
 
     private TimeSpan _coreRetryNext;
 
     /// <summary>
-    /// Добрать ядро, если на старте раунда его ещё не было. См. <see cref="OnRunLevelChanged"/>.
+    /// Pick up a core if there wasn't one at round start. See <see cref="OnRunLevelChanged"/>.
     /// </summary>
     private void RetryCoreClaim()
     {
@@ -388,6 +398,8 @@ public sealed partial class StationAiAgentSystem : EntitySystem
         _coreRetryUntil = null;
         _sawmill.Info($"ядро занято повторной попыткой после старта раунда ({reason})");
     }
+
+
 
     /// <summary>Find an empty AI core ON A STATION and put an LLM-driven brain in it.</summary>
     public bool TryClaimAnyCore(out string reason)
@@ -1237,7 +1249,7 @@ public sealed partial class StationAiAgentSystem : EntitySystem
 
             // "ядро", not "core": the prompt tells the model this field reads in Russian, and the
             // formatter puts it on the wire verbatim.
-            session.Queue.Push(Observation.Speech("ядро", speaker, text, now));
+            session.Queue.Push(Observation.Speech(session.Locale.SelfSpeechWhere, speaker, text, now));
 
             // За тем пушем, который РЕАЛЬНО состоялся: ветка AlreadyHeardOnRadio выше пуш
             // пропускает, и подсказка, повешенная до неё, приезжала бы к реплике, которой нет.
@@ -1794,9 +1806,12 @@ public sealed partial class StationAiAgentSystem : EntitySystem
     /// непроштампованного — по нему нельзя отличить прошлую смену от сегодняшней. А смысл штампа
     /// именно в этом: другой раунд это другая вселенная с теми же именами.
     /// </summary>
-    public string NoteStamp() =>
-        string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"[раунд {_roundId} · {DateTime.Now:dd.MM}]");
+    public string NoteStamp()
+    {
+        var loc = Locale.AgentLocale.Of(Locale.AgentLangUtil.Parse(_cfg.GetCVar(AiCVars.Language)));
+        return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"[{loc.RoundWord} {_roundId} · {DateTime.Now:dd.MM}]");
+    }
 
     /// <summary>
     /// The session is the single source of truth for the generation counter; the copy on the

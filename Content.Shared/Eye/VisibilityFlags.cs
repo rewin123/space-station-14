@@ -12,13 +12,14 @@ namespace Content.Shared.Eye
         Subfloor = 1 << 2, // Pipes, disposal chutes, cables etc. while hidden under tiles. Can be revealed with a t-ray.
         Admin = 1 << 3, // Reserved for admins in stealth mode and admin tools.
 
-        // FORK PATCH К1 (docs/upstream-patches.md). То, что клиент всё равно не рисует — внутренности мобов, содержимое закрытых
-        // непрозрачных контейнеров, поддерево занятого агентом шасси.
+        // FORK PATCH K1 (docs/upstream-patches.md). For things the client wouldn't draw anyway — mob internals,
+        // the contents of closed opaque containers, the subtree of a chassis occupied by an agent.
         //
-        // Бита нет ни у одного глаза (EyeComponent.DefaultVisibilityMask == Normal) и его не
-        // выставляет ни один GetVisMaskEvent — то есть сущность с ним не попадает в PVS НИКОМУ.
-        // Смысл именно в этом: дельта сущности, которой у клиента нет, стоит ему полного
-        // состояния на 250 КБ (docs/problems.md, №19), а нарисовать он её всё равно не мог.
+        // No eye has this flag set (EyeComponent.DefaultVisibilityMask == Normal) and no
+        // GetVisMaskEvent sets it either — meaning an entity with this flag never enters PVS for
+        // ANYONE. That's exactly the point: a delta for an entity the client doesn't have costs
+        // it a 250 KB full state (docs/problems.md, #19), and the client couldn't have drawn it
+        // anyway.
         Internal = 1 << 4,
     }
 }

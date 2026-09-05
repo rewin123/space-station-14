@@ -3,33 +3,34 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Content.Server.AiAgent.Bus;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Skills;
 using Content.Server.AiAgent.Vfs.Mounts;
 
 namespace Content.Server.AiAgent.Vfs;
 
 /// <summary>
-/// Файловая система одного агента: таблица монтирований и маршрутизация по ней.
+/// One agent's filesystem: the mount table and routing over it.
 ///
 /// <para>
-/// Своя у каждого тела, и это главное отличие от прежнего устройства. Раньше память, скиллы и
-/// заметки о людях существовали в одном экземпляре на процесс, поэтому боевой киборг таскал в
-/// своём префиксе двадцать килобайт библиотеки Станционного ИИ — включая досье на экипаж, которые
-/// ему нечем применить и знать которые он не должен. Общий теперь только справочник, и он общий
-/// одним экземпляром, а не копией на агента.
+/// Each body has its own, and that's the main difference from the previous design. Previously
+/// memory, skills, and notes about people existed as a single instance per process, so a combat
+/// cyborg hauled twenty kilobytes of the Station AI's library in its own prefix — including crew
+/// dossiers it has no use for and shouldn't know about. Now only the reference library is shared,
+/// and it's shared as one instance, not a copy per agent.
 /// </para>
 /// </summary>
 public sealed class Vfs
 {
     /// <summary>
-    /// Порядок объявления в builder'е, а не порядок словаря.
+    /// Declaration order from the builder, not dictionary order.
     ///
     /// <para>
-    /// <see cref="Dictionary{TKey,TValue}"/> порядок перечисления не гарантирует ни в
-    /// документации, ни между версиями рантайма. Здесь на нём висит зона 0: переставленные строки
-    /// корня — это другой SHA префикса, то есть полный prefill каждый ход, без единой ошибки в
-    /// логе. Тот же приём уже применён к массиву инструментов, который сортируется по имени
-    /// ровно поэтому.
+    /// <see cref="Dictionary{TKey,TValue}"/> makes no guarantee about enumeration order, neither in
+    /// the documentation nor across runtime versions. Zone 0 hinges on this here: reordered root
+    /// lines mean a different prefix SHA, i.e. a full prefill every turn, with not a single error in
+    /// the log. The same trick is already applied to the tool array, which is sorted by name for
+    /// exactly this reason.
     /// </para>
     /// </summary>
     private readonly List<VfsMount> _ordered;
@@ -38,21 +39,24 @@ public sealed class Vfs
     private readonly string _root;
 
     /// <summary>
-    /// Беды с содержимым, замеченные при сборке: пустой справочник, нечитаемый каталог.
+    /// Content troubles noticed during assembly: an empty reference library, an unreadable directory.
     ///
-    /// Не пустой список означает, что агент работает, но чего-то не знает. Роняющие таблицу
-    /// противоречия сюда не попадают — на них <see cref="VfsBuilder.Build"/> бросает исключение.
+    /// A non-empty list means the agent works but doesn't know something. Contradictions that fail
+    /// the table don't end up here — <see cref="VfsBuilder.Build"/> throws an exception for those.
     /// </summary>
     public IReadOnlyList<string> Complaints { get; }
 
-    internal Vfs(IReadOnlyList<VfsMount> mounts, IReadOnlyList<string>? complaints = null)
+    internal Vfs(
+        IReadOnlyList<VfsMount> mounts,
+        IReadOnlyList<string>? complaints = null,
+        AgentLang lang = AgentLang.Ru)
     {
         Complaints = complaints ?? System.Array.Empty<string>();
 
         _ordered = mounts.ToList();
 
         _byPoint = mounts.ToDictionary(m => m.Point, StringComparer.Ordinal);
-        _root = RenderRootText(_ordered);
+        _root = RenderRootText(_ordered, AgentLocale.Of(lang));
 
         foreach (var mount in _ordered)
         {
@@ -77,34 +81,34 @@ public sealed class Vfs
     public IReadOnlyList<VfsMount> Mounts => _ordered;
 
     /// <summary>
-    /// Долгая память этого агента, или <c>null</c>, если она не смонтирована.
+    /// This agent's long-term memory, or <c>null</c> if it isn't mounted.
     ///
     /// <para>
-    /// Прямая ссылка, а не поиск по точке монтирования: снимок памяти нужен сборке системного
-    /// промпта на каждой перестройке префикса, и искать его там строкой значило бы завязать зону 0
-    /// на имя папки.
+    /// A direct reference, not a lookup by mount point: the system prompt assembly needs a memory
+    /// snapshot on every prefix rebuild, and looking it up there by string would tie zone 0 to a
+    /// folder name.
     /// </para>
     /// </summary>
     public MemoryStore? Memory { get; private set; }
 
-    /// <summary>Заметки о людях этого агента. По ним же приходит строка NOTE.</summary>
+    /// <summary>This agent's notes about people. The NOTE line is fed from these as well.</summary>
     public PlayerNoteStore? Notes { get; private set; }
 
-    /// <summary>Личные записи агента — то, куда пишет куратор. Нужны отладчику и консоли.</summary>
+    /// <summary>The agent's own notes — what the curator writes to. Needed by the debugger and the console.</summary>
     public DocTree? Skills { get; private set; }
 
-    /// <summary>Промпт разбора отрезка, если он смонтирован.</summary>
+    /// <summary>The segment-review prompt, if it's mounted.</summary>
     public TextMount? Curator { get; private set; }
 
     /// <summary>
-    /// Сколько раз в это дерево что-то записали за жизнь сессии.
+    /// How many times something was written to this tree over the session's lifetime.
     ///
     /// <para>
-    /// Существует ради куратора. Тот считал записи по ИМЕНАМ вызовов на проводе
-    /// (<c>write_file</c>, <c>edit_file</c>), а в режиме скриптов этих имён на проводе нет вовсе —
-    /// они функции Lua, — так что счётчик всегда оставался нулём и отчёт о разборе не уходил в
-    /// диалог никогда. Счётчик здесь стоит НИЖЕ обеих дорог: и провод, и Lua зовут один и тот же
-    /// обработчик инструмента.
+    /// This exists for the curator's sake. It used to count writes by the NAMES of wire calls
+    /// (<c>write_file</c>, <c>edit_file</c>), but in script mode those names aren't on the wire at
+    /// all — they're Lua functions — so the counter always stayed at zero and the review report
+    /// never went into the dialogue. The counter here sits BELOW both paths: both the wire and Lua
+    /// call the same tool handler.
     /// </para>
     /// </summary>
     public int Writes => _writes;
@@ -112,27 +116,28 @@ public sealed class Vfs
     private int _writes;
 
     /// <summary>
-    /// Отметить успешную запись.
+    /// Mark a successful write.
     ///
     /// <para>
-    /// Зовётся ИЗ ОБРАБОТЧИКОВ инструментов <c>write_file</c> и <c>edit_file</c>, а не из самих
-    /// монтирований: <c>VfsMount.Write</c> виртуален и переопределён у каждого вида, и счётчик в
-    /// базовом классе пришлось бы дублировать во всех наследниках. Обработчик — единственное
-    /// место, через которое проходят обе дороги, провод и Lua.
+    /// Called FROM the <c>write_file</c> and <c>edit_file</c> tool HANDLERS, not from the mounts
+    /// themselves: <c>VfsMount.Write</c> is virtual and overridden by each kind, and the counter
+    /// would have to be duplicated in the base class across every descendant. The handler is the
+    /// one place both paths, wire and Lua, pass through.
     /// </para>
     /// <para>
-    /// Отсюда обязанность для стендов: подставная реализация <c>write_file</c>, пишущая в
-    /// монтирование напрямую, счётчик не увеличит, и разбор отрезка отчитается нулём записей при
-    /// записанном файле. Стенд, подменяющий обработчик, обязан звать этот метод сам.
+    /// Hence an obligation for test benches: a stand-in <c>write_file</c> implementation that
+    /// writes straight to the mount won't increment the counter, and the segment review will report
+    /// zero writes despite a file having been written. A bench that swaps out the handler must call
+    /// this method itself.
     /// </para>
     /// </summary>
     public void NoteWrite() => System.Threading.Interlocked.Increment(ref _writes);
 
     /// <summary>
-    /// Начать сообщать о правках на шину отладки.
+    /// Start reporting edits to the debug bus.
     ///
-    /// Общие монтирования пропускаются: справочник один на процесс, и привязать его к стоку
-    /// одного агента значило бы приписать его правки чужой сессии.
+    /// Shared mounts are skipped: the reference library is one per process, and attaching it to one
+    /// agent's sink would mean attributing its edits to someone else's session.
     /// </summary>
     public void AttachSink(IAgentEventSink sink)
     {
@@ -157,27 +162,21 @@ public sealed class Vfs
     }
 
     /// <summary>
-    /// Блок для зоны 0: как ходить и что где лежит.
+    /// The block for zone 0: how to navigate and what lives where.
     ///
     /// <para>
-    /// Строится один раз в конструкторе и от содержимого дерева НЕ зависит — ни счётчиков, ни
-    /// «229 статей». Прежний индекс менялся от каждой записи и тянул за собой перестройку
-    /// префикса; этот блок постоянен, пока постоянна таблица монтирований. Зона 0 из растущей
-    /// становится неподвижной, и это, а не экономия символов, — главный выигрыш.
+    /// Built once in the constructor and does NOT depend on the tree's contents — no counters, no
+    /// "229 articles". The old index changed with every write and dragged a prefix rebuild along
+    /// with it; this block stays constant as long as the mount table stays constant. Zone 0 goes
+    /// from growing to fixed, and that — not saving characters — is the main win.
     /// </para>
     /// </summary>
     public string RenderRoot() => _root;
 
-    private static string RenderRootText(IReadOnlyList<VfsMount> mounts)
+    private static string RenderRootText(IReadOnlyList<VfsMount> mounts, AgentLocale loc)
     {
         var sb = new StringBuilder();
-
-        sb.Append("ФАЙЛОВАЯ СИСТЕМА\n");
-        sb.Append("Всё, что ты знаешь, лежит файлами. В этом сообщении их нет — ходи сам.\n");
-        sb.Append("  sh {\"cmd\":\"ls /wiki_ru\"}                      — что есть в разделе\n");
-        sb.Append("  sh {\"cmd\":\"grep насос /wiki_ru\"}              — искать по словам\n");
-        sb.Append("  sh {\"cmd\":\"cat /wiki_ru/атмосфера/насосы\"}    — прочитать целиком\n");
-        sb.Append("  write_file / edit_file                        — записать своё\n");
+        sb.Append(loc.VfsHeading).Append('\n');
 
         var width = mounts.Count == 0 ? 0 : mounts.Max(m => m.Point.Length);
 
@@ -191,10 +190,10 @@ public sealed class Vfs
         return sb.ToString();
     }
 
-    // ------------------------------------------------------------ маршрутизация
+    // ------------------------------------------------------------ routing
 
     /// <summary>
-    /// Найти монтирование по пути. Отказ называет существующие точки: гадать модель не обязана.
+    /// Find a mount by path. A rejection names the existing mount points: the model shouldn't have to guess.
     /// </summary>
     public bool TryResolve(VfsPath path, out VfsMount mount, out VfsPath relative, out string error)
     {
@@ -208,8 +207,9 @@ public sealed class Vfs
             return false;
         }
 
-        // Точная точка монтирования, а если такой нет — с дописанным «.md». Та же поблажка, что и
-        // у файлов: в корне лежит «/memory.md», и требовать расширение в каждом пути незачем.
+        // The exact mount point, or with ".md" appended if there isn't one. The same concession as
+        // for files: "/memory.md" sits at the root, and there's no need to require the extension
+        // in every path.
         if (!_byPoint.TryGetValue(path.Mount, out mount!)
             && !_byPoint.TryGetValue(VfsPath.WithExtension(path.Mount), out mount!))
         {
@@ -224,20 +224,20 @@ public sealed class Vfs
     public IReadOnlyList<string> MountPoints() =>
         _ordered.Select(m => "/" + m.Point).ToList();
 
-    /// <summary>Листинг корня — то же дерево, что в зоне 0, но как ответ инструмента.</summary>
+    /// <summary>Root listing — the same tree as in zone 0, but as a tool response.</summary>
     public IReadOnlyList<VfsEntry> RootEntries() =>
         _ordered
             .Select(m => new VfsEntry(m.Point, !m.IsFile, m.Description, 0, null))
             .ToList();
 
     /// <summary>
-    /// Перечитать своё с диска. Зовётся на шаге перестройки префикса.
+    /// Reload its own content from disk. Called during the prefix rebuild step.
     ///
     /// <para>
-    /// Общие монтирования пропускаются намеренно: справочник один на процесс, и перечитывать его
-    /// по разу на каждого из четырёх агентов — это четыре обхода полутора мегабайт вместо одного,
-    /// причём внутри ритуала компакции, где и так платится prefill. Его обновляет система, один
-    /// раз, через <see cref="VfsMount.Reload"/> самого экземпляра.
+    /// Shared mounts are skipped deliberately: the reference library is one per process, and
+    /// reloading it once per each of the four agents would be four traversals of a megabyte and a
+    /// half instead of one, and that's inside the compaction ritual, which already pays for prefill.
+    /// The system updates it once, itself, via the instance's own <see cref="VfsMount.Reload"/>.
     /// </para>
     /// </summary>
     public void Reload()

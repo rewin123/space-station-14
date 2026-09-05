@@ -1,7 +1,7 @@
-/** Экспоненциальная задержка с потолком: сервер может быть просто выключен, и это надолго. */
+/** Exponential backoff with a ceiling: the server might simply be off, and for a long while. */
 export function backoffMs(attempt: number): number {
   const base = Math.min(30_000, 500 * 2 ** Math.min(attempt, 6))
-  // Дрожание, чтобы несколько вкладок не долбились в один и тот же момент.
+  // Jitter, so several tabs don't hammer the server at the exact same moment.
   return base + Math.random() * 250
 }
 

@@ -9,12 +9,13 @@ using NUnit.Framework;
 namespace Content.AiBench;
 
 /// <summary>
-/// Клетка, в которой исполняется скрипт агента, и мост между Lua и аргументами инструментов.
+/// The sandbox the agent's script runs in, and the bridge between Lua and tool arguments.
 ///
-/// Сервер здесь не нужен: проверяется не поведение робота, а то, чем это поведение будет написано.
-/// Три вещи стоят отдельного теста, потому что без любой из них режим скриптов держать нельзя:
-/// у скрипта не должно быть двери к машине, вечный цикл обязан сниматься, а отказ инструмента
-/// обязан ловиться штатным pcall — на этой конвенции держится весь стиль кода, который пишет модель.
+/// No server is needed here: what's checked isn't the robot's behavior, but the medium that
+/// behavior will be written in. Three things deserve a separate test, because the script mode
+/// can't hold up without any one of them: the script must have no door to the machine, an
+/// infinite loop must be interruptible, and a tool refusal must be catchable with plain pcall —
+/// this convention is what the whole style of code the model writes rests on.
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
@@ -22,13 +23,14 @@ public sealed class LuaHostTests
 {
     private static LuaHost Host(LuaLimits? limits = null, Action<string>? print = null) => new(limits, print);
 
-    // ------------------------------------------------------------------ клетка
+    // ------------------------------------------------------------------ sandbox
 
     [Test]
     public void Cage_HasNoDoorToTheMachine()
     {
-        // Автор скрипта — языковая модель, а не доверенный человек. Отсутствие io/os/require — это
-        // не список запретов, которые кто-то проверяет, а отсутствие самих понятий в интерпретаторе.
+        // The script's author is a language model, not a trusted human. The absence of
+        // io/os/require isn't a list of prohibitions somebody enforces — those concepts simply
+        // don't exist in the interpreter.
         var outcome = Host().Run(
             "return tostring(io)..' '..tostring(os)..' '..tostring(require)..' '..tostring(load)" +
             "..' '..tostring(dofile)..' '..type(pcall)", CancellationToken.None);
@@ -40,8 +42,8 @@ public sealed class LuaHostTests
     [Test]
     public void SyntaxError_NamesTheLine()
     {
-        // Модель узнаёт о своей опечатке номером строки, а не словом «ошибка». Иначе она правит
-        // наугад и тратит ход на каждую попытку.
+        // The model learns about its typo from a line number, not the word "error". Otherwise it
+        // fixes things at random and burns a turn on every attempt.
         var outcome = Host().Run("local a = 1\nlocal b = ((\n", CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -68,8 +70,8 @@ public sealed class LuaHostTests
     [Test]
     public void EndlessLoop_IsCutOffByTheStepBudget()
     {
-        // Ровно тот случай, из-за которого режим написан на Lua, а не на штатном C#-скриптинге
-        // движка: в .NET поток, ушедший в while(true), не снимается ничем.
+        // Exactly the case the mode was written in Lua for instead of the engine's built-in
+        // C# scripting: in .NET, a thread that's gone into while(true) can't be stopped by anything.
         var outcome = Host(new LuaLimits { MaxSteps = 100_000, SliceInstructions = 1_000 })
             .Run("local i = 0 while true do i = i + 1 end", CancellationToken.None);
 
@@ -84,7 +86,7 @@ public sealed class LuaHostTests
     [Test]
     public void Stop_InterruptsAScriptMidLoop()
     {
-        // bp_stop: отмена обязана дойти до скрипта, который не собирается заканчивать сам.
+        // bp_stop: cancellation must reach a script that has no intention of ending on its own.
         var cts = new CancellationTokenSource();
         var host = Host(new LuaLimits { SliceInstructions = 1_000 });
         var slices = 0;
@@ -102,8 +104,9 @@ public sealed class LuaHostTests
     [Test]
     public void Cancellation_FromInsideAToolCall_LeavesTheScript()
     {
-        // Отмена может застать скрипт не между инструкциями, а внутри вызова инструмента, который
-        // ждёт мир. Проверено, что она проходит корутину насквозь и не превращается в script_error.
+        // Cancellation can catch a script not between instructions but inside a tool call that's
+        // waiting on the world. Verified here: it propagates through the coroutine cleanly and
+        // doesn't turn into a script_error.
         var host = Host();
         host.Bind("waitForever", _ => throw new OperationCanceledException());
 
@@ -114,8 +117,9 @@ public sealed class LuaHostTests
     [Test]
     public void ToolFailure_IsAnExceptionTheScriptCanCatch()
     {
-        // Конвенция режима: отказ инструмента — исключение, терпимость к отказу — штатный pcall.
-        // Отдельной обёртки вроде must() нет именно потому, что язык это уже умеет.
+        // The mode's convention: a tool refusal is an exception, tolerating a refusal is plain
+        // pcall. There's no separate wrapper like must() precisely because the language already
+        // does this.
         var host = Host();
         host.Bind("pickup", _ => throw new ScriptRuntimeException("no_access: карта не подходит"));
 
@@ -148,7 +152,7 @@ public sealed class LuaHostTests
     [Test]
     public void Print_GoesToTheProcessBuffer()
     {
-        // Вывод скрипта читает модель через bp_get_output, а не администратор в консоли сервера.
+        // Script output is read by the model through bp_get_output, not by an admin in the server console.
         var lines = new List<string>();
         var outcome = Host(print: lines.Add).Run("print('панель 3 поставлена')", CancellationToken.None);
 
@@ -168,9 +172,9 @@ public sealed class LuaHostTests
         Assert.That(outcome.Return.Number, Is.EqualTo(42));
     }
 
-    // ------------------------------------------------------------------ мост
+    // ------------------------------------------------------------------ bridge
 
-    /// <summary>Прогнать аргумент вызова через мост и вернуть JSON, который увидел бы инструмент.</summary>
+    /// <summary>Run a call's argument through the bridge and return the JSON a tool would see.</summary>
     private static string ArgsAsJson(string call)
     {
         string? seen = null;
@@ -190,8 +194,8 @@ public sealed class LuaHostTests
     [Test]
     public void Bridge_CarriesCyrillicKeysAndNesting()
     {
-        // Кириллица обязана дожить до инструмента буквами, а не escape-последовательностями:
-        // \uXXXX стоит вшестеро больше байт и токенизируется как мусор (грабля форка №13).
+        // Cyrillic must reach the tool as literal characters, not escape sequences: \uXXXX costs
+        // six times as many bytes and tokenizes as garbage (fork pitfall #13).
         Assert.That(ArgsAsJson("tool{цель='дверь-3', как={чем='лом', сила=2}}"),
             Is.EqualTo("{\"цель\":\"дверь-3\",\"как\":{\"чем\":\"лом\",\"сила\":2}}"));
     }
@@ -199,8 +203,8 @@ public sealed class LuaHostTests
     [Test]
     public void Bridge_KeepsWholeNumbersWhole()
     {
-        // В Lua всякое число — double. Наивная запись дала бы {"count":3.0}, и схема инструмента,
-        // ждущая целое, отказала бы с bad_args по вине моста, а не скрипта.
+        // In Lua every number is a double. A naive encoding would produce {"count":3.0}, and a
+        // tool schema expecting an integer would refuse with bad_args — the bridge's fault, not the script's.
         Assert.That(ArgsAsJson("tool{count=3, range=1.5}"), Is.EqualTo("{\"count\":3,\"range\":1.5}"));
     }
 
@@ -214,7 +218,7 @@ public sealed class LuaHostTests
     [Test]
     public void Bridge_TurnsAMixedTableIntoAnObject()
     {
-        // {1,2,name='x'} массивом уехать не может — половина данных потерялась бы молча.
+        // {1,2,name='x'} can't go out as an array — half the data would be silently lost.
         Assert.That(ArgsAsJson("tool{7, 8, name='x'}"),
             Does.StartWith("{").And.Contains("\"name\":\"x\"").And.Contains("\"1\":7"));
     }
@@ -228,9 +232,9 @@ public sealed class LuaHostTests
     [Test]
     public void Bridge_RefusesATableThatContainsItself()
     {
-        // Обход циклической таблицы не вернулся бы никогда, а поток в этот момент держит вызов
-        // инструмента. Потолок вложенности — единственная защита, и она обязана быть ошибкой
-        // скрипта, а не зависанием агента.
+        // Walking a cyclic table would never return, and the thread is holding a tool call the
+        // whole time. A nesting depth cap is the only defense, and it must surface as a script
+        // error, not as the agent hanging.
         var host = Host();
         host.Bind("tool", args =>
         {
@@ -251,8 +255,8 @@ public sealed class LuaHostTests
     [Test]
     public void Bridge_BringsAToolResultBackAsATable()
     {
-        // Обратная сторона: результат инструмента модель читает как таблицу, а не как строку JSON,
-        // иначе каждый скрипт начинался бы с разбора текста.
+        // The other direction: the model reads a tool's result as a table, not as a JSON string,
+        // otherwise every script would start with parsing text.
         var host = Host();
         host.Bind("look", _ =>
         {

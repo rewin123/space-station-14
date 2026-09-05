@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Skills;
 using Content.Server.AiAgent.Tools;
 using Content.Server.AiAgent.Vfs;
@@ -11,42 +12,43 @@ using Robust.Shared.ContentPack;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Файловая система агента: сборка, общий слой и три инструмента поверх.
+/// The agent's filesystem: assembly, the shared layer, and three tools on top of it.
 ///
 /// <para>
-/// Раньше здесь было семь инструментов и три хранилища в одном экземпляре на процесс. Семь стали
-/// тремя не ради красоты: на этом же железе и этом же кванте померено, что 46 узких команд топят
-/// модель, а около тринадцати работают, и ширина набирается объединением, а не новыми записями в
-/// реестре. Три хранилища стали своими у каждого тела, потому что общими они были случайно —
-/// киборг таскал в префиксе досье Станционного ИИ на экипаж.
+/// This used to be seven tools and three stores in one instance per process. Seven became three
+/// not for tidiness: measured on this same hardware and this same quantum, 46 narrow commands
+/// swamp the model while around thirteen work, and breadth is gained by merging tools, not by
+/// adding new registry entries. The three stores became per-body because being shared was an
+/// accident — the borg was carrying the Station AI's crew dossier in its prefix.
 /// </para>
 /// <para>
-/// Инструменты работают вне игрового потока: они трогают файлы, а не сущности, и потому, в
-/// отличие от всех остальных, не маршалятся. Ни один не помечен <c>GameAction</c> — и это
-/// несущее свойство, а не недосмотр: именно оно позволяет куратору писать на разборе отрезка,
-/// когда игровые инструменты отвечают <c>review_mode</c>.
+/// The tools run off the game thread: they touch files, not entities, and so, unlike everything
+/// else, they aren't marshalled. None of them is marked <c>GameAction</c> — and that's a load-bearing
+/// property, not an oversight: it's exactly what lets the curator write during a segment review,
+/// when game tools answer with <c>review_mode</c>.
 /// </para>
 /// </summary>
 public sealed partial class StationAiAgentSystem
 {
     /// <summary>
-    /// Справочник — один экземпляр на процесс, общий всем телам.
+    /// The reference library — one instance per process, shared by every body.
     ///
     /// <para>
-    /// Разделяется именно ЭКЗЕМПЛЯР, а не каталог: 226 статей весят полтора мегабайта, и копия на
-    /// каждое из четырёх тел стоила бы вчетверо больше памяти и вчетверо больше обходов диска на
-    /// каждой перестройке префикса — внутри ритуала компакции, где и так платится prefill.
+    /// What's shared is specifically the INSTANCE, not the folder: 226 articles weigh a megabyte and
+    /// a half, and a copy for each of four bodies would cost four times the memory and four times the
+    /// disk traversals on every prefix rebuild — inside the compaction ritual, which already pays for
+    /// the prefill.
     /// </para>
     /// </summary>
     private DocTree? _library;
 
-    /// <summary>Вика игры. Тоже одна на процесс: её дерево строится из прототипов и от тела не зависит.</summary>
+    /// <summary>The in-game guidebook. Also one per process: its tree is built from prototypes and doesn't depend on the body.</summary>
     private GuidebookMount? _guidebook;
 
     [Dependency] private IResourceManager _resources = default!;
 
     /// <summary>
-    /// Перечитать общий слой. Главный поток, при старте системы и по команде консоли.
+    /// Reload the shared layer. Main thread, at system start and on a console command.
     /// </summary>
     public void ReloadSharedLibrary()
     {
@@ -60,55 +62,58 @@ public sealed partial class StationAiAgentSystem
         _guidebook ??= new GuidebookMount(_protoMan, _resources, _sawmill)
         {
             Point = "wiki_en",
-            Description = "вика игры по-английски: точные имена машин на экранах экипажа",
+            Description = AgentLocale.Ru.WikiEnDesc,
             Access = VfsAccess.Read,
             Shared = true,
         };
 
         _guidebook.Reload();
 
-        // Снимок сессий привязан к каталогу; стенд, переставивший ai.data_dir, не должен писать в
-        // папку предыдущего сценария.
+        // The session store is tied to the directory; a bench that repointed ai.data_dir must not
+        // write into the previous scenario's folder.
         _sessionStore = null;
     }
 
     /// <summary>
-    /// Собрать файловую систему одного тела.
+    /// Assemble the filesystem for a single body.
     ///
     /// <para>
-    /// Единственное место, где перечислена таблица монтирований. Порядок вызовов — это порядок
-    /// строк в зоне 0, поэтому переставлять их просто так нельзя: другой порядок — другой SHA
-    /// префикса, то есть полный prefill каждый ход и ни одной ошибки в логе.
+    /// The one place where the mount table is enumerated. The order of calls is the order of lines
+    /// in zone 0, so they cannot be reordered casually: a different order means a different prefix
+    /// SHA, i.e. a full prefill on every turn and not a single error in the log.
     /// </para>
     /// </summary>
-    public Vfs.Vfs BuildVfs(string agentId)
+    public Vfs.Vfs BuildVfs(string agentId, AgentLang lang = AgentLang.Ru)
     {
-        // Сверяемся с текущим ai.data_dir, а не только с «построен ли он».
+        // Checked against the current ai.data_dir, not just against "has it been built at all".
         //
-        // Стенды переставляют каталог ПОСЛЕ Initialize, и справочник, собранный на старом корне,
-        // молча остался бы читать чужую папку: сессия поднялась бы, а статей в ней не было бы ни
-        // одной. Ровно та поломка, которую в игре видно как «агент разучился».
+        // Benches repoint the directory AFTER Initialize, and a library built against the old root
+        // would silently keep reading the wrong folder: the session would come up, but with no
+        // articles in it at all. Exactly the kind of breakage that shows up in-game as "the agent
+        // forgot how".
         if (_library == null || _guidebook == null
             || _library.Root != System.IO.Path.Combine(DataDir(), "wiki_ru"))
         {
             ReloadSharedLibrary();
         }
 
+        var loc = AgentLocale.Of(lang);
+        _guidebook!.Description = loc.WikiEnDesc;
+
         var dir = AgentDir(agentId);
 
         var vfs = new VfsBuilder(_sawmill)
-            .AddShared(_library!, "wiki_ru", VfsAccess.Read,
-                "справочник по игре: отделы, машины, процедуры")
+            .AddShared(_library!, "wiki_ru", VfsAccess.Read, loc.WikiRuDesc)
             .AddShared(_guidebook!)
             .AddFolder(System.IO.Path.Combine(dir, "skills"), "skills", VfsAccess.Write,
-                "что ты понял сам")
+                loc.SkillsDesc)
             .AddNotes(dir, "players", VfsAccess.Write,
-                "твои заметки о людях, по файлу на человека", NoteStamp)
+                loc.PlayersDesc, NoteStamp)
             .AddMemory(dir, "memory.md", VfsAccess.Write,
-                "факты о станции и мире — они же в блоке ПАМЯТЬ выше")
+                loc.MemoryDesc)
             .AddText(RoleFile(dir, "CURATOR.md"), "curator.md", VfsAccess.Read,
-                "чем ты руководствуешься на разборе отрезка")
-            .Build();
+                loc.CuratorDesc)
+            .Build(lang);
 
         if (_bus != null)
             vfs.AttachSink(_bus.ForProcess());
@@ -117,11 +122,11 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Файл, привязанный к роли: свой каталог перебивает общий <c>ai_data/</c>.
+    /// A file tied to a role: its own folder takes precedence over the shared <c>ai_data/</c>.
     ///
-    /// Та же цепочка, что у личности, и по той же причине: идентификаторы боргов выдаёт аллокатор
-    /// (<c>combat-1</c>, <c>combat-2</c>, …), и держать копию файла под каждый возможный номер
-    /// бессмысленно — файл привязан к роли, а не к экземпляру.
+    /// Same chain as for the persona, and for the same reason: borg identifiers are handed out by
+    /// the allocator (<c>combat-1</c>, <c>combat-2</c>, …), and keeping a copy of the file under
+    /// every possible number would be pointless — the file is tied to the role, not the instance.
     /// </summary>
     public string RoleFile(string agentDir, string file)
     {
@@ -130,27 +135,27 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Долгая память ЯДРА. Не «память процесса»: у каждого тела она своя.
+    /// The CORE's long-term memory. Not "process memory": each body has its own.
     /// </summary>
     /// <remarks>
-    /// Существует ради консоли, отладчика и тестов, которым нужен именно тот агент, ради которого
-    /// их и открывают. Код, работающий с конкретным телом, обязан ходить через
-    /// <c>session.Body.Vfs</c>, иначе борг будет читать и править чужое.
+    /// Exists for the console, the debugger, and tests, which need exactly the agent they were
+    /// opened for. Code that works with a specific body must go through <c>session.Body.Vfs</c>,
+    /// otherwise a borg would end up reading and editing someone else's.
     /// </remarks>
     public Skills.MemoryStore Memory =>
         CoreVfs?.Memory ?? throw new InvalidOperationException("ядро ещё не запускалось, память не смонтирована");
 
-    /// <summary>Заметки о людях ЯДРА. Та же оговорка, что у <see cref="Memory"/>.</summary>
+    /// <summary>The CORE's notes on people. Same caveat as <see cref="Memory"/>.</summary>
     public Skills.PlayerNoteStore Notes =>
         CoreVfs?.Notes ?? throw new InvalidOperationException("ядро ещё не запускалось, заметки не смонтированы");
 
     /// <summary>
-    /// Файловая система живого агента по его идентификатору — для консоли и отладчика.
+    /// The filesystem of a live agent by its identifier — for the console and the debugger.
     /// </summary>
     /// <remarks>
-    /// Ищется среди работающих сессий, а не собирается заново: собранная копия открыла бы вторые
-    /// экземпляры сторов поверх тех же файлов, и правка через консоль разошлась бы с тем, что
-    /// видит сам агент.
+    /// Looked up among running sessions rather than assembled anew: an assembled copy would open a
+    /// second set of store instances over the same files, and an edit through the console would
+    /// diverge from what the agent itself sees.
     /// </remarks>
     public bool TryGetVfs(string agentId, out Vfs.Vfs vfs)
     {
@@ -167,15 +172,20 @@ public sealed partial class StationAiAgentSystem
         return false;
     }
 
-    // ------------------------------------------------------------------ инструменты
+    // ------------------------------------------------------------------ tools
 
     private void RegisterVfsTools(AgentSession s, AiToolRegistry r)
     {
+        var L = s.Locale;
+
         r.Register(new AiTool
         {
             Name = "sh",
-            Description = "Ходить по своим файлам: ls, tree, cat, grep, find, mkdir, rm, mv. " +
-                          "Путь всегда полный, от корня. Труб и редиректов нет.",
+            Description = L.T(
+                "Ходить по своим файлам: ls, tree, cat, grep, find, mkdir, rm, mv. " +
+                "Путь всегда полный, от корня. Труб и редиректов нет.",
+                "Walk your files: ls, tree, cat, grep, find, mkdir, rm, mv. " +
+                "The path is always full, from the root. No pipes or redirects."),
             SchemaJson = """
                 {"type":"object","required":["cmd"],"additionalProperties":false,"properties":{
                 "cmd":{"type":"string","description":"Одна команда целиком, например: grep насос /wiki_ru"}}}
@@ -186,8 +196,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "write_file",
-            Description = "Создать файл или переписать целиком. 'desc' — не длиннее 60 символов, " +
-                          "это единственная строка, которую видно в ls.",
+            Description = L.T(
+                "Создать файл или переписать целиком. 'desc' — не длиннее 60 символов, " +
+                "это единственная строка, которую видно в ls.",
+                "Create a file or overwrite it entirely. 'desc' is at most 60 characters; " +
+                "that is the only line visible in ls."),
             SchemaJson = """
                 {"type":"object","required":["path","desc","content"],"additionalProperties":false,"properties":{
                 "path":{"type":"string","description":"Полный путь, например /skills/питание/смес."},
@@ -200,8 +213,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "edit_file",
-            Description = "Правка фрагментом: найти кусок текста и заменить. Пустой 'match' — " +
-                          "дописать в конец, пустой 'replacement' — удалить фрагмент.",
+            Description = L.T(
+                "Правка фрагментом: найти кусок текста и заменить. Пустой 'match' — " +
+                "дописать в конец, пустой 'replacement' — удалить фрагмент.",
+                "Patch a fragment: find a piece of text and replace it. Empty 'match' " +
+                "appends to the end, empty 'replacement' deletes the fragment."),
             SchemaJson = """
                 {"type":"object","required":["path"],"additionalProperties":false,"properties":{
                 "path":{"type":"string"},
@@ -212,7 +228,7 @@ public sealed partial class StationAiAgentSystem
         });
     }
 
-    // -------------------------------------------------------------------- обработчики
+    // -------------------------------------------------------------------- handlers
 
     private ToolResult RunShell(AgentSession s, JsonElement args)
     {
@@ -249,8 +265,8 @@ public sealed partial class StationAiAgentSystem
         if (!result.Ok)
             return ToolResult.Fail(ToolError.BadArgs, result.Message, alternatives: result.Hints);
 
-        // Ниже обеих дорог: и вызов с провода, и функция Lua приходят сюда. Именно по этому
-        // счётчику куратор понимает, что разбор что-то записал.
+        // Below both paths: a wire call and a Lua function both land here. This is exactly the
+        // counter the curator uses to tell that the review wrote something.
         s.Body.Vfs.NoteWrite();
 
         _sawmill.Info($"[LLM] {s.Body.Id}: записан {path}");
@@ -289,7 +305,7 @@ public sealed partial class StationAiAgentSystem
         });
     }
 
-    /// <summary>Разобрать путь и найти монтирование, или вернуть готовый отказ.</summary>
+    /// <summary>Parse the path and locate the mount, or return a ready-made failure.</summary>
     private static bool TryTarget(
         AgentSession s,
         string raw,

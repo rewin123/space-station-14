@@ -29,7 +29,7 @@ namespace Content.AiBench;
 [Category("Scenario")]
 public sealed class ScenarioTests
 {
-    // ------------------------------------------------------- 1. "ИИ, открой дверь"
+    // ------------------------------------------------------- 1. "AI, open the door"
 
     [Test]
     public async Task S01_DoorOnRequest_TheWholeChainWorksOnARealStation()
@@ -134,7 +134,7 @@ public sealed class ScenarioTests
         });
     }
 
-    // -------------------------------------------------------- 2. "Где находится X"
+    // -------------------------------------------------------- 2. "Where is X"
 
     [Test]
     public async Task S02_FindAPerson_ByNameAndThenByEye()
@@ -197,7 +197,7 @@ public sealed class ScenarioTests
         });
     }
 
-    // ------------------------------------------ 3. "Посмотри, что происходит в N"
+    // ------------------------------------------ 3. "Look at what's happening in N"
 
     [Test]
     public async Task S03_SurveyADepartment_ByNameAlone()
@@ -260,7 +260,7 @@ public sealed class ScenarioTests
             "фильтр по виду обязан сокращать список");
     }
 
-    // ------------------------------------- 4. Запереть или разгерметизировать участок
+    // ------------------------------------- 4. Bolt or emergency-depressurize a section
 
     [Test]
     public async Task S04_BoltAndEmergencyAccess_ChangeTheWorld()
@@ -346,7 +346,7 @@ public sealed class ScenarioTests
         Assert.That(allBolted, Is.True, "герметизация не должна быть частичной");
     }
 
-    // ------------------------------------------------------- 5. «Почему нет света»
+    // ------------------------------------------------------- 5. "Why is there no light"
 
     [Test]
     public async Task S05_Power_ReadAndFlipAnApcBreaker()
@@ -383,7 +383,7 @@ public sealed class ScenarioTests
         Assert.That(restored, Is.True, "и обратно тоже");
     }
 
-    // -------------------------------------------- 6. Объявление и уровень тревоги
+    // -------------------------------------------- 6. Announcement and alert level
 
     [Test]
     public async Task S06_AlertLevel_ActuallyChangesAndIsPerceived()
@@ -432,7 +432,7 @@ public sealed class ScenarioTests
         });
     }
 
-    // --------------------------------------------------------- 7. Атмосфера и пожар
+    // --------------------------------------------------------- 7. Atmospherics and fire
 
     [Test]
     public async Task S07_AirAlarm_ModeReachesTheDevice()
@@ -468,7 +468,7 @@ public sealed class ScenarioTests
         Assert.That(back.Ok, Is.True, back.ToJson());
     }
 
-    // ------------------------------------------------- 8. Медицинская тревога
+    // ------------------------------------------------- 8. Medical emergency
 
     [Test]
     public async Task S08_CrewMonitor_LocatesAPersonAndNamesThePlace()

@@ -9,37 +9,38 @@ using MoonSharp.Interpreter;
 namespace Content.Server.AiAgent.Core.Scripting;
 
 /// <summary>
-/// Как инструмент агента становится функцией Lua.
+/// How an agent tool becomes a Lua function.
 ///
 /// <para>
-/// Вызов из скрипта идёт через тот же <see cref="ToolDispatcher"/>, что и вызов от модели tool
-/// call'ом. Это не экономия кода, а единственный способ не завести второй, расходящийся контракт:
-/// те же ворота режима разбора, те же коды ошибок, тот же разбор аргументов и та же маршрутизация
-/// на главный поток. Скрипт не получает никакой дороги в мир, которой не было бы у обычного хода.
+/// A call from a script goes through the same <see cref="ToolDispatcher"/> as a call from the model
+/// as a tool call. This isn't a code-saving trick but the only way to avoid a second, diverging
+/// contract: the same review-mode gate, the same error codes, the same argument parsing, and the
+/// same routing to the main thread. A script gets no road into the world that an ordinary turn
+/// wouldn't already have.
 /// </para>
 /// <para>
-/// Отказ инструмента превращается в исключение Lua, а не в поле таблицы. Так прямой код читается
-/// сверху вниз без проверки после каждой строки, а терпимость к отказу берётся штатным
-/// <c>pcall</c>. Обёртки вроде <c>must()</c> здесь нет намеренно: она добавляла бы шум в каждую
-/// строку ради того, что язык уже умеет.
+/// A tool refusal turns into a Lua exception, not a table field. This way straight-line code reads
+/// top to bottom without a check after every line, and tolerance for a refusal is picked up via
+/// stock <c>pcall</c>. There's deliberately no wrapper like <c>must()</c> here: it would add noise
+/// to every line for something the language already does.
 /// </para>
 /// </summary>
 public sealed class ScriptRuntime
 {
     /// <summary>
-    /// Инструменты, которых скрипт не видит.
+    /// Tools the script doesn't see.
     ///
-    /// <c>script</c> и управление процессами — чтобы скрипт не порождал скрипты: одного тела на
-    /// всех и так мало, а дерево процессов сделало бы <c>bp_stop</c> обещанием без покрытия.
-    /// <c>noop</c> — потому что закрывать ход модели с фонового потока бессмысленно: ход к тому
-    /// времени давно кончился.
+    /// <c>script</c> and process control — so a script can't spawn scripts: one body for everyone is
+    /// already scarce, and a tree of processes would turn <c>bp_stop</c> into a promise with no
+    /// coverage. <c>noop</c> — because closing the model's turn from a background thread is
+    /// pointless: the turn ended long ago by that point.
     /// </summary>
     private static readonly HashSet<string> Hidden = new(StringComparer.Ordinal)
     {
         "script", "bp_get_output", "bp_stop", "noop",
     };
 
-    /// <summary>Имена, занятые самим языком. Такой инструмент доступен только через <c>raw</c>.</summary>
+    /// <summary>Names taken by the language itself. Such a tool is reachable only through <c>raw</c>.</summary>
     private static readonly HashSet<string> LuaWords = new(StringComparer.Ordinal)
     {
         "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
@@ -60,7 +61,7 @@ public sealed class ScriptRuntime
         _maxCalls = maxCalls;
     }
 
-    /// <summary>Клетка со всеми инструментами внутри, готовая исполнять код этого процесса.</summary>
+    /// <summary>The sandbox with all the tools inside, ready to run this process's code.</summary>
     public LuaHost Build(ScriptProcess process)
     {
         var host = new LuaHost(_limits(), process.Print);
@@ -74,20 +75,20 @@ public sealed class ScriptRuntime
             var bound = tool;
             DynValue Call(CallbackArguments args) => Invoke(host, process, bound, args);
 
-            // В raw инструмент лежит всегда и под своим настоящим именем — это единственный
-            // честный способ дотянуться до goto, чьё имя занято языком.
+            // In raw, the tool always sits under its real name — this is the only honest way to
+            // reach goto, whose name is taken by the language.
             host.BindInto(raw, bound.Name, Call);
 
             if (!LuaWords.Contains(bound.Name))
                 host.Bind(bound.Name, Call);
         }
 
-        // Вторым проходом: ждущая версия забирает себе короткое имя.
+        // Second pass: the waiting version claims the short name for itself.
         //
-        // Порядок важен — псевдоним обязан перекрыть мгновенный инструмент, а не наоборот.
-        // Сделано привязкой, а не функцией-обёрткой в прелюдии, ради сообщений об ошибке: обёртка
-        // подставляла бы в них свою строку («прелюдия:(7,4)») вместо строки скрипта, и модель
-        // правила бы код, которого не писала.
+        // Order matters — the alias must override the instant tool, not the other way around.
+        // Done as a binding rather than a wrapper function in the prelude, for the sake of error
+        // messages: a wrapper would substitute its own line ("прелюдия:(7,4)") into them instead of
+        // the script's line, and the model would go editing code it never wrote.
         foreach (var tool in _session.Registry.Tools)
         {
             var alias = AliasOf(tool.Name);
@@ -99,11 +100,11 @@ public sealed class ScriptRuntime
         }
 
         host.Bind("sleep", args => Sleep(process, args));
-        host.LoadPrelude(ScriptPrelude.Source);
+        host.LoadPrelude(_session.Locale.ScriptPrelude);
         return host;
     }
 
-    /// <summary>Имена, известные скрипту до запуска, — их сверяет линтер опечаток.</summary>
+    /// <summary>Names known to the script before a run — the typo linter checks against these.</summary>
     public IReadOnlyList<string> KnownNames()
     {
         var names = new List<string>();
@@ -128,7 +129,7 @@ public sealed class ScriptRuntime
         return names;
     }
 
-    /// <summary>Что даёт сама клетка: базовая библиотека без файлов, процессов и загрузки кода.</summary>
+    /// <summary>What the sandbox itself provides: the base library, minus files, processes, and code loading.</summary>
     private static readonly string[] LuaStandardNames =
     {
         "assert", "collectgarbage", "error", "ipairs", "next", "pairs", "pcall", "xpcall", "print",
@@ -137,10 +138,10 @@ public sealed class ScriptRuntime
     };
 
     /// <summary>
-    /// Короткое имя ждущей версии: <c>goto_wait</c> живёт в скрипте как <c>go</c>.
+    /// The short name of the waiting version: <c>goto_wait</c> lives in the script as <c>go</c>.
     ///
-    /// Соглашение, а не список: тело, добавившее ждущий инструмент, получает псевдоним даром, и
-    /// ядру не приходится знать имена инструментов борга.
+    /// A convention, not a list: a body that adds a waiting tool gets the alias for free, and the
+    /// core doesn't have to know the borg's tool names.
     /// </summary>
     public static string? AliasOf(string name)
     {
@@ -149,7 +150,8 @@ public sealed class ScriptRuntime
 
         var head = name[..^"_wait".Length];
 
-        // goto занято языком — ждущая версия и есть та самая go, ради которой всё это писалось.
+        // goto is taken by the language — the waiting version is exactly that go, the whole reason
+        // this was written.
         return head == "goto" ? "go" : head;
     }
 
@@ -158,8 +160,8 @@ public sealed class ScriptRuntime
         var seconds = args.Count > 0 && args[0].Type == DataType.Number ? args[0].Number : 1.0;
         seconds = Math.Clamp(seconds, 0.05, 60.0);
 
-        // Ждём на токене, а не Thread.Sleep: bp_stop обязан будить спящий скрипт сразу, иначе
-        // «снять процесс» означало бы «подождать до минуты».
+        // Wait on the token, not Thread.Sleep: bp_stop is obligated to wake a sleeping script
+        // immediately, otherwise "stop the process" would mean "wait up to a minute."
         if (process.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(seconds)))
             process.Token.ThrowIfCancellationRequested();
 
@@ -218,11 +220,11 @@ public sealed class ScriptRuntime
     }
 
     /// <summary>
-    /// Голый аргумент вместо таблицы — самая частая описка, и она того не стоит.
+    /// A bare argument instead of a table — the most common slip, and it isn't worth punishing.
     ///
-    /// Модель пишет <c>examine("ящик-1")</c> там, где схема ждёт <c>{target=...}</c>. Отказ был бы
-    /// формально правильным и практически бесполезным: имя единственного обязательного поля
-    /// известно из самой схемы, так что подставим его сами.
+    /// The model writes <c>examine("box-1")</c> where the schema expects <c>{target=...}</c>. A
+    /// refusal would be formally correct and practically useless: the name of the single required
+    /// field is known from the schema itself, so let's substitute it ourselves.
     /// </summary>
     private DynValue Normalize(LuaHost host, AiTool tool, CallbackArguments args)
     {
@@ -268,8 +270,8 @@ public sealed class ScriptRuntime
         }
         catch (JsonException)
         {
-            // Схема инструмента разбирается на старте сессии и не может быть сломанной; но если
-            // всё же — это не повод ронять скрипт, просто не будет удобной подстановки.
+            // The tool schema is parsed at session start and can't be broken; but if it somehow is,
+            // that's no reason to crash the script — there just won't be a convenient substitution.
         }
 
         _firstRequired[tool.Name] = name;

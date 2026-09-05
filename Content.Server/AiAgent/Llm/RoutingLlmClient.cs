@@ -9,38 +9,39 @@ using System.Threading.Tasks;
 
 namespace Content.Server.AiAgent.Llm;
 
-/// <summary>Что о роутере может спросить остальная система, не зная, что он вообще есть.</summary>
+/// <summary>What the rest of the system can ask the router, without knowing it even exists.</summary>
 public interface ILlmRouter
 {
-    /// <summary>Кто отвечал в последний раз, или null пока никто.</summary>
+    /// <summary>Who answered last, or null if no one has yet.</summary>
     string? CurrentProfile { get; }
 
-    /// <summary>Порог компакции текущего профиля, или 0 — брать <c>ai.compact_high</c>.</summary>
+    /// <summary>The current profile's compaction threshold, or 0 — take <c>ai.compact_high</c>.</summary>
     int CurrentCompactHigh { get; }
 
     /// <summary>
-    /// Заявленное окно контекста текущего профиля, или 0 — неизвестно.
+    /// The current profile's declared context window, or 0 — unknown.
     ///
-    /// Нужно потому, что размер контекста у сессии снимается ОДИН раз при старте, а профиль за
-    /// раунд может смениться. Порог компакции, посчитанный против окна прошлого провайдера, — это
-    /// отказ, у которого в журнале до самого конца виден здоровый размер промпта.
+    /// Needed because a session's context size is read ONCE at startup, while the profile can
+    /// change over the course of a round. A compaction threshold computed against the previous
+    /// provider's window is a failure that, in the log, looks like a healthy prompt size right up
+    /// to the very end.
     /// </summary>
     int CurrentCtxLimit { get; }
 
-    /// <summary>Цепочка в том порядке, в каком она обходится.</summary>
+    /// <summary>The chain in the order it is walked.</summary>
     IReadOnlyList<string> Chain { get; }
 
-    /// <summary>Многострочный отчёт для <c>aiagent llm</c>.</summary>
+    /// <summary>Multi-line report for <c>aiagent llm</c>.</summary>
     string Describe();
 
-    /// <summary>Закрепить профиль до конца раунда. False — такого профиля в цепочке нет.</summary>
+    /// <summary>Pin a profile until the end of the round. False — that profile is not in the chain.</summary>
     bool TryUse(string profileId, out string reason);
 
-    /// <summary>Снять «мёртв» и сон — после того как человек перелогинился.</summary>
+    /// <summary>Clear "dead" and sleep — after a human has re-logged in.</summary>
     bool Revive(string profileId, out string reason);
 }
 
-/// <summary>Ручки роутера, снятые с CVar'ов один раз при сборке цепочки.</summary>
+/// <summary>Router knobs, read from CVars once when the chain is built.</summary>
 public sealed record LlmRouterOptions(
     float CooldownSeconds,
     float QuotaCooldownSeconds,
@@ -48,26 +49,27 @@ public sealed record LlmRouterOptions(
     float TotalTimeoutSeconds);
 
 /// <summary>
-/// Главная модель и цепочка фаллбеков за одним <see cref="ILlmClient"/>.
+/// The primary model and its fallback chain, behind a single <see cref="ILlmClient"/>.
 ///
 /// <para>
-/// <b>Почему это декоратор, а не переделка.</b> <see cref="ILlmClient"/> конструируется в
-/// единственном месте (<c>StationAiAgentSystem.EnsureClient</c>), а потребителей у него три — цикл
-/// хода, куратор и суммаризатор компакции. Роутер встаёт в ту одну строку, и ни один из трёх не
-/// узнаёт, что провайдер теперь не один.
+/// <b>Why this is a decorator, not a rewrite.</b> <see cref="ILlmClient"/> is constructed in exactly
+/// one place (<c>StationAiAgentSystem.EnsureClient</c>), and it has three consumers — the turn loop,
+/// the curator, and the compaction summarizer. The router slots into that one line, and none of the
+/// three ever learns that there is now more than one provider.
 /// </para>
 /// <para>
-/// <b>Почему выбор липкий.</b> Компакция, замороженный префикс и алярм префикс-кэша написаны под
-/// один стабильный префикс: живой сервер держит реюз 97.9%, и каждое переключение провайдера стоит
-/// полного prefill на новой стороне. Поэтому выбранный профиль держится, пока работает, а возврат
-/// на главный пробуется не чаще <c>ai.llm_recheck_seconds</c> — а не «кто первый ответил на этом
-/// ходу».
+/// <b>Why the choice is sticky.</b> Compaction, the frozen prefix, and the prefix-cache alarm are
+/// all written for one stable prefix: the live server holds a 97.9% reuse rate, and every provider
+/// switch costs a full prefill on the new side. So the chosen profile is kept as long as it works,
+/// and falling back to the primary is retried no more often than <c>ai.llm_recheck_seconds</c> —
+/// not "whoever answered first on this turn".
 /// </para>
 /// <para>
-/// <b>Почему переключает не всякая ошибка.</b> Обрезанный по <c>max_tokens</c> ответ и кривой JSON в
-/// аргументах — это наши проблемы, и у другого провайдера они воспроизведутся ровно так же; уход по
-/// ним означал бы обойти всю цепочку и вернуться туда, откуда начали, потратив четыре запроса
-/// вместо одного. Классификация целиком в <see cref="Classify"/>.
+/// <b>Why not every error triggers a switch.</b> A response truncated by <c>max_tokens</c> and
+/// malformed JSON in the arguments are our own problems, and another provider would reproduce them
+/// exactly the same way; switching on them would mean walking the whole chain and ending up back
+/// where we started, at four requests instead of one. The full classification lives in
+/// <see cref="Classify"/>.
 /// </para>
 /// </summary>
 public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
@@ -79,16 +81,16 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
     private readonly Func<DateTime> _now;
 
     /// <summary>
-    /// Индекс профиля, который ответил последним. -1 — ещё никто.
+    /// Index of the profile that answered last. -1 — no one yet.
     ///
-    /// Без замка сознательно: <c>ai.max_agents</c> по умолчанию 1, а если агентов всё же несколько,
-    /// худшее следствие расхождения — один лишний prefill, тогда как замок пришлось бы держать через
-    /// <c>await</c>. Разрыв чтения у <c>int</c> невозможен, так что читатель увидит либо старое
-    /// значение, либо новое.
+    /// Deliberately without a lock: <c>ai.max_agents</c> defaults to 1, and even if there are
+    /// several agents, the worst consequence of a race is one extra prefill, whereas a lock would
+    /// have to be held across an <c>await</c>. A torn read is impossible for an <c>int</c>, so a
+    /// reader will see either the old value or the new one.
     /// </summary>
     private int _current = -1;
 
-    /// <summary>Закреплённый вручную профиль. -1 — не закреплён.</summary>
+    /// <summary>Manually pinned profile. -1 — not pinned.</summary>
     private int _pinned = -1;
 
     private DateTime _lastRecheck = DateTime.MinValue;
@@ -148,9 +150,9 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
         if (recheck)
             _lastRecheck = started;
 
-        // Почему причины собираются, а не логируются по ходу: когда падает вся цепочка, важно
-        // увидеть все четыре причины рядом. Четыре отдельных ERROR'а в журнале выглядят как четыре
-        // независимых инцидента, и связать их в один отказ приходится глазами.
+        // Why the reasons are collected instead of logged as we go: when the whole chain fails, it
+        // matters to see all four reasons side by side. Four separate ERRORs in the log look like
+        // four independent incidents, and connecting them into one failure is left to eyeballing.
         var failures = new List<string>();
         var emptyRetried = false;
 
@@ -159,9 +161,9 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
             var lane = _lanes[index];
             var id = lane.Profile.Id;
 
-            // Закреплённый вручную профиль пробуется даже из сна: смысл ручного закрепления в том,
-            // чтобы человек мог настоять. Но если он всё же не отвечает, цепочка продолжается — на
-            // живом сервере молчащий агент хуже, чем агент, ответивший не с того профиля.
+            // A manually pinned profile is tried even while asleep: the whole point of a manual pin
+            // is letting a human insist. But if it still doesn't answer, the chain moves on — on a
+            // live server, a silent agent is worse than an agent answering from the wrong profile.
             if (index != _pinned && !_state.IsAvailable(id, out var why))
             {
                 failures.Add($"{id}: {why}");
@@ -181,10 +183,10 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
                 {
                     var response = await AttemptAsync(lane, messages, tools, remaining, ct).ConfigureAwait(false);
 
-                    // Пустой ответ — ни текста, ни вызова инструмента. Один повтор на месте: это
-                    // бывает разовой неудачей семплирования. Ставить его в историю нельзя ни в
-                    // каком случае — DeepSeek после пустого assistant-сообщения отвечал HTTP 400
-                    // на все последующие запросы до конца раунда.
+                    // An empty response — no text and no tool call. One retry on the spot: this
+                    // happens as a one-off sampling failure. It must never be put into the history —
+                    // DeepSeek, after an empty assistant message, answered HTTP 400 to every
+                    // subsequent request for the rest of the round.
                     if (IsEmpty(response))
                     {
                         if (!emptyRetried)
@@ -206,19 +208,21 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    // Наша собственная отмена — раунд кончается или агента отпускают. Это не отказ
-                    // провайдера, и по цепочке идти незачем.
+                    // Our own cancellation — the round is ending or the agent is being released.
+                    // This is not a provider failure, and there is no point walking the chain.
                     throw;
                 }
                 catch (ObjectDisposedException)
                 {
-                    // Клиент уже разобран — рестарт раунда гонится с финализацией агента
-                    // (OnRoundCleanup зовёт ResetLlmClient, пока прощальная компакция ещё ходит в
-                    // модель). Это смерть ЭТОГО экземпляра, а не провайдера, и записывать её в
-                    // общий счётчик нельзя: счётчик переживает раунды, и пять минут кулдауна
-                    // достаются СЛЕДУЮЩЕЙ, совершенно свежей цепочке. Ровно так 25.08.2026 новый
-                    // раунд три минуты отвечал «ни один провайдер не ответил за 0с», цитируя
-                    // чужую смерть. Остальные звенья не пробуем — они разобраны тем же Dispose.
+                    // The client has already been disposed — a round restart races with agent
+                    // finalization (OnRoundCleanup calls ResetLlmClient while the farewell compaction
+                    // is still talking to the model). This is the death of THIS instance, not of the
+                    // provider, and it must not be recorded in the shared counter: the counter
+                    // survives across rounds, and five minutes of cooldown would land on the NEXT,
+                    // completely fresh chain. This is exactly how, on 2026-08-25, a new round spent
+                    // three minutes answering "no provider responded in 0s", quoting someone else's
+                    // death. The remaining links are not tried — they were disposed by the same
+                    // Dispose call.
                     throw;
                 }
                 catch (Exception e)
@@ -324,7 +328,7 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
         _state.Flush();
     }
 
-    // ------------------------------------------------------------------ внутри
+    // ------------------------------------------------------------------ internals
 
     private async Task<LlmResponse> AttemptAsync(
         Lane lane,
@@ -333,9 +337,9 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
         TimeSpan budget,
         CancellationToken ct)
     {
-        // Свой срок на попытку помимо HttpClient.Timeout профиля. Без него четыре профиля с
-        // таймаутом по 150-180 с складываются в десять минут на одном ходу, и агент, который
-        // «просто думает», выглядит для экипажа неотличимо от сломанного.
+        // A per-attempt deadline on top of the profile's own HttpClient.Timeout. Without it, four
+        // profiles with a 150-180s timeout each add up to ten minutes on a single turn, and an
+        // agent that is "just thinking" becomes indistinguishable to the crew from a broken one.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(budget);
 
@@ -373,8 +377,9 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
         _pinned < 0 && _current > 0 && _now() - _lastRecheck >= TimeSpan.FromSeconds(_options.RecheckSeconds);
 
     /// <summary>
-    /// В каком порядке пробовать. Закреплённый первым, иначе прошлый удачный, иначе — как в цепочке.
-    /// Проба возврата на главный (<paramref name="recheck"/>) идёт строго по цепочке с начала.
+    /// The order to try in. Pinned first, otherwise the last successful one, otherwise chain order.
+    /// A probe to fall back to the primary (<paramref name="recheck"/>) goes strictly chain order
+    /// from the start.
     /// </summary>
     private IEnumerable<int> Order(bool recheck)
     {
@@ -426,9 +431,9 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
                 break;
 
             case Verdict.Incompatible:
-                // ERROR и с телом ответа: слепо повторять такое нельзя, а причина всегда в теле —
-                // имя поля, которого провайдер не знает, или схема инструмента, которую он не
-                // принял. Без тела все 400 выглядят одинаково.
+                // ERROR, and with the response body: this must not be blindly retried, and the
+                // reason is always in the body — a field name the provider doesn't know, or a tool
+                // schema it didn't accept. Without the body, every 400 looks the same.
                 _sawmill.Error($"{id}: запрос отвергнут как некорректный, профиль несовместим — {reason}");
                 _state.Cooldown(id, TimeSpan.FromSeconds(_options.CooldownSeconds), "несовместимый запрос");
                 break;
@@ -445,26 +450,27 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
 
     private enum Verdict
     {
-        /// <summary>Само пройдёт: сеть, 5xx, таймаут. Короткий сон.</summary>
+        /// <summary>Will resolve on its own: network, 5xx, timeout. Short sleep.</summary>
         Retryable,
 
-        /// <summary>Квота кончилась. Длинный сон до сброса.</summary>
+        /// <summary>Quota ran out. Long sleep until reset.</summary>
         Quota,
 
-        /// <summary>Нужен человек: перелогин, отозванный токен, отклонённый ключ.</summary>
+        /// <summary>Needs a human: re-login, revoked token, rejected key.</summary>
         Dead,
 
-        /// <summary>Провайдер не принял сам запрос. Повторять бессмысленно.</summary>
+        /// <summary>The provider rejected the request itself. Retrying is pointless.</summary>
         Incompatible,
     }
 
     /// <summary>
-    /// Отличить «полежит и встанет» от «нужен человек» и от «не повторять».
+    /// Tell apart "will recover on its own" from "needs a human" and from "do not retry".
     ///
-    /// Разбор тела ответа здесь не от изящества: у мостов к подписочным API нет общего формата
-    /// ошибок, и требование перелогина приходит то кодом 401, то кодом 400 с текстом
-    /// <c>invalid_grant</c>. Пропустить его дороже, чем лишний раз ошибиться в сторону «нужен
-    /// человек»: перелогин сам не случится, и повторы будут идти в пустоту до конца смены.
+    /// Parsing the response body here isn't for elegance: bridges to subscription APIs have no
+    /// common error format, and a re-login requirement arrives sometimes as code 401, sometimes as
+    /// code 400 with the text <c>invalid_grant</c>. Missing it costs more than an occasional false
+    /// positive toward "needs a human": a re-login won't happen by itself, and retries will keep
+    /// going into the void for the rest of the shift.
     /// </summary>
     private static Verdict Classify(Exception e, out string reason)
     {
@@ -514,9 +520,9 @@ public sealed class RoutingLlmClient : ILlmClient, ILlmRouter, IDisposable
     }
 
     /// <summary>
-    /// Признаки того, что провайдер требует человека. <c>refresh_token</c> здесь не случайно: на
-    /// этой машине именно так однажды отвалился Codex — одноразовый refresh-токен успел
-    /// использовать другой клиент.
+    /// Signs that a provider requires a human. <c>refresh_token</c> is here on purpose: on this
+    /// machine, that's exactly how Codex dropped out once — a single-use refresh token had already
+    /// been consumed by another client.
     /// </summary>
     private static readonly string[] ReloginHints =
     {

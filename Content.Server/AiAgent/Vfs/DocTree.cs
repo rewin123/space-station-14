@@ -8,30 +8,30 @@ using Content.Server.AiAgent.Skills;
 
 namespace Content.Server.AiAgent.Vfs;
 
-/// <summary>Одна статья: путь внутри монтирования, заголовок, строка «когда» и тело.</summary>
+/// <summary>One article: path within the mount, title, the "when" line, and the body.</summary>
 public sealed record Doc(string Path, string Title, string When, string Body, DateTime Modified)
 {
-    /// <summary>Имя без каталога — то, что показывает <c>ls</c>.</summary>
+    /// <summary>Name without the directory — what <c>ls</c> shows.</summary>
     public string Name => Path.Contains('/') ? Path[(Path.LastIndexOf('/') + 1)..] : Path;
 }
 
 /// <summary>
-/// Дерево статей на диске. Формат тот же, что был у библиотеки скиллов, плюс вложенность.
+/// Tree of articles on disk. The format is the same one the skill library used, plus nesting.
 ///
 /// <para>
-/// Формат — <c>#&#160;имя</c>, затем <c>когда:&#160;…</c>, затем тело. Он выбран не из любви к
-/// простоте: YAML-заголовок ломался у модели на кавычке и отступе достаточно часто, чтобы от него
-/// отказались на прежнем развёртывании. Здесь сломать нечего.
+/// The format is <c>#&#160;name</c>, then <c>when:&#160;…</c>, then the body. It wasn't chosen out of
+/// love for simplicity: a YAML header kept breaking on the model at a quote or an indent often enough
+/// that it was dropped on the previous deployment. There is nothing here left to break.
 /// </para>
 /// <para>
-/// Описание папки живёт в её <c>_index.md</c>: та же строка «когда», а тело — обзор раздела. Это
-/// не изобретение, а то, чем уже являются файлы <c>справочник-*.md</c>; миграция их просто
-/// переименовывает.
+/// A folder's description lives in its <c>_index.md</c>: the same "when" line, and the body is the
+/// section overview. This isn't an invention — it's what the <c>reference-*.md</c> files already were;
+/// the migration just renames them.
 /// </para>
 /// <para>
-/// Правка — только фрагментом. Тот, кому позволено переписать файл целиком, однажды вернёт
-/// укороченную версию, и накопленное исчезнет за один ход, молча. <see cref="Write"/> существует
-/// для создания и осознанной замены, <see cref="Edit"/> — для всего остального.
+/// Edits are fragment-only. Whoever is allowed to rewrite a file wholesale will eventually return a
+/// shortened version, and everything accumulated disappears in one silent move. <see cref="Write"/>
+/// exists for creation and deliberate replacement, <see cref="Edit"/> for everything else.
 /// </para>
 /// </summary>
 public sealed class DocTree
@@ -42,28 +42,28 @@ public sealed class DocTree
     private readonly string _root;
     private readonly ISawmill _sawmill;
 
-    /// <summary>Путь внутри монтирования («атмосфера/насосы») → статья.</summary>
+    /// <summary>Path within the mount ("atmosphere/pumps") → article.</summary>
     private readonly Dictionary<string, Doc> _docs = new(StringComparer.Ordinal);
 
-    /// <summary>Каталоги, включая пустые: без этого <c>mkdir</c> не оставлял бы следа.</summary>
+    /// <summary>Directories, including empty ones: without this, <c>mkdir</c> would leave no trace.</summary>
     private readonly HashSet<string> _dirs = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Дерево читают из двух потоков: <see cref="Reload"/> — поток агента на шаге перестройки
-    /// префикса, листинг — главный, когда консоль или отладчик печатают состояние. Замена словаря
-    /// посреди перечисления даёт «Collection was modified», которое проявится только на живой
-    /// смене.
+    /// The tree is read from two threads: <see cref="Reload"/> — the agent thread during the prefix
+    /// rebuild step — and the listing thread — the main thread, when the console or debugger prints
+    /// state. Swapping the dictionary mid-enumeration gives a "Collection was modified" that only
+    /// shows up on a live change.
     /// </summary>
     private readonly object _sync = new();
 
     /// <summary>
-    /// Куда сообщать о правках, или <c>null</c>, когда шина отладки выключена.
+    /// Where to report edits, or <c>null</c> when the debug bus is off.
     ///
     /// <para>
-    /// Формат событий остался прежним — <c>skill.updated</c> и <c>skills.reloaded</c> с полями
-    /// <c>name/when/body</c>, — хотя хранение сменилось целиком. Менять проводной формат заодно с
-    /// хранением значило бы чинить две вещи сразу и не знать, какая из них сломалась. Поле
-    /// <c>name</c> теперь несёт путь внутри монтирования.
+    /// The event format stayed the same — <c>skill.updated</c> and <c>skills.reloaded</c> with
+    /// <c>name/when/body</c> fields — even though storage changed completely. Changing the wire
+    /// format along with storage would mean fixing two things at once with no way to tell which one
+    /// broke. The <c>name</c> field now carries the path within the mount.
     /// </para>
     /// </summary>
     private IAgentEventSink? _sink;
@@ -76,7 +76,7 @@ public sealed class DocTree
 
     public string Root => _root;
 
-    /// <summary>Начать сообщать о правках. Зовётся при сборке файловой системы, по разу.</summary>
+    /// <summary>Start reporting edits. Called once, while assembling the filesystem.</summary>
     public void AttachSink(IAgentEventSink sink)
     {
         lock (_sync)
@@ -86,9 +86,9 @@ public sealed class DocTree
     private static Skill AsSkill(Doc doc) => new(doc.Path, doc.When, doc.Body);
 
     /// <summary>
-    /// Единственное место, куда статья попадает в память, — и потому единственное, что о ней
-    /// сообщает. Зовётся уже ПОСЛЕ успешной записи на диск, так что отказ диска не публикует
-    /// ничего. Вызывающий держит лок.
+    /// The only place an article enters memory — and hence the only place that reports it. Called
+    /// only AFTER a successful disk write, so a disk failure publishes nothing. The caller holds the
+    /// lock.
     /// </summary>
     private void Commit(string relative, Doc doc)
     {
@@ -105,7 +105,7 @@ public sealed class DocTree
         }
     }
 
-    /// <summary>Всё дерево записями шины. Для снимка состояния в отладчике.</summary>
+    /// <summary>The whole tree as bus records. For a state snapshot in the debugger.</summary>
     public IReadOnlyList<Skill> All
     {
         get
@@ -115,7 +115,7 @@ public sealed class DocTree
         }
     }
 
-    // ------------------------------------------------------------------- разбор
+    // ------------------------------------------------------------------- parsing
 
     public static Doc? Parse(string path, string text, DateTime modified)
     {
@@ -155,12 +155,12 @@ public sealed class DocTree
 
     public static string Render(Doc doc) => $"# {doc.Title}\nкогда: {doc.When}\n{doc.Body}\n";
 
-    // ---------------------------------------------------------------------- диск
+    // ---------------------------------------------------------------------- disk
 
     public void Reload()
     {
-        // Каталог читается целиком до взятия лока: держать лок поверх файлового ввода-вывода
-        // значит поставить задержку диска перед тем, что делает главный поток.
+        // The directory is read in full before taking the lock: holding the lock over file I/O
+        // would mean putting disk latency ahead of whatever the main thread is doing.
         var docs = new Dictionary<string, Doc>(StringComparer.Ordinal);
         var dirs = new HashSet<string>(StringComparer.Ordinal);
 
@@ -173,8 +173,8 @@ public sealed class DocTree
 
                 foreach (var file in Directory.EnumerateFiles(_root, "*.md", SearchOption.AllDirectories))
                 {
-                    // Ключ — путь как на диске, с расширением. Это настоящая файловая система,
-                    // просто смонтированная; расходиться с ней в именах незачем.
+                    // The key is the path as it is on disk, with the extension. This is a real
+                    // filesystem, just mounted; there's no reason to diverge from it in naming.
                     var rel = RelativeOf(file);
 
                     var doc = Parse(rel, File.ReadAllText(file), File.GetLastWriteTime(file));
@@ -191,8 +191,8 @@ public sealed class DocTree
         }
         catch (Exception e)
         {
-            // Оставляем то, что уже в памяти: разовая ошибка чтения не должна опустошить
-            // библиотеку, которую агент собирал месяцами.
+            // Keep what's already in memory: a one-off read failure shouldn't wipe out a library
+            // the agent has been building for months.
             _sawmill.Warning($"дерево {_root} не читается: {e.Message}");
             return;
         }
@@ -207,8 +207,8 @@ public sealed class DocTree
             foreach (var dir in dirs)
                 _dirs.Add(dir);
 
-            // Один кадр на всё дерево, а не по кадру на уцелевшего. Перечитывание — единственный
-            // путь, которым статья может исчезнуть, а событие про уцелевших об исчезнувших молчит.
+            // One frame for the whole tree, not one frame per survivor. Reload is the only way an
+            // article can disappear, and an event about survivors says nothing about the vanished.
             _sink?.SkillsReloaded(_docs.Values.Select(AsSkill).ToList());
         }
     }
@@ -220,12 +220,13 @@ public sealed class DocTree
         Path.Combine(_root, Path.Combine(relative.Split('/')));
 
     /// <summary>
-    /// Ключ статьи по пути из запроса: как написано, а если такого нет — с дописанным <c>.md</c>.
+    /// An article's key from the requested path: as written, or with <c>.md</c> appended if that
+    /// doesn't exist.
     /// </summary>
     /// <remarks>
-    /// Единственная поблажка адресации. Расширение — деталь хранения, и требовать его в каждом
-    /// пути значило бы ловить промахи там, где ошибки нет. Точное совпадение проверяется первым:
-    /// файл, названный без расширения, остаётся достижимым под своим настоящим именем.
+    /// The one concession in addressing. The extension is a storage detail, and requiring it in
+    /// every path would mean catching mistakes where there aren't any. The exact match is checked
+    /// first: a file named without an extension stays reachable under its real name.
     /// </remarks>
     private string? KeyOf(string relative)
     {
@@ -239,7 +240,7 @@ public sealed class DocTree
         return _docs.ContainsKey(withExtension) ? withExtension : null;
     }
 
-    // ------------------------------------------------------------------- чтение
+    // ------------------------------------------------------------------- reading
 
     public bool TryGet(string relative, out Doc doc)
     {
@@ -264,7 +265,7 @@ public sealed class DocTree
             return _dirs.Contains(relative) || _docs.Keys.Any(k => k.StartsWith(relative + "/", StringComparison.Ordinal));
     }
 
-    /// <summary>Прямые дети каталога: сначала папки, потом статьи, обе группы по алфавиту.</summary>
+    /// <summary>Direct children of a directory: folders first, then articles, both groups alphabetical.</summary>
     public IReadOnlyList<VfsEntry> Children(string relative)
     {
         lock (_sync)
@@ -296,8 +297,8 @@ public sealed class DocTree
                     continue;
                 }
 
-                // _index описывает саму папку и в её же листинге не показывается: иначе каждая
-                // папка содержала бы файл с именем своего собственного оглавления.
+                // _index describes the folder itself and doesn't show up in that folder's own
+                // listing: otherwise every folder would contain a file named after its own index.
                 if (rest == VfsPath.IndexFile + VfsPath.Extension)
                     continue;
 
@@ -335,7 +336,7 @@ public sealed class DocTree
         return rest.Length > 0;
     }
 
-    /// <summary>Имена, ближайшие по Левенштейну, — для внятного отказа вместо «нет такого».</summary>
+    /// <summary>Names closest by Levenshtein distance — for a clear rejection instead of "no such thing".</summary>
     public IReadOnlyList<string> Nearest(string relative, int count = 3)
     {
         lock (_sync)
@@ -371,8 +372,8 @@ public sealed class DocTree
                         return hits;
                 }
 
-                // Строка «когда» тоже ищется: чаще всего именно в ней стоит слово, которым экипаж
-                // называет предмет, а тело говорит уже подробностями.
+                // The "when" line is searched too: it's usually where the word the crew calls the
+                // thing by lives, while the body speaks in specifics.
                 if (doc.When.Contains(needle, StringComparison.OrdinalIgnoreCase))
                     hits.Add(new VfsHit($"/{mountPoint}/{key}", 0, "когда: " + doc.When));
 
@@ -384,7 +385,7 @@ public sealed class DocTree
         return hits;
     }
 
-    // -------------------------------------------------------------------- запись
+    // -------------------------------------------------------------------- writing
 
     public VfsWrite Write(string relative, string title, string when, string body)
     {
@@ -394,8 +395,9 @@ public sealed class DocTree
         if (relative.Length == 0)
             return VfsWrite.No("нужен путь файла");
 
-        // Пишем всегда с расширением: иначе следующее перечитывание каталога, идущее по «*.md»,
-        // просто не увидит файл, и запись выглядела бы как удавшаяся ровно до перезапуска.
+        // Always write with the extension: otherwise the next directory reload, which globs
+        // "*.md", simply won't see the file, and the write would look successful right up until
+        // the next restart.
         relative = VfsPath.WithExtension(relative);
 
         if (when.Length == 0)
@@ -540,9 +542,9 @@ public sealed class DocTree
 
                 _docs.Remove(relative);
 
-                // Пропажу отдельным событием не описать: у skill.updated нет формы «этого больше
-                // нет», и клиент, сворачивающий события в карту, держал бы призрак вечно. Поэтому
-                // удаление публикуется целым набором — так же, как перечитывание.
+                // A disappearance can't be described by a single event: skill.updated has no form
+                // for "this no longer exists", and a client folding events into a map would keep a
+                // ghost forever. So removal is published as the whole set — the same as a reload.
                 _sink?.SkillsReloaded(_docs.Values.Select(AsSkill).ToList());
 
                 return VfsWrite.Fine("файл удалён");
@@ -551,8 +553,8 @@ public sealed class DocTree
             if (!_dirs.Contains(relative))
                 return VfsWrite.No($"нет ни файла, ни папки «{relative}»", NearestLocked(relative));
 
-            // Непустую папку сносить отказываемся. Рекурсивное удаление одной строкой — это способ
-            // потерять раздел справочника опечаткой в пути, а обратной операции у нас нет.
+            // Refuse to tear down a non-empty folder. A one-line recursive delete is a way to lose
+            // a reference-library section to a typo in the path, and we have no undo for that.
             var children = _docs.Keys.Count(k => k.StartsWith(relative + "/", StringComparison.Ordinal));
 
             if (children > 0)
@@ -599,8 +601,8 @@ public sealed class DocTree
             }
             catch (Exception e)
             {
-                // Копия уже легла: сообщаем правду вместо «переименовано», иначе на диске тихо
-                // останутся оба файла, и следующий Reload покажет близнеца.
+                // The copy has already landed: we report the truth instead of "renamed", or else
+                // both files would silently remain on disk and the next Reload would show a twin.
                 _sawmill.Warning($"старый файл {from} не удалён: {e.Message}");
                 return VfsWrite.No($"скопировано в «{to}», но старый файл удалить не удалось ({e.GetType().Name})");
             }
@@ -613,7 +615,7 @@ public sealed class DocTree
         }
     }
 
-    // ------------------------------------------------------------- внутренности
+    // ------------------------------------------------------------- internals
 
     private bool TrySave(Doc doc, out string error)
     {
@@ -645,7 +647,7 @@ public sealed class DocTree
             _dirs.Add(string.Join('/', parts[..i]));
     }
 
-    /// <summary>Имя файла без каталога и без расширения — для сравнения имён между собой.</summary>
+    /// <summary>File name without the directory and without the extension — for comparing names.</summary>
     private static string NameOf(string relative)
     {
         var name = relative.Contains('/') ? relative[(relative.LastIndexOf('/') + 1)..] : relative;
@@ -663,17 +665,18 @@ public sealed class DocTree
             .ToList();
 
     /// <summary>
-    /// Файл, который есть то же имя с довеском, — в пределах ОДНОЙ папки.
+    /// A file that is the same name with an add-on — within a SINGLE folder.
     ///
     /// <para>
-    /// Общее слово поводом не считается: «питание/апц» и «питание/смес» — разные предметы, и
-    /// отказывать второму из-за первого значило бы не оставить агенту ни одного разрешённого
-    /// имени. Ловится ровно то, что ловилось на прежнем развёртывании: <c>safe_mine_ore</c> рядом
-    /// с <c>mine_ore</c>, то есть подмножество слов.
+    /// A shared word isn't grounds by itself: "power/apc" and "power/smes" are different things,
+    /// and rejecting the second because of the first would leave the agent with no permitted name
+    /// at all. What's caught is exactly what was caught on the previous deployment:
+    /// <c>safe_mine_ore</c> next to <c>mine_ore</c>, i.e. a subset of words.
     /// </para>
     /// <para>
-    /// Область поиска — соседи по папке, а не всё дерево. В плоской библиотеке это было одно и то
-    /// же; в дереве «атмосфера/насосы» и «питание/насосы» — законные разные статьи.
+    /// The search scope is neighbors within the same folder, not the whole tree. In a flat library
+    /// this was the same thing; in a tree, "atmosphere/pumps" and "power/pumps" are legitimately
+    /// different articles.
     /// </para>
     /// </summary>
     private string? FindOverlapping(string relative)

@@ -9,21 +9,21 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent.Vfs.Mounts;
 
 /// <summary>
-/// Внутренняя вика игры — та, которую игрок открывает клавишей.
+/// The game's built-in wiki — the one the player opens with a key press.
 ///
 /// <para>
-/// Смонтирована ПРОТОТИПАМИ, а не каталогом, и это важнее, чем кажется. В
-/// <c>Resources/Prototypes/Guidebook/*.yml</c> уже лежат идентификатор, локализованное имя, список
-/// детей и путь к тексту. То есть дерево, имена и порядок берутся у самой игры: разделы совпадают
-/// с тем, что видит игрок, статей-сирот не бывает по построению, и при обновлении апстрима вика
-/// агента не расходится с настоящей. Обход каталога дал бы плоскую кучу файлов с машинными
-/// именами и без иерархии.
+/// Mounted from PROTOTYPES, not a directory, and that matters more than it looks. The identifier,
+/// localized name, list of children, and text path already live in
+/// <c>Resources/Prototypes/Guidebook/*.yml</c>. That is, the tree, names, and order come from the
+/// game itself: sections match what the player sees, there are no orphan articles by construction,
+/// and when upstream updates, the agent's wiki doesn't diverge from the real one. Walking a
+/// directory would give a flat pile of files with machine names and no hierarchy.
 /// </para>
 /// <para>
-/// Содержимое отдаётся сырой разметкой. Она читаемая — текст в ней преобладает над тегами, — а
-/// конвертер стал бы ещё одним местом, которое молча теряет абзац при смене формата у апстрима.
-/// Зачем это вообще нужно: агент говорит «проверьте насос», а игрок смотрит на панель, где
-/// написано <c>Gas Volume Pump</c>. Английские имена машин есть только здесь.
+/// Content is served as raw markup. It's readable — text dominates over tags in it — and a
+/// converter would become one more place that silently loses a paragraph whenever upstream changes
+/// its format. Why this is needed at all: the agent says "check the pump", while the player looks
+/// at a panel labeled <c>Gas Volume Pump</c>. English machine names exist only here.
 /// </para>
 /// </summary>
 public sealed class GuidebookMount : VfsMount
@@ -33,27 +33,28 @@ public sealed class GuidebookMount : VfsMount
     private readonly ISawmill _sawmill;
 
     /// <summary>
-    /// Путь внутри монтирования → статья. Строится ТОЛЬКО на главном потоке, в <see cref="Reload"/>.
+    /// Path within the mount → article. Built ONLY on the main thread, in <see cref="Reload"/>.
     ///
     /// <para>
-    /// Лениво строить его нельзя, и это выяснилось на живом сервере, а не в тесте. Инструменты
-    /// файловой системы намеренно не маршалятся — они трогают файлы, а не сущности, — то есть
-    /// первое обращение приходит с потока агента. А имя статьи разворачивается через
-    /// <c>Loc.GetString</c>, который лезет в <c>IoCManager.Resolve</c>, а тот на чужом потоке
-    /// бросает «IoC has no context on this thread». Падал весь вызов целиком: <c>ls /</c> и
-    /// <c>grep</c> без пути обходят все монтирования, включая это.
+    /// Building it lazily doesn't work, and that was found on a live server, not in a test.
+    /// Filesystem tools are deliberately not marshaled — they touch files, not entities — so the
+    /// first access comes from the agent thread. And an article's name is resolved via
+    /// <c>Loc.GetString</c>, which reaches into <c>IoCManager.Resolve</c>, which throws "IoC has no
+    /// context on this thread" on a foreign thread. The whole call would fail: <c>ls /</c> and a
+    /// pathless <c>grep</c> walk every mount, including this one.
     /// </para>
     /// </summary>
     private Dictionary<string, Article>? _index;
 
-    /// <summary>Статья вики: прототип плюс УЖЕ развёрнутое имя.</summary>
+    /// <summary>A wiki article: the prototype plus its ALREADY-resolved name.</summary>
     /// <remarks>
-    /// Имя разворачивается при построении индекса, на главном потоке, и дальше только читается.
-    /// Держать здесь один прототип значило бы звать локализацию из листинга, то есть с потока агента.
+    /// The name is resolved while building the index, on the main thread, and only read afterward.
+    /// Keeping just the prototype here would mean calling localization from a listing call, i.e.
+    /// from the agent thread.
     /// </remarks>
     private sealed record Article(GuideEntryPrototype Entry, string Title);
 
-    /// <summary>Путь → тело статьи. Наполняется лениво: полтора мегабайта разом никому не нужны.</summary>
+    /// <summary>Path → article body. Filled lazily: nobody needs a megabyte and a half all at once.</summary>
     private readonly Dictionary<string, string> _text = new(StringComparer.Ordinal);
 
     private readonly object _sync = new();
@@ -65,14 +66,14 @@ public sealed class GuidebookMount : VfsMount
         _sawmill = sawmill;
     }
 
-    // ------------------------------------------------------------------- индекс
+    // ------------------------------------------------------------------- index
 
     /// <summary>
-    /// Готовый индекс. Если его ещё не построили — пустой, а не построенный на месте.
+    /// The ready index. If it hasn't been built yet, empty rather than built on the spot.
     /// </summary>
     /// <remarks>
-    /// Пустой ответ означает «вика не смонтирована», и это честнее, чем построить индекс с потока
-    /// агента и уронить весь вызов инструмента на локализации.
+    /// An empty response means "the wiki isn't mounted", and that's more honest than building the
+    /// index from the agent thread and having the whole tool call fail on localization.
     /// </remarks>
     private Dictionary<string, Article> Index()
     {
@@ -82,7 +83,7 @@ public sealed class GuidebookMount : VfsMount
 
     private static readonly Dictionary<string, Article> Empty = new(StringComparer.Ordinal);
 
-    /// <summary>Построить индекс. ТОЛЬКО главный поток: разворачивает имена через локализацию.</summary>
+    /// <summary>Build the index. MAIN THREAD ONLY: resolves names via localization.</summary>
     private void BuildIndex()
     {
         lock (_sync)
@@ -90,9 +91,9 @@ public sealed class GuidebookMount : VfsMount
             var index = new Dictionary<string, Article>(StringComparer.Ordinal);
             var all = _proto.EnumeratePrototypes<GuideEntryPrototype>().ToDictionary(p => p.ID, StringComparer.Ordinal);
 
-            // Корни — те, кого никто не назвал ребёнком. Считается по факту, а не по флагу:
-            // отдельного признака «верхнего уровня» у прототипа нет, а приписать его вручную
-            // значило бы завести второй список, который разойдётся с первым.
+            // Roots are whoever nobody named as a child. Determined by fact, not by a flag: a
+            // prototype has no separate "top-level" marker, and tagging one by hand would mean
+            // maintaining a second list that would drift from the first.
             var children = all.Values.SelectMany(p => p.Children).Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
 
             foreach (var root in all.Values
@@ -114,13 +115,13 @@ public sealed class GuidebookMount : VfsMount
         Dictionary<string, Article> index,
         HashSet<string> seen)
     {
-        // Вика апстрима — граф, а не дерево: одну и ту же статью законно вешают в двух разделах.
-        // Без этой проверки такой перекрёсток превратился бы в бесконечный обход.
+        // Upstream's wiki is a graph, not a tree: the same article is legitimately hung under two
+        // sections. Without this check, such a crossing would turn into an infinite traversal.
         if (!seen.Add(entry.ID))
             return;
 
-        // Идентификатор прототипа как есть: это настоящее имя статьи в вике, и подгонять его под
-        // свои привычки значило бы расходиться с тем, что видит игрок.
+        // The prototype's identifier as is: this is the article's real name in the wiki, and
+        // adapting it to our own conventions would mean diverging from what the player sees.
         var path = prefix.Length == 0 ? entry.ID : prefix + "/" + entry.ID;
 
         index[path] = new Article(entry, Title(entry));
@@ -134,16 +135,16 @@ public sealed class GuidebookMount : VfsMount
         seen.Remove(entry.ID);
     }
 
-    /// <summary>Развернуть имя. Только с главного потока — зовётся из <see cref="BuildIndex"/>.</summary>
+    /// <summary>Resolve the name. Main thread only — called from <see cref="BuildIndex"/>.</summary>
     private static string Title(GuideEntryPrototype entry)
     {
-        // Имя — ключ локализации. Если перевода нет, Loc возвращает сам ключ, и показывать
-        // «guide-entry-apc» бессмысленнее, чем идентификатор.
+        // The name is a localization key. If there's no translation, Loc returns the key itself,
+        // and showing "guide-entry-apc" makes less sense than the identifier.
         var name = Loc.GetString(entry.Name);
         return name == entry.Name ? entry.ID : name;
     }
 
-    // ------------------------------------------------------------------- чтение
+    // ------------------------------------------------------------------- reading
 
     public override IReadOnlyList<VfsEntry> List(VfsPath relative, out string error)
     {
@@ -261,7 +262,7 @@ public sealed class GuidebookMount : VfsMount
         return hits;
     }
 
-    /// <summary>Перестроить индекс и сбросить кэш тел. ТОЛЬКО главный поток.</summary>
+    /// <summary>Rebuild the index and clear the body cache. MAIN THREAD ONLY.</summary>
     public override void Reload()
     {
         lock (_sync)
@@ -270,6 +271,6 @@ public sealed class GuidebookMount : VfsMount
         BuildIndex();
     }
 
-    /// <summary>Сколько статей в вике. Для проверки на старте, что монтирование не пустое.</summary>
+    /// <summary>How many articles are in the wiki. For checking at startup that the mount isn't empty.</summary>
     public int Count => Index().Count;
 }

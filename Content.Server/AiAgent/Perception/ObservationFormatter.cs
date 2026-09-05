@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using Content.Server.AiAgent.Locale;
 
 namespace Content.Server.AiAgent.Perception;
 
@@ -17,23 +18,27 @@ namespace Content.Server.AiAgent.Perception;
 /// </summary>
 public static class ObservationFormatter
 {
-    public static string FormatLine(Observation o) => o.Kind switch
+    public static string FormatLine(Observation o, AgentLocale? loc = null)
     {
-        ObsKind.Radio => $"RADIO {o.Channel} | {o.Speaker}: \"{o.Text}\"",
-        ObsKind.Speech => $"SPEECH {o.Channel} | {o.Speaker}: \"{o.Text}\"",
-        ObsKind.Announce => string.IsNullOrEmpty(o.Speaker)
-            ? $"ANNOUNCE {o.Text}"
-            : $"ANNOUNCE {o.Speaker}: \"{o.Text}\"",
-        ObsKind.Alert => $"ALERT {o.Text}",
-        ObsKind.Laws => $"LAWS {o.Text}",
-        ObsKind.Timer => $"TIMER {o.Speaker}: \"{o.Text}\"",
-        ObsKind.Arrival => string.IsNullOrEmpty(o.Text)
-            ? $"ARRIVAL {o.Speaker}"
-            : $"ARRIVAL {o.Speaker} ({o.Text})",
-        ObsKind.Note => $"NOTE о «{o.Speaker}» есть заметки ({o.Text}) — /players/{o.Channel}",
-        ObsKind.Observed => $"OBSERVED {o.Channel} | {o.Text}",
-        _ => $"EVENT {o.Text}",
-    };
+        loc ??= AgentLocale.Ru;
+        return o.Kind switch
+        {
+            ObsKind.Radio => $"RADIO {o.Channel} | {o.Speaker}: \"{o.Text}\"",
+            ObsKind.Speech => $"SPEECH {o.Channel} | {o.Speaker}: \"{o.Text}\"",
+            ObsKind.Announce => string.IsNullOrEmpty(o.Speaker)
+                ? $"ANNOUNCE {o.Text}"
+                : $"ANNOUNCE {o.Speaker}: \"{o.Text}\"",
+            ObsKind.Alert => $"ALERT {o.Text}",
+            ObsKind.Laws => $"LAWS {o.Text}",
+            ObsKind.Timer => $"TIMER {o.Speaker}: \"{o.Text}\"",
+            ObsKind.Arrival => string.IsNullOrEmpty(o.Text)
+                ? $"ARRIVAL {o.Speaker}"
+                : $"ARRIVAL {o.Speaker} ({o.Text})",
+            ObsKind.Note => loc.FormatNote(o.Speaker, o.Text, o.Channel),
+            ObsKind.Observed => $"OBSERVED {o.Channel} | {o.Text}",
+            _ => $"EVENT {o.Text}",
+        };
+    }
 
     /// <summary>
     /// Build the observation message. Returns null when there is nothing at all to say, so the
@@ -48,8 +53,11 @@ public static class ObservationFormatter
         int dropped,
         TimeSpan roundTime,
         string self,
-        bool force)
+        bool force,
+        AgentLocale? loc = null)
     {
+        loc ??= AgentLocale.Ru;
+
         if (items.Count == 0 && dropped == 0 && !force)
             return null;
 
@@ -59,7 +67,7 @@ public static class ObservationFormatter
         foreach (var kind in OrderedKinds)
         {
             foreach (var o in items.Where(i => i.Kind == kind))
-                sb.Append(FormatLine(o)).Append('\n');
+                sb.Append(FormatLine(o, loc)).Append('\n');
         }
 
         sb.Append("SELF ").Append(self).Append('\n');
@@ -71,33 +79,38 @@ public static class ObservationFormatter
     }
 
     /// <summary>
-    /// Блок событий, подмешиваемый в разговор ПОСРЕДИ хода — сразу за результатами инструментов.
+    /// The block of events mixed into the conversation MID-TURN — right after tool results.
     ///
     /// <para>
-    /// <b>Зачем отдельно от <see cref="Format"/>.</b> Здесь нет строки SELF и нет отметки времени
-    /// в начале: и то и другое принадлежит НАЧАЛУ хода, где агент осматривается заново. Посреди
-    /// хода состояние он только что прочитал из <c>effect</c> каждого инструмента, и повторять его
-    /// значило бы платить за одно и то же дважды на каждом шаге длинного хода — а ходы бывают по
-    /// двадцать пять шагов.
+    /// <b>Why separate from <see cref="Format"/>.</b> There is no SELF line here and no timestamp
+    /// at the start: both belong to the START of a turn, where the agent looks around anew. Mid-turn,
+    /// it just read the state from each tool's <c>effect</c>, and repeating it would mean paying for
+    /// the same thing twice on every step of a long turn — and turns can run to twenty-five steps.
     /// </para>
     /// <para>
-    /// Порядок видов — тот же <see cref="OrderedKinds"/>, то есть реплики сверху, а увиденное
-    /// последним. Довод тот же, что и там, и посреди хода он даже сильнее: если экипаж передумал
-    /// на середине действия, эта строка должна попасться модели первой.
+    /// The category order is the same <see cref="OrderedKinds"/>, i.e. speech on top and sightings
+    /// last. Same reasoning as there, and mid-turn it's even stronger: if the crew changed their mind
+    /// halfway through an action, that line has to reach the model first.
     /// </para>
     /// </summary>
-    public static string? FormatSteering(IReadOnlyList<Observation> items, int dropped, TimeSpan roundTime)
+    public static string? FormatSteering(
+        IReadOnlyList<Observation> items,
+        int dropped,
+        TimeSpan roundTime,
+        AgentLocale? loc = null)
     {
+        loc ??= AgentLocale.Ru;
+
         if (items.Count == 0 && dropped == 0)
             return null;
 
         var sb = new StringBuilder();
-        sb.Append("NEW_EVENTS [").Append(FormatRoundTime(roundTime)).Append("] пришло, пока ты работал:\n");
+        sb.Append("NEW_EVENTS [").Append(FormatRoundTime(roundTime)).Append("] ").Append(loc.NewEventsHeader).Append('\n');
 
         foreach (var kind in OrderedKinds)
         {
             foreach (var o in items.Where(i => i.Kind == kind))
-                sb.Append(FormatLine(o)).Append('\n');
+                sb.Append(FormatLine(o, loc)).Append('\n');
         }
 
         if (dropped > 0)
@@ -118,10 +131,10 @@ public static class ObservationFormatter
         ObsKind.Arrival,
         ObsKind.Note,
 
-        // Последними, и это не безразличие к порядку. Строк этой категории бывает много, а
-        // остальные — по одной; поставь их выше, и обращение по рации уедет под сотню строк про
-        // то, кто что куда положил, в самый конец сообщения. Реплика, на которую надо ответить,
-        // должна лежать сверху.
+        // Last, and that is not indifference to ordering. This category can have many lines while
+        // the rest have one each; put it higher and a radio call would end up buried under a hundred
+        // lines about who put what where, way down at the end of the message. The line that needs an
+        // answer has to sit on top.
         ObsKind.Observed,
     };
 

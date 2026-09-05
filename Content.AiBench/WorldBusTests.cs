@@ -9,20 +9,20 @@ using NUnit.Framework;
 namespace Content.AiBench;
 
 /// <summary>
-/// Шина мира: бюджет, приоритеты, продвижение и то, на каком потоке всё это оказывается.
+/// The world bus: budget, priorities, progression, and which thread all of this ends up on.
 ///
 /// <para>
-/// Утверждения здесь по возможности на СЧЁТЧИКАХ, а не на миллисекундах. Основание не моё —
-/// <see cref="LookCostTests"/> уже объясняет, почему: миллисекунды на сборочной машине меряют
-/// железо и шумят от холодного JIT, соседнего процесса и сборки мусора, а число срезов и номер
-/// потока не шумят вовсе.
+/// Assertions here rely on COUNTERS wherever possible, rather than on milliseconds. The reasoning
+/// isn't mine — <see cref="LookCostTests"/> already explains why: milliseconds on the build machine
+/// measure hardware and are noisy from a cold JIT, a neighboring process, and garbage collection,
+/// while the number of slices and the thread id aren't noisy at all.
 /// </para>
 /// </summary>
 [TestFixture]
 public sealed class WorldBusTests
 {
     /// <summary>
-    /// Джоб на нужное число срезов, считающий, где его исполняли.
+    /// A job for a given number of slices, which counts where it was executed.
     /// </summary>
     private sealed class CountingJob : IWorldJob
     {
@@ -49,14 +49,15 @@ public sealed class WorldBusTests
             Steps++;
             StepThreadIds.Add(Environment.CurrentManagedThreadId);
 
-            // Выбрать бюджет кадра до конца — и это не имитация нагрузки, а способ сделать тест
-            // детерминированным. Насос, отдав срез, тут же забирает недоделанную заявку обратно и
-            // крутит её дальше, ПОКА бюджет не кончился, — так и задумано. Поэтому джоб, который
-            // ничего не делает, отработает все свои срезы в одном кадре, и проверять на нём
-            // «растянулось на кадры» бессмысленно: первая версия теста ровно так и промахнулась.
+            // Exhaust the frame budget fully — this isn't a simulated load, it's a way to make the
+            // test deterministic. The pump, having handed out a slice, immediately takes the unfinished
+            // request back and keeps spinning it WHILE the budget isn't exhausted — that's intentional.
+            // So a job that does nothing would burn through all its slices in a single frame, and
+            // checking for "spread across frames" on it would be pointless: the first version of this
+            // test missed exactly that way.
             //
-            // Ожидание по самому бюджету, а не по фиксированным миллисекундам: получается ровно
-            // один срез на кадр на любой машине, без порога, который надо подбирать.
+            // Waiting on the budget itself, rather than on fixed milliseconds, gives exactly one slice
+            // per frame on any machine, with no threshold that needs tuning.
             while (!budget.Exhausted)
             {
             }
@@ -69,19 +70,20 @@ public sealed class WorldBusTests
     }
 
     /// <summary>
-    /// <b>Самый важный тест в этом файле.</b>
+    /// <b>The most important test in this file.</b>
     ///
     /// <para>
-    /// Продолжение после <c>await</c> обязано уехать с игрового потока. Свойство держится на
-    /// <c>TaskCreationOptions.RunContinuationsAsynchronously</c> у TCS внутри
-    /// <c>AtomicJob</c>, и до сих пор оно не было покрыто ни одним тестом — при том что это
-    /// единственная строчка, отделяющая сервер от того, чтобы многосекундный HTTP-вызов к модели
-    /// исполнился прямо в тике.
+    /// The continuation after <c>await</c> must move off the game thread. This property rests on
+    /// <c>TaskCreationOptions.RunContinuationsAsynchronously</c> on the TCS inside
+    /// <c>AtomicJob</c>, and until now it wasn't covered by a single test — even though it's the
+    /// one line standing between the server and a multi-second HTTP call to the model executing
+    /// right in the tick.
     /// </para>
     /// <para>
-    /// Под шиной свойство стало КРИТИЧНЕЕ, чем было: <c>Complete()</c> теперь зовётся из насоса,
-    /// который живёт внутри <c>TickUpdate</c>. Раньше встроенное продолжение попало бы хотя бы в
-    /// <c>ProcessPendingTasks</c> до обновления систем; теперь оно попало бы в середину их обхода.
+    /// Under the bus this property became MORE critical than it was: <c>Complete()</c> is now called
+    /// from the pump, which lives inside <c>TickUpdate</c>. Previously an inline continuation would at
+    /// least have landed in <c>ProcessPendingTasks</c> before the systems update; now it would land in
+    /// the middle of their traversal.
     /// </para>
     /// </summary>
     [Test]
@@ -91,7 +93,7 @@ public sealed class WorldBusTests
 
         var mainThreadId = await w.Read(() => Environment.CurrentManagedThreadId);
 
-        // Настоящий инструмент через настоящий диспетчер: проверяем боевой путь, а не макет.
+        // A real tool through a real dispatcher: we're checking the production path, not a mock.
         var task = w.System.InvokeToolForTest(w.Brain, "noop", "{\"reason\":\"тест потока\"}");
 
         int continuationThreadId = 0;
@@ -110,10 +112,10 @@ public sealed class WorldBusTests
     }
 
     /// <summary>
-    /// Многосрезовый джоб действительно растягивается на несколько кадров, а не доедается за один.
+    /// A multi-slice job actually spans several frames, rather than getting finished off in one.
     ///
-    /// Счётчик, а не часы: срезов обязано быть ровно столько, сколько джоб запросил, и каждый —
-    /// на игровом потоке.
+    /// A counter, not a clock: there must be exactly as many slices as the job requested, and each
+    /// one on the game thread.
     /// </summary>
     [Test]
     public async Task ChunkedJobSpansSeveralFrames()
@@ -134,8 +136,8 @@ public sealed class WorldBusTests
         {
             Assert.That(steps, Is.EqualTo(4), "джоб должен был отработать ровно четыре среза");
 
-            // Переносы, а не часы: счётчик не шумит и прямо утверждает то, что проверяется —
-            // работа пережила границу кадра. Три переноса на четыре среза.
+            // Deferrals, not a clock: the counter isn't noisy and directly asserts what's being
+            // checked — the work survived a frame boundary. Three deferrals for four slices.
             Assert.That(after - before, Is.EqualTo(3),
                 "работа не переносилась между кадрами — дробление не состоялось");
 
@@ -145,10 +147,12 @@ public sealed class WorldBusTests
     }
 
     /// <summary>
-    /// Смерть сессии между срезами роняет заявку как устаревшую, а не доводит её до конца.
+    /// The session dying between slices drops the request as stale, rather than letting it run
+    /// to completion.
     ///
-    /// С дроблением это перестаёт быть формальностью: ИИ вполне может быть закарден или убит
-    /// между двумя срезами одного обзора, и продолжать трогать мир от его имени нельзя.
+    /// With chunking this stops being a formality: the AI can very well get carded or killed
+    /// between two slices of the same observation, and touching the world on its behalf must not
+    /// continue.
     /// </summary>
     [Test]
     public async Task StaleGenerationStopsAJobMidway()
@@ -158,7 +162,7 @@ public sealed class WorldBusTests
         var job = new CountingJob("тест-устаревание", WorldPriority.Normal, slices: 50);
         var task = await w.Read(() => w.System.SubmitWorldJobForTest(job, job.Task));
 
-        // Дать ему начаться — и убедиться, что он ещё далеко от конца, — затем отобрать ядро.
+        // Let it get started — and confirm it's still far from done — then take the core away.
         await PoolManager.WaitUntil(w.Pair.Server, () => job.Steps >= 2, maxTicks: 120);
         Assert.That(job.Steps, Is.LessThan(50), "джоб успел доработать раньше, чем тест вмешался");
 
@@ -172,10 +176,10 @@ public sealed class WorldBusTests
     }
 
     /// <summary>
-    /// Счётчики здоровья шины на обычной работе обязаны быть нулями.
+    /// The bus's health counters must be zero under normal operation.
     ///
-    /// Переполнение означает параллелизм, которого в модуле нет (инструменты вызываются строго
-    /// последовательно), поэтому ненулевое значение здесь — сигнал о поломке, а не о нагрузке.
+    /// An overflow means concurrency that doesn't exist in this module (tools are invoked strictly
+    /// sequentially), so a nonzero value here is a sign of breakage, not of load.
     /// </summary>
     [Test]
     public async Task HealthCountersStayCleanUnderNormalUse()
@@ -193,20 +197,20 @@ public sealed class WorldBusTests
 
         Assert.Multiple(() =>
         {
-            // Ноль в глубине — главное утверждение файла. Оно означает, что учёт заявок сходится:
-            // на каждый инкремент при постановке нашёлся ровно один декремент на терминальном
-            // пути, сколько бы их ни было (успех, отмена, устаревшее поколение, исключение,
-            // отказ ждущего, переполнение). Утечка здесь означала бы, что счётчик глубины врёт, а
-            // с ним и защита от переполнения.
+            // Zero depth is the file's main assertion. It means request accounting balances out:
+            // for every increment on enqueue there was exactly one decrement on a terminal path,
+            // however many of those there are (success, cancellation, stale generation, exception,
+            // a waiter giving up, overflow). A leak here would mean the depth counter is lying, and
+            // with it the overflow protection too.
             Assert.That(depth, Is.Zero, "в очереди осталась работа после того, как все вызовы завершились");
             Assert.That(overflows, Is.Zero, "очередь переполнялась — откуда-то взялся параллелизм");
         });
 
-        // MaxWaitMs здесь НЕ проверяется, и это осознанно. Это рекорд за всё время жизни процесса,
-        // а PoolManager переиспользует сервер между тестами — значит в него натекает ожидание из
-        // соседних тестов этого же файла, которые держат джоб пятьдесят кадров НАМЕРЕННО. В
-        // одиночку тест проходил, в полном наборе падал на 2453мс; проверялся бы порядок запуска,
-        // а не шина. Для `aiagent cost` пожизненный максимум — то, что нужно; для утверждения в
-        // тесте нужен был бы счётчик за окно, которого нет.
+        // MaxWaitMs is deliberately NOT checked here. It's a record for the entire lifetime of the
+        // process, and PoolManager reuses the server across tests — meaning wait time leaks into it
+        // from neighboring tests in this same file, which hold a job for fifty frames ON PURPOSE. In
+        // isolation the test passed, but in the full suite it failed at 2453ms; what would be checked
+        // is run order, not the bus. For `aiagent cost` a lifetime max is exactly what's needed; an
+        // assertion in a test would need a windowed counter, which doesn't exist.
     }
 }

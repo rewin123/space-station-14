@@ -9,34 +9,36 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Что происходит, пока робот ИДЁТ.
+/// What happens while a borg is WALKING.
 ///
 /// <para>
-/// Файл заведён по двум жалобам с боевого сервера, которые оказались одной поломкой. Первая: «как
-/// только борг начинает двигаться, fps в игре ложится». Вторая: «борги жалуются, что не могут до
-/// меня дойти». Обе давал счётчик заторов в <c>WatchForStall</c>, который мерил не застой, а
-/// сдвиг за один тик, и сравнивал его с порогом 0.15 тайла — при том что шасси идёт спринтом
-/// 4.5 тайла в секунду, а тикрейт 30, то есть ровно 0.15 тайла за тик.
+/// This file was started from two complaints off the live server that turned out to be one
+/// bug. First: "as soon as a borg starts moving, the game's fps tanks." Second: "borgs
+/// complain they can't reach me." Both were caused by the stall counter in
+/// <c>WatchForStall</c>, which measured not staleness but per-tick displacement, and compared
+/// it against a threshold of 0.15 tiles — while the chassis walks at a sprint speed of
+/// 4.5 tiles per second and the tickrate is 30, which is exactly 0.15 tiles per tick.
 /// </para>
 /// <para>
-/// Идущий робот получался стоящим КАЖДЫЙ тик. Дальше по накатанной: раз в тридцать тиков он
-/// объявлял непроходимым тайл, по которому шёл, и перекладывал маршрут. Перепланировка — это
-/// полный A* по станции, и идёт он прямо в <c>Update</c>, мимо шины мира и мимо её профиля.
-/// Отсюда и лаги, которых не видно в профиле, и удлиняющийся от попытки к попытке путь, который
-/// в конце концов кончается «дороги нет».
+/// A walking robot ended up looking stalled on EVERY tick. From there the rest followed: once
+/// every thirty ticks it declared the tile it was walking on impassable and replanned its
+/// route. Replanning is a full A* over the station, and it runs directly inside <c>Update</c>,
+/// bypassing the world bus and its budget entirely. Hence the lag that never shows up in the
+/// profiler, and a path that grows longer with every attempt until it eventually ends in "no
+/// route."
 /// </para>
 /// <para>
-/// Поэтому здесь два сторожа с разных сторон: один смотрит на сам счётчик, другой — на его
-/// последствия. Ни один не спрашивает у часов, сколько миллисекунд: миллисекунды на сборочной
-/// машине меряют железо, а число перепланировок на чистой дороге обязано быть нулём независимо
-/// от того, где тест гоняется.
+/// So there are two guards here approaching it from different sides: one watches the counter
+/// itself, the other watches its consequences. Neither asks the clock how many milliseconds
+/// elapsed: milliseconds on the build machine measure hardware, while the number of replans on
+/// a clear road is required to be zero regardless of where the test runs.
 /// </para>
 /// </summary>
 [TestFixture]
 [Category("Scenario")]
 public sealed class RouteCostTests
 {
-    /// <summary>Поставить робота, занять его и дождаться готовности чужого навмеша.</summary>
+    /// <summary>Spawn a borg, claim it, and wait for the foreign navmesh to become ready.</summary>
     private static async Task<EntityUid> Ready(AiStation w)
     {
         var ent = w.Ent;
@@ -49,7 +51,7 @@ public sealed class RouteCostTests
             Assert.That(sys.TryClaim(borg, out var why), Is.True, why);
         });
 
-        // Навмеш рулевого строится асинхронно, а проверка проходимости у нас идёт по нему.
+        // The pilot's navmesh builds asynchronously, and our passability check relies on it.
         for (var i = 0; i < 80; i++)
         {
             var ready = await w.Read(() =>
@@ -68,24 +70,26 @@ public sealed class RouteCostTests
     }
 
     /// <summary>
-    /// На ходу счётчик заторов регулярно обнуляется.
+    /// While walking, the stall counter regularly resets to zero.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Главное утверждение файла и единственное, которое смотрит прямо на поломку. Всё остальное —
-    /// её последствия, и они зависят от карты, дверей и того, кто стоит в коридоре.
+    /// The main assertion of this file, and the only one that looks directly at the bug. Everything
+    /// else is a consequence of it, and those depend on the map, the doors, and who is standing in
+    /// the corridor.
     /// </para>
     /// <para>
-    /// Проверяется не величина счётчика, а то, что он ОБНУЛЯЕТСЯ. Просто «счётчик мал» здесь не
-    /// годится: робот на настоящей станции честно встаёт у каждой закрытой створки на десяток
-    /// тиков, пока её не нажмут, и счётчик в этот момент обязан расти — за этим он и заведён.
-    /// Сломанный счётчик отличается не высотой, а тем, что не опускается никогда: на крейсерском
-    /// ходу он рос на единицу каждый тик и за короткий проход добирался до сотни.
+    /// This checks not the counter's magnitude but that it RESETS TO ZERO. A simple "counter stays
+    /// low" check would not do here: a robot on a real station genuinely stands still at every
+    /// closed door for a dozen ticks until it's opened, and the counter is expected to grow at that
+    /// moment — that's exactly what it's for. A broken counter is not distinguished by its height
+    /// but by the fact that it never drops: at cruising speed it grew by one every tick and reached
+    /// a hundred over a short walk.
     /// </para>
     /// <para>
-    /// Замер на стенде, ради которого написана эта формулировка: на разгоне сдвиг за тик идёт
-    /// 0.0667, 0.1130, 0.1335, 0.1427 и упирается в 0.1500 — ровно в старый порог, ни разу его не
-    /// перешагнув. Это и есть 4.5 тайла в секунду при тикрейте 30.
+    /// The bench measurement behind this wording: during acceleration the per-tick displacement
+    /// runs 0.0667, 0.1130, 0.1335, 0.1427 and settles at 0.1500 — exactly at the old threshold,
+    /// never crossing it. That is exactly 4.5 tiles per second at a tickrate of 30.
     /// </para>
     /// </remarks>
     [Test]
@@ -100,8 +104,8 @@ public sealed class RouteCostTests
         var r = await w.InvokeOn(borg, "goto", "{\"to\":\"Kitchen\"}");
         Assert.That(r.Ok, Is.True, $"goto отказал: {r.Error} {r.Detail}");
 
-        // Крейсерский ход: тик, на котором робот прошёл почти полный шаг. Именно это состояние
-        // старый счётчик и записывал в заторы.
+        // Cruising speed: a tick in which the robot covered almost a full step. This is exactly the
+        // state that the old counter used to record as a stall.
         const float Cruising = 0.12f;
 
         var moved = 0f;
@@ -130,8 +134,8 @@ public sealed class RouteCostTests
 
             if (step < Cruising)
             {
-                // Робот действительно стоит — у двери, в толпе, на разгоне. Счётчик здесь обязан
-                // расти, и серию мы прерываем, а не засчитываем.
+                // The robot is genuinely standing still — at a door, in a crowd, still accelerating.
+                // The counter is expected to grow here, and we break the streak instead of counting it.
                 run = 0;
                 continue;
             }
@@ -151,23 +155,23 @@ public sealed class RouteCostTests
         Assert.That(cruisingTicks, Is.GreaterThan(30),
             "крейсерского хода почти не было — мерить нечего");
 
-        // Уход на полтайла занимает три-четыре тика, плюс запас на разгон после двери. Серия в
-        // десятки тиков означает, что обнуления не происходит вовсе, то есть счётчик снова мерит
-        // сдвиг за один тик.
+        // Moving half a tile takes three to four ticks, plus some slack for accelerating after a
+        // door. A streak of dozens of ticks means the counter never resets at all, i.e. it is again
+        // measuring per-tick displacement.
         Assert.That(worstRun, Is.LessThan(12),
             $"на крейсерском ходу счётчик не обнулялся {worstRun} тиков подряд — " +
             "он снова мерит сдвиг за тик, а не застой");
     }
 
     /// <summary>
-    /// Робот не перекладывает маршрут, по которому спокойно идёт.
+    /// The robot does not replan a route it is calmly walking along.
     /// </summary>
     /// <remarks>
-    /// Сторож последствия. Перепланировка стоит полного A* по станции и идёт на главном потоке
-    /// мимо бюджета шины, а вдобавок травит собственный коридор робота: перед ней
-    /// <c>WatchForStall</c> объявляет непроходимым тайл, к которому робот шёл. На боевом раунде
-    /// это выглядело как путь до Tools, растущий от попытки к попытке — 6, 18, 35, 43, 64 тайла —
-    /// и кончающийся «дороги нет» в трёх шагах от цели.
+    /// This guards the consequence. Replanning costs a full A* over the station and runs on the
+    /// main thread past the bus budget, and on top of that it poisons the robot's own corridor:
+    /// right before it, <c>WatchForStall</c> declares the tile the robot was heading toward
+    /// impassable. On the live round this showed up as the path to Tools growing from attempt to
+    /// attempt — 6, 18, 35, 43, 64 tiles — and ending in "no route" three steps from the target.
     /// </remarks>
     [Test]
     public async Task Walking_DoesNotReplanTheRouteItIsWalking()
@@ -212,7 +216,7 @@ public sealed class RouteCostTests
 
         Assert.Multiple(() =>
         {
-            // Один — это сам goto. Всё сверх него на чистой дороге и есть перепланировка.
+            // One is the goto itself. Anything beyond that on a clear road is a replan.
             Assert.That(searches, Is.EqualTo(1),
                 $"на чистой дороге маршрут строился {searches} раз вместо одного");
 

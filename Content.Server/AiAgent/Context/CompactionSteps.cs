@@ -22,7 +22,7 @@ public sealed class CompactionHooks
 
     /// <summary>The review. Optional because <c>ai.curator_enabled</c> can turn it off.</summary>
     /// <summary>
-    /// Разбор отрезка. Возвращает короткий отчёт о том, что записал, или <c>null</c>.
+    /// Review of the stretch. Returns a short report of what it wrote, or <c>null</c>.
     /// </summary>
     public Func<Task<string?>>? Curate { get; init; }
 }
@@ -53,7 +53,7 @@ public sealed class CompactionContext
     public int BeforeTokens { get; set; }
     public int TailCount { get; set; }
 
-    /// <summary>Отчёт разбора, если он что-то записал. Пишет шаг curator, читает шаг report.</summary>
+    /// <summary>The review's report, if it wrote anything. Written by the curator step, read by the report step.</summary>
     public string? CuratorReport { get; set; }
 }
 
@@ -100,7 +100,7 @@ public static class CompactionSteps
     /// <summary>
     /// Is a cut possible at all? Checked BEFORE promising the crew anything.
     ///
-    /// The first live run announced "буферы переполнены, провожу очистку памяти" and then cancelled,
+    /// The first live run announced "buffers full, running memory cleanup" and then cancelled,
     /// because a single long turn has no second boundary to cut at. Telling the crew you are doing
     /// something and then not doing it is worse than staying quiet.
     /// </summary>
@@ -259,24 +259,26 @@ public static class CompactionSteps
     }
 
     /// <summary>
-    /// Вернуть агенту отчёт о том, что разбор записал.
+    /// Return the review's report to the agent, describing what it wrote.
     ///
     /// <para>
-    /// Раньше вердикт уходил только в лог. Агент не знал, что вообще что-то записал: разбор идёт
-    /// на копии цепочки и исчезает вместе с ней. Правило «разбор не загрязняет игровую историю»
-    /// этим сужается сознательно — стенограмма разбора по-прежнему не попадает в диалог ни одной
-    /// строкой, попадает только вывод в одну-две фразы.
+    /// The verdict used to go only into the log. The agent had no way of knowing it had written
+    /// anything at all: the review runs on a copy of the chain and disappears with it. This narrows
+    /// the "the review does not contaminate the game history" rule deliberately — the review's
+    /// transcript still never lands in the dialogue as a single line, only its output in one or two
+    /// sentences does.
     /// </para>
     /// <para>
-    /// <b>Место в ритуале — не случайность.</b> Раньше свёртки отчёт был бы стёрт: <c>ReplaceBody</c>
-    /// чистит тело. Позже перестройки префикса он разошёлся бы с зоной 0: отчёт говорит «записал в
-    /// /memory.md», а блок ПАМЯТЬ ещё показывал бы прежний текст. Между ними — единственная точка,
-    /// где обе вещи приезжают к агенту согласованными.
+    /// <b>Its place in the ritual is not an accident.</b> Before the fold, the report would be
+    /// erased: <c>ReplaceBody</c> clears the body. After the prefix rebuild, it would fall out of
+    /// sync with zone 0: the report says "wrote to /memory.md" while the MEMORY block would still
+    /// show the old text. Between the two is the single point where both things arrive at the agent
+    /// consistent with each other.
     /// </para>
     /// <para>
-    /// Кладётся через <c>AppendUserOrMerge</c>, а не <c>AppendUser</c>: свёртка только что
-    /// положила в тело одно user-сообщение со сводкой, и второе подряд сфабриковало бы границу
-    /// хода там, где её нет.
+    /// Placed through <c>AppendUserOrMerge</c>, not <c>AppendUser</c>: the fold just put one
+    /// user message with the summary into the body, and a second one right after it would fabricate
+    /// a turn boundary where there isn't one.
     /// </para>
     /// </summary>
     private sealed class ReportStep : ICompactionStep

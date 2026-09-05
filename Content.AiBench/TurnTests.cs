@@ -76,7 +76,7 @@ public sealed class TurnTests
             return this;
         }
 
-        /// <summary>Двойник noop: ничего не делает и закрывает ход.</summary>
+        /// <summary>A noop double: does nothing and ends the turn.</summary>
         public Harness WithNoopTool(string name = "noop")
         {
             Registry.Register(new AiTool
@@ -304,7 +304,7 @@ public sealed class TurnTests
             "и после этого исчезнуть из промпта");
     }
 
-    // -------------------------------------------------- обещал и не сделал
+    // -------------------------------------------------- promised and didn't deliver
 
     [Test]
     public async Task PromisedAnActionAndDidNothing_IsRemindedOnce()
@@ -360,13 +360,13 @@ public sealed class TurnTests
         Assert.That(h.State.BrokenPromises, Is.Zero);
     }
 
-    // ------------------------------------------------------------- ничего не делать
+    // ------------------------------------------------------------- doing nothing
 
     [Test]
     public async Task Noop_EndsTheTurnOnTheSpot()
     {
-        // Весь смысл инструмента. Если после noop петля сходит к модели ещё раз, он не экономит
-        // ничего — а ровно за этим он и заведён.
+        // The whole point of the tool. If the loop goes back to the model again after noop, it
+        // saves nothing at all — which is exactly what it was built for.
         var h = new Harness().WithNoopTool();
         var llm = new ScriptedLlmClient()
             .ThenCall("noop", """{"reason":"чужой разговор"}""")
@@ -385,12 +385,13 @@ public sealed class TurnTests
     [Test]
     public async Task Noop_IsSilentWhereProseWouldHaveBeenNudged()
     {
-        // Сравнение с ProseWithoutSpeaking_IsNudgedThenDelivered на ТОМ ЖЕ наблюдении.
+        // A comparison with ProseWithoutSpeaking_IsNudgedThenDelivered on the SAME observation.
         //
-        // Addressed истинно от любой строки рации, не только обращённой к ИИ. Значит на оживлённом
-        // канале модель, которой нечего сказать, отвечала прозой и получала «этого никто не
-        // услышал» — подталкивание высказаться там, где правильный ответ молчание. Из этой самой
-        // петли растёт наблюдённая привычка ставить «Экипаж, Аксиома на связи» в общий канал.
+        // Addressed is true for any radio line, not just one directed at the AI. So on a busy
+        // channel a model with nothing to say used to answer with prose and get "nobody heard
+        // this" — a nudge to speak up exactly where the right answer is silence. This very loop is
+        // what grows the observed habit of putting "Crew, this is Axioma, over" on the general
+        // channel.
         var h = new Harness().WithNoopTool();
         var llm = new ScriptedLlmClient().ThenCall("noop", "{}");
 
@@ -408,8 +409,9 @@ public sealed class TurnTests
     [Test]
     public async Task NoopAfterAnUnkeptPromise_StillReminds()
     {
-        // Иначе noop стал бы способом сказать «сейчас открою» и молча закрыть ход: экипаж стоит у
-        // двери, а агент уже спит. Проверка обещания старше noop и должна его переживать.
+        // Otherwise noop would become a way to say "opening it now" and quietly end the turn: the
+        // crew is standing at the door while the agent is already asleep. The promise check
+        // predates noop and must outlive it.
         var h = new Harness().WithSpeechTool().WithNoopTool();
         var llm = new ScriptedLlmClient()
             .ThenCall("radio", """{"channel":"Common","text":"Открою дверь, сейчас посмотрю."}""")
@@ -432,7 +434,7 @@ public sealed class TurnTests
     [Test]
     public async Task NoopAfterKeepingThePromise_JustEnds()
     {
-        // Обратная половина: сказал, сделал, закрыл ход. Упрекать не за что.
+        // The reverse half: said it, did it, ended the turn. Nothing to reproach.
         var h = new Harness().WithSpeechTool().WithDeviceTool().WithNoopTool();
         var llm = new ScriptedLlmClient()
             .ThenCall("radio", """{"channel":"Common","text":"Открою дверь."}""")
@@ -446,8 +448,9 @@ public sealed class TurnTests
             Assert.That(h.State.BrokenPromises, Is.Zero);
             Assert.That(ctx.Exit, Is.EqualTo(TurnExit.Idled));
 
-            // Exit и Delivery ортогональны: ход закончился по своей воле, а экипаж получил ответ
-            // инструментом. Одно про то, почему остановились, другое — про то, услышали ли.
+            // Exit and Delivery are orthogonal: the turn ended of its own accord, and the crew got
+            // an answer through the tool. One is about why it stopped, the other about whether
+            // anyone heard.
             Assert.That(ctx.Delivery, Is.EqualTo(TurnDelivery.SpokeByTool));
         });
     }
@@ -455,7 +458,8 @@ public sealed class TurnTests
     [Test]
     public async Task NoopAlongsideAnswering_ClosesTheTurnToo()
     {
-        // Ответить и тем же шагом закрыть ход — законно: «закрывает ход» ортогонально речи.
+        // Answering and ending the turn in the same step is legitimate: "ends the turn" is
+        // orthogonal to speech.
         var h = new Harness().WithSpeechTool().WithNoopTool();
         var llm = new ScriptedLlmClient()
             .ThenCall("radio", """{"channel":"Binary","text":"Принято."}""")

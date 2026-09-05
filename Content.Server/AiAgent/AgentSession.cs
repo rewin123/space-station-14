@@ -9,6 +9,7 @@ using Content.Server.AiAgent.Llm;
 using Content.Server.AiAgent.Perception;
 using Content.Server.AiAgent.Threading;
 using Content.Server.AiAgent.Tools;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Turn;
 
 namespace Content.Server.AiAgent;
@@ -60,10 +61,12 @@ public sealed class AgentSession : IDisposable
     private readonly Func<string, Task> _announce;
     private readonly Func<string, string?, Task<bool>> _speak;
     /// <summary>
-    /// Разбор отрезка. Возвращает короткий отчёт, если что-то записал, и <c>null</c>, если нет.
+    /// Review of a stretch of history. Returns a short report if it wrote anything, and
+    /// <c>null</c> if not.
     ///
-    /// Возвращаемое значение появилось вместе с отчётом в диалоге: раньше вердикт уходил только в
-    /// лог, и агент не знал, что вообще что-то записал, — разбор шёл на копии и исчезал вместе с ней.
+    /// The return value appeared together with the report in the conversation: it used to be that
+    /// the verdict only went to the log and the agent had no way of knowing it had written anything
+    /// at all — the review ran on a copy and vanished with it.
     /// </summary>
     private readonly Func<Task<string?>>? _curate;
     private readonly Func<(string SystemPrompt, string ToolsJson)> _rebuildPrefix;
@@ -73,10 +76,10 @@ public sealed class AgentSession : IDisposable
     /// <summary>The debug bus, or null when it is off. The loop uses it only for the stats sample.</summary>
     private readonly IAgentEventSink? _sink;
 
-    /// <summary>Как часто пробовать после того, как отказы перешли порог.</summary>
+    /// <summary>How often to retry once failures have crossed the threshold.</summary>
     private const int DegradedRetryMs = 60_000;
 
-    /// <summary>Сказать про разреженный режим один раз, а не на каждом отказе.</summary>
+    /// <summary>Announce degraded mode once, not on every failure.</summary>
     private bool _notedDegraded;
 
     /// <summary>How the last turn ended, for diagnostics and for tests that assert on the shape.</summary>
@@ -109,10 +112,13 @@ public sealed class AgentSession : IDisposable
     /// </summary>
     public int ContextLimit { get; private set; }
 
-    /// <summary>Тело, в котором живёт агент, — единственная дверь ядра к игровому миру.</summary>
+    /// <summary>The body the agent lives in — the core's only door to the game world.</summary>
     public AgentBody Body { get; }
 
-    /// <summary>Сущность тела. Оставлено свойством, чтобы не переписывать полсотни мест обращения.</summary>
+    /// <summary>Prompt language frozen on the body. Tools, SELF and observations all read this.</summary>
+    public AgentLocale Locale => AgentLocale.Of(Body.Language);
+
+    /// <summary>The body's entity. Kept as a property so as not to rewrite fifty call sites.</summary>
     public EntityUid Brain => Body.Owner;
 
     /// <summary>Everything mutable about this agent. See <see cref="AgentState"/> for why.</summary>
@@ -132,11 +138,12 @@ public sealed class AgentSession : IDisposable
     public ObservationQueue Queue { get; }
 
     /// <summary>
-    /// Фоновые скрипты этого агента — <c>null</c>, пока режим скрипта не включён.
+    /// This agent's background scripts — <c>null</c> until script mode is enabled.
     ///
-    /// Живёт на сессии, а не в системе, ровно по той же причине, что и всё остальное здесь:
-    /// процессы принадлежат агенту и обязаны умереть вместе с ним. Мира эта таблица не касается —
-    /// её процессы ходят в мир тем же диспетчером, что и обычный ход.
+    /// Lives on the session rather than in the system, for exactly the same reason as everything
+    /// else here: the processes belong to the agent and must die together with it. This table does
+    /// not touch the world itself — its processes reach the world through the same dispatcher as an
+    /// ordinary turn.
     /// </summary>
     public Core.Scripting.ScriptProcessTable? Scripts { get; set; }
 
@@ -144,27 +151,29 @@ public sealed class AgentSession : IDisposable
     public Handles.EntityHandleRegistry Handles { get; } = new();
 
     /// <summary>
-    /// Кому за эту смену уже напоминали, что на него есть заметка.
+    /// Who has already been reminded this shift that there is a note about them.
     ///
-    /// Живёт на сессии, а не в <see cref="AgentState"/>, намеренно: <c>AgentState</c> уезжает в
-    /// снапшот и восстанавливается, и поле здесь поменяло бы схему снапшота ради того, чтобы после
-    /// рестарта посреди раунда не подсказать во второй раз. Одна лишняя строка дешевле схемы.
+    /// Lives on the session rather than in <see cref="AgentState"/> deliberately: <c>AgentState</c>
+    /// goes into the snapshot and is restored, and a field here would change the snapshot schema
+    /// just so that, after a restart mid-round, the reminder is not given a second time. One extra
+    /// line is cheaper than a schema.
     ///
-    /// Сброса не требуется: сессия умирает вместе с раундом (<c>OnRoundCleanup</c> зовёт
-    /// <c>ReleaseAll</c>), а вместе с ней и это множество. Комментарий здесь именно затем, чтобы
-    /// никто не добавил «забытую» очистку.
+    /// No reset is needed: the session dies together with the round (<c>OnRoundCleanup</c> calls
+    /// <c>ReleaseAll</c>), and this set with it. This comment exists precisely so that nobody adds a
+    /// "forgotten" cleanup for it.
     ///
-    /// Читается и пишется с главного потока, из обработчиков речи; лок — на случай, если однажды
-    /// это перестанет быть правдой.
+    /// Read and written from the main thread, from speech handlers; the lock is here in case that
+    /// ever stops being true.
     /// </summary>
     private readonly HashSet<string> _notedPeople = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Первая ли это реплика этого человека за смену. Дальше вызывающий решает, есть ли о чём
-    /// напоминать.
+    /// Is this the first utterance from this person this shift. The caller then decides whether
+    /// there is anything to remind them about.
     ///
-    /// Имя запоминается и тогда, когда заметки нет: иначе безымянный болтун стоил бы обращения к
-    /// локу хранилища на каждую свою реплику, а так — одно за смену.
+    /// The name is remembered even when there is no note: otherwise a nameless chatterbox would
+    /// cost a lock acquisition on the store for every line they say, whereas this way it is one per
+    /// shift.
     /// </summary>
     public bool FirstUtteranceOf(string speaker)
     {
@@ -194,7 +203,7 @@ public sealed class AgentSession : IDisposable
     /// Text an operator injected through the debug API, for the next turn. Same rule as
     /// <see cref="CurateRequested"/>: asked for from outside, applied by the loop.
     /// </summary>
-    public AgentInbox Inbox { get; } = new();
+    public AgentInbox Inbox { get; }
 
     /// <summary>
     /// Released whenever something the agent should look at arrives — a radio line, speech, an
@@ -233,18 +242,18 @@ public sealed class AgentSession : IDisposable
     public Task Loop { get; private set; } = Task.CompletedTask;
 
     /// <summary>
-    /// Записать снимок диалога на диск. Вешается после конструктора — как <c>Arrived</c> у очереди
-    /// наблюдений, и по той же причине: делегат замыкается на систему, которой в момент постройки
-    /// сессии ещё нечего о ней сказать.
+    /// Write a snapshot of the conversation to disk. Wired up after the constructor — like
+    /// <c>Arrived</c> on the observation queue, and for the same reason: the delegate closes over
+    /// the system, which at the moment the session is built has nothing to say about it yet.
     ///
-    /// Зовётся ТОЛЬКО из петли, то есть с потока агента. Всё, что ему нужно, — хранилище (свои
-    /// файлы), идентификатор (константа) и номер раунда (снятый на главном потоке
-    /// <c>volatile int</c>). Ни одного обращения к миру, иначе это пришлось бы маршалить и вся
-    /// затея потеряла бы смысл.
+    /// Called ONLY from the loop, that is, from the agent's thread. All it needs is storage (its
+    /// own files), an identifier (a constant) and the round number (a <c>volatile int</c> captured
+    /// on the main thread). Not a single access to the world, or it would have to be marshalled and
+    /// the whole point would be lost.
     /// </summary>
     public Action? Persist { get; set; }
 
-    /// <summary>Когда снимок последний раз лёг на диск. Читает <c>Release</c>, чтобы решить, нужен ли аварийный.</summary>
+    /// <summary>When the snapshot last hit disk. <c>Release</c> reads this to decide whether an emergency save is needed.</summary>
     public DateTime LastPersistedUtc { get; private set; } = DateTime.MinValue;
 
     private void SaveSnapshot()
@@ -259,8 +268,9 @@ public sealed class AgentSession : IDisposable
         }
         catch (Exception e)
         {
-            // Не роняем ход из-за диска. Молча тоже нельзя: «агент забыл смену» — это то, что
-            // замечают через сутки и объясняют чем угодно, кроме несохранённого файла.
+            // Don't fail the turn over disk. Silence isn't acceptable either: "the agent forgot the
+            // shift" is the kind of thing noticed a day later and blamed on anything except an
+            // unsaved file.
             _sawmill.Warning($"снапшот не сохранён: {e.GetType().Name}: {e.Message}");
         }
     }
@@ -312,7 +322,8 @@ public sealed class AgentSession : IDisposable
         Cache = new CacheMetrics(sawmill);
         Compactor = new Compactor(llm, compaction, Cache, sawmill, Journal);
         Dispatcher = new ToolDispatcher(registry, sawmill);
-        _turn = new TurnRunner(llm, registry, Dispatcher, queue, State, Cache, Journal, speak, sawmill);
+        Inbox = new AgentInbox(Locale.OperatorPrefix);
+        _turn = new TurnRunner(llm, registry, Dispatcher, queue, State, Cache, Journal, speak, sawmill, Locale);
 
         // Here rather than in the field initializer: the conversation is built before this
         // constructor body runs (AgentState's field initializer builds it), so it cannot take the
@@ -417,15 +428,15 @@ public sealed class AgentSession : IDisposable
                 idleStreak = 0;
                 await RunTurnAsync(perception, ct).ConfigureAwait(false);
 
-                // Ход, закрытый noop, — тоже простой.
+                // A turn closed by noop is also idle.
                 //
-                // Модель прямо сказала, что вмешиваться не нужно; продолжать опрашивать её в полном
-                // темпе значит платить за тот же ответ каждые несколько секунд. Считаем такой ход
-                // наравне с тиком, на котором вообще нечего было наблюдать, — после трёх подряд
-                // петля сама переходит на tick_seconds_idle.
+                // The model explicitly said intervention is not needed; continuing to poll it at
+                // full pace means paying for the same answer every few seconds. Count such a turn
+                // the same as a tick with nothing at all to observe — after three in a row the loop
+                // switches itself to tick_seconds_idle.
                 //
-                // На force это не влияет вредно: пока экипаж говорит, наблюдение непустое и
-                // строится независимо от idleStreak.
+                // This does not harm force: while the crew is talking, the observation is non-empty
+                // and gets built regardless of idleStreak.
                 if (LastTurn?.Exit == TurnExit.Idled)
                     idleStreak++;
 
@@ -438,32 +449,36 @@ public sealed class AgentSession : IDisposable
                 State.ConsecutiveFailures = 0;
                 LastError = null;
 
-                // Снимок пишется ЗДЕСЬ, в потоке агента, а не раз в минуту из Update.
+                // The snapshot is written HERE, on the agent's thread, not once a minute from Update.
                 //
-                // Раньше это делал главный поток: `Conv.Snapshot()` под локом, который в тот же
-                // момент держал агент, затем сериализация тела (при 83к токенов это сотни
-                // килобайт JSON) и блокирующая запись файла — всё внутри тика. Здесь ничего этого
-                // в кадре нет: тело принадлежит петле, сериализация в этом же потоке уже
-                // происходит на каждый запрос к модели, а лок никем не оспаривается.
+                // The main thread used to do this: `Conv.Snapshot()` under a lock the agent held at
+                // the same moment, then serializing the body (at 83k tokens that's hundreds of
+                // kilobytes of JSON) and a blocking file write — all inside the tick. None of that
+                // is in the frame here: the body belongs to the loop, serialization on this same
+                // thread already happens on every model request, and the lock is contended by
+                // nobody.
                 //
-                // После каждого хода, а не раз в минуту: цена упала настолько, что экономить
-                // больше не на чем, а потеря при аварии сократилась с минуты до одного хода.
+                // After every turn, not once a minute: the cost dropped low enough that there is
+                // nothing left to save by batching, and the loss on a crash shrank from a minute to
+                // one turn.
                 SaveSnapshot();
             }
-            // ТОЛЬКО наша отмена, и это `when` — не украшение.
+            // ONLY our own cancellation, and this `when` is not decoration.
             //
-            // `HttpClient.Timeout` бросает `TaskCanceledException`, а он НАСЛЕДУЕТ
-            // `OperationCanceledException`. Без фильтра один запрос, упёршийся в
-            // `ai.request_timeout` (180с), выходил сюда и убивал петлю до конца раунда — мимо
-            // всего разреженного режима ниже, написанного ровно на этот случай. В логе при этом
-            // не оставалось ни одной ошибки: `LastError` = "cancelled", как при штатном
-            // закарживании. Экипаж читал это как «ИИ закардили» и шёл искать его к ядру.
+            // `HttpClient.Timeout` throws `TaskCanceledException`, which INHERITS
+            // `OperationCanceledException`. Without the filter, one request that hit
+            // `ai.request_timeout` (180s) would come out here and kill the loop for the rest of the
+            // round — bypassing the whole degraded mode below, written for exactly this case. And
+            // the log would show no error at all: `LastError` = "cancelled", the same as for
+            // ordinary carding. The crew would read that as "the AI got carded" and go looking for
+            // it at the core.
             //
-            // Насколько близко к краю: замеренный максимум хода в бою 16.08 — 163.0с при
-            // потолке 180. Запас был семнадцать секунд, и в раунде 72 его не хватило.
+            // How close to the edge: the measured maximum turn duration in the 16.08 combat run was
+            // 163.0s against a ceiling of 180. The margin was seventeen seconds, and in round 72 it
+            // was not enough.
             //
-            // Теперь таймаут модели — обычный отказ: он идёт в общий обработчик, наращивает
-            // ConsecutiveFailures и уходит на backoff, как любая другая недоступность провайдера.
+            // Now a model timeout is an ordinary failure: it goes to the general handler, increments
+            // ConsecutiveFailures and goes to backoff, like any other provider unavailability.
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 LastError = "cancelled";
@@ -484,16 +499,17 @@ public sealed class AgentSession : IDisposable
                 LastError = $"{e.GetType().Name}: {e.Message}";
                 _sawmill.Error($"agent turn failed ({ConsecutiveFailures}): {LastError}");
 
-                // Порог отказов больше НЕ убивает петлю.
+                // The failure threshold no longer kills the loop.
                 //
-                // Раньше здесь стоял `break`, и это означало, что три-пять минут недоступности
-                // модели выключают ИИ до конца раунда. Вернуть его было нечем: watchdog'а нет, а
-                // ядро оставалось занято. В игре при этом не появлялось ни одного признака —
-                // экипаж читал молчание как «ИИ закардили» и шёл искать его к ядру.
+                // A `break` used to sit here, and that meant three to five minutes of model
+                // unavailability turned the AI off for the rest of the round. There was no way to
+                // bring it back: no watchdog, and the core stayed claimed. Nothing in the game
+                // showed any sign of it — the crew read the silence as "the AI got carded" and went
+                // looking for it at the core.
                 //
-                // Теперь порог лишь переводит агента в разреженный режим: он продолжает
-                // пробовать раз в минуту и возвращается сам, когда провайдер оживёт. Спиннинга
-                // ядра, ради которого стоял `break`, при таком интервале нет.
+                // Now the threshold only puts the agent into degraded mode: it keeps trying once a
+                // minute and comes back on its own once the provider revives. There is no core
+                // spinning at that interval, which is what the `break` was there to prevent.
                 var degraded = ConsecutiveFailures >= _options.MaxConsecutiveFailures();
 
                 if (degraded && !_notedDegraded)
@@ -666,9 +682,9 @@ public sealed class AgentSession : IDisposable
         {
             var report = await _curate().ConfigureAwait(false);
 
-            // Здесь, в отличие от ритуала, свёртки не было: тело кончается результатом инструмента
-            // или репликой модели, и отдельное user-сообщение законно. Зона 0 при этом остаётся
-            // прежней до следующей перестройки префикса — ровно как после любой другой записи.
+            // Unlike the ritual, there was no compaction here: the body ends with a tool result or
+            // a model reply, and a separate user message is legitimate. Zone 0 stays as it was
+            // until the next prefix rebuild — exactly as after any other write.
             if (!string.IsNullOrWhiteSpace(report))
                 Conv.AppendUserOrMerge(report!);
         }

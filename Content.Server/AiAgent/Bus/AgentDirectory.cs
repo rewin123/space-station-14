@@ -6,93 +6,94 @@ using System.Linq;
 namespace Content.Server.AiAgent.Bus;
 
 /// <summary>
-/// Один агент, каким его видит HTTP-поток.
+/// One agent, as the HTTP thread sees it.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Хендл несёт <b>делегаты</b>, а не ссылку на <see cref="AgentSession"/>, и это тот же довод, по
-/// которому делегаты несёт <c>AgentBody</c>: маршрутизатор не должен знать о сессии ничего, а тест
-/// не должен уметь её собирать, чтобы проверить маршрут. Заодно это единственное, что физически
-/// мешает HTTP-потоку дотянуться до словаря <c>_sessions</c>, который мутирует главный поток.
+/// The handle carries <b>delegates</b>, not a reference to <see cref="AgentSession"/>, and that is
+/// the same argument by which <c>AgentBody</c> carries delegates: the router must know nothing about
+/// the session, and a test must not be able to construct one just to exercise the route. This is
+/// also the one thing that physically stops the HTTP thread from reaching the <c>_sessions</c>
+/// dictionary, which the main thread mutates.
 /// </para>
 /// <para>
-/// <see cref="Alive"/> — единственное изменяемое поле, и это не небрежность. Живость тела у ядра
-/// считается через <c>IsPlayable</c>, то есть обращением к <c>EntityManager</c>, а туда с чужого
-/// потока ходить нельзя. Поэтому значение снимает главный поток раз в секунду, а HTTP-поток только
-/// читает. Отсюда же ограничение: <b>годится для индикатора и ни для чего больше</b> — в первую
-/// секунду после смерти оно врёт.
+/// <see cref="Alive"/> is the only mutable field, and that is not an oversight. The core's body
+/// liveness is computed through <c>IsPlayable</c>, i.e. by touching <c>EntityManager</c>, and that
+/// cannot be reached from a foreign thread. So the main thread samples the value once a second, and
+/// the HTTP thread only reads it. Hence the limit too: <b>good for an indicator and nothing else</b>
+/// — it lies for the first second after death.
 /// </para>
 /// </remarks>
 public sealed class AgentHandle
 {
-    /// <summary>Идентификатор тела: <c>core</c>, <c>borg-1</c>, <c>combat-2</c>.</summary>
+    /// <summary>Body identifier: <c>core</c>, <c>borg-1</c>, <c>combat-2</c>.</summary>
     public required string Id { get; init; }
 
-    /// <summary>Как агента зовут в игре.</summary>
+    /// <summary>The agent's in-game name.</summary>
     public required string Name { get; init; }
 
-    /// <summary>Сущность мозга — тем же числом, каким она приходит в кадре <c>session.started</c>.</summary>
+    /// <summary>The brain entity — the same number that arrives in the <c>session.started</c> frame.</summary>
     public required int Brain { get; init; }
 
-    /// <summary>Раунд, в котором сессия началась.</summary>
+    /// <summary>The round the session started in.</summary>
     public required int Round { get; init; }
 
-    /// <summary>Номер кадра на момент старта сессии: им клиент отличает переклейм от того же агента.</summary>
+    /// <summary>Frame number at session start: lets the client tell a reclaim apart from the same agent.</summary>
     public required long StartedSeq { get; init; }
 
-    /// <summary>Полный снимок сессии. Зовётся с HTTP-потока и ходит только по своим замкам.</summary>
+    /// <summary>The full session snapshot. Called from the HTTP thread and touches only its own locks.</summary>
     public required Func<AgentSessionDto> Capture { get; init; }
 
-    /// <summary>Дешёвая строка ростера: без системного промпта и без истории.</summary>
+    /// <summary>Cheap roster row: no system prompt, no history.</summary>
     public required Func<AgentRosterEntryDto> Roster { get; init; }
 
-    /// <summary>Положить сообщение оператора в ящик агента. Любой поток: у ящика свой замок.</summary>
+    /// <summary>Put an operator's message in the agent's inbox. Any thread: the inbox has its own lock.</summary>
     public required Func<string, (bool Ok, string Reason)> Send { get; init; }
 
     /// <inheritdoc cref="AgentHandle"/>
     public volatile bool Alive;
 
-    /// <summary>Строка ростера с актуальной живостью.</summary>
+    /// <summary>Roster row with current liveness.</summary>
     public AgentRosterEntryDto RosterEntry() => Roster() with { Alive = Alive };
 }
 
 /// <summary>
-/// Витрина живых агентов: пишет главный поток, читает HTTP-поток.
+/// Roster of live agents: written by the main thread, read by the HTTP thread.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Заменяет собой единственное <c>volatile AgentSession?</c>, из-за которого отладчик показывал
-/// того, кто занял тело последним.
+/// Replaces the single <c>volatile AgentSession?</c> that made the debugger show whoever last
+/// claimed the body.
 /// </para>
 /// <para>
-/// <b>Словарь И опубликованный массив, а не что-то одно.</b> Словарь нужен ради <see cref="Find"/>
-/// — его зовут на каждый запрос снимка и на каждую команду — и ради того, чтобы <see cref="Add"/>
-/// мог ОБНАРУЖИТЬ занятый идентификатор, а не затереть чужой хендл. Массив нужен ради ростера:
-/// перечисление <c>ConcurrentDictionary</c> безопасно, но порядок у него произвольный, а порядок
-/// вкладок в интерфейсе не должен плясать между запросами.
+/// <b>A dictionary AND a published array, not just one of them.</b> The dictionary is needed for
+/// <see cref="Find"/> — called on every snapshot request and every command — and so that
+/// <see cref="Add"/> can DETECT a taken identifier instead of clobbering someone else's handle. The
+/// array is needed for the roster: enumerating a <c>ConcurrentDictionary</c> is safe, but its order
+/// is arbitrary, and the order of tabs in the UI must not jump around between requests.
 /// </para>
 /// </remarks>
 public sealed class AgentDirectory
 {
     private readonly ConcurrentDictionary<string, AgentHandle> _byId = new(StringComparer.Ordinal);
 
-    /// <summary>Опубликованный упорядоченный массив. HTTP-поток НИКОГДА не обходит словарь.</summary>
+    /// <summary>The published ordered array. The HTTP thread NEVER walks the dictionary.</summary>
     private volatile AgentHandle[] _ordered = Array.Empty<AgentHandle>();
 
-    /// <summary>Все агенты в порядке показа. Любой поток.</summary>
+    /// <summary>All agents in display order. Any thread.</summary>
     public AgentHandle[] All => _ordered;
 
-    /// <summary>Сколько агентов живо. Любой поток.</summary>
+    /// <summary>How many agents are alive. Any thread.</summary>
     public int Count => _ordered.Length;
 
-    /// <summary>Агент по идентификатору, либо null. Любой поток.</summary>
+    /// <summary>The agent by identifier, or null. Any thread.</summary>
     public AgentHandle? Find(string? id) =>
         id != null && _byId.TryGetValue(id, out var handle) ? handle : null;
 
-    /// <summary>Ростер целиком. Любой поток.</summary>
+    /// <summary>The whole roster. Any thread.</summary>
     public List<AgentRosterEntryDto> Roster() => _ordered.Select(h => h.RosterEntry()).ToList();
 
-    /// <summary>Добавить агента. Главный поток. False — идентификатор уже занят.</summary>
+    /// <summary>Add an agent. Main thread. False if the identifier is already taken.</summary>
     public bool Add(AgentHandle handle)
     {
         if (!_byId.TryAdd(handle.Id, handle))
@@ -103,12 +104,13 @@ public sealed class AgentDirectory
     }
 
     /// <summary>
-    /// Снять агента. Главный поток. Снимает ТОЛЬКО тот хендл, который передан.
+    /// Remove an agent. Main thread. Removes ONLY the handle that was passed in.
     /// </summary>
     /// <remarks>
-    /// Сравнение по ссылке обязательно: борга можно переклеймить в том же тике, и безусловное
-    /// удаление по идентификатору снесло бы с витрины хендл НОВОГО агента при отпускании старого.
-    /// Тот же класс ошибки уже был закрыт в <c>DetachDebugSession</c> проверкой <c>ReferenceEquals</c>.
+    /// The reference comparison is mandatory: a borg can be reclaimed within the same tick, and an
+    /// unconditional removal by identifier would knock the NEW agent's handle off the roster when
+    /// the old one lets go. The same class of bug was already closed in <c>DetachDebugSession</c>
+    /// with a <c>ReferenceEquals</c> check.
     /// </remarks>
     public bool Remove(string id, AgentHandle expected)
     {
@@ -123,12 +125,12 @@ public sealed class AgentDirectory
     }
 
     /// <summary>
-    /// Оставить только перечисленных. Главный поток.
+    /// Keep only the listed ones. Main thread.
     /// </summary>
     /// <remarks>
-    /// Страховка от утечки. Появись когда-нибудь путь, убирающий сессию мимо <c>Release</c>, хендл
-    /// остался бы жить со ссылкой на закрытую сессию — и запрос снимка уткнулся бы в отменённый
-    /// токен. Три строки закрывают целый класс.
+    /// Insurance against a leak. Should a path ever appear that removes a session bypassing
+    /// <c>Release</c>, the handle would go on living with a reference to a closed session — and a
+    /// snapshot request would run into a cancelled token. Three lines close off a whole class of bug.
     /// </remarks>
     public void RetainOnly(IReadOnlyCollection<string> ids)
     {
@@ -145,12 +147,12 @@ public sealed class AgentDirectory
     }
 
     /// <summary>
-    /// Пересобрать опубликованный порядок: ядро первым, дальше по алфавиту.
+    /// Rebuild the published order: the core first, then alphabetically.
     /// </summary>
     /// <remarks>
-    /// Порядок задаётся здесь, а не на клиенте, чтобы обе стороны не разошлись. Чисто
-    /// алфавитный поставил бы <c>borg-1</c> раньше <c>core</c>, и вкладка по умолчанию прыгала бы
-    /// в зависимости от того, кто в этом раунде вообще есть.
+    /// The order is decided here, not on the client, so the two sides cannot diverge. A purely
+    /// alphabetical order would put <c>borg-1</c> ahead of <c>core</c>, and the default tab would
+    /// jump around depending on who happens to exist in the round.
     /// </remarks>
     private void Republish() =>
         _ordered = _byId.Values

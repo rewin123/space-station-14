@@ -56,12 +56,12 @@ public sealed class BusStoreTests
         return state;
     }
 
-    /// <summary>Штамп раунда фиксированный: формат заметок проверяется не здесь.</summary>
+    /// <summary>The round stamp is fixed: note formatting is not what's tested here.</summary>
     private const string Stamp = "[раунд 7 · 15.08]";
 
     /// <summary>
-    /// Заметки, собранные из одних событий, ровно как это делал бы клиент: складывая в карту и
-    /// удаляя ключ на пустом списке записей.
+    /// Notes rebuilt from events alone, exactly as a client would do it: folding them into a map and
+    /// removing the key once its entry list is empty.
     /// </summary>
     private static Dictionary<string, List<string>> ReplayNotes(AgentEventBus bus)
     {
@@ -298,9 +298,9 @@ public sealed class BusStoreTests
     [Test]
     public void ClosingANoteIsReportedAsATombstone()
     {
-        // Удаление ПОСЛЕДНЕЙ записи сносит и файл. Без события об этом клиент, складывающий
-        // note.updated в карту, держал бы человека, о котором уже ничего не известно, — и заметил
-        // бы это только после перезагрузки хранилища, то есть на следующей компакции.
+        // Removing the LAST entry also deletes the file. Without an event about that, a client
+        // folding note.updated into a map would keep holding a person about whom nothing is known
+        // any more, and would only notice after the store reloads, i.e. at the next compaction.
         var bus = new AgentEventBus(256);
         var notes = new PlayerNoteStore(_dir, Sawmill);
         notes.AttachSink(bus.ForProcess());
@@ -344,8 +344,9 @@ public sealed class BusStoreTests
     [Test]
     public void ReloadRepublishesEveryNote()
     {
-        // Тот же довод, что у скиллов: перечитывание — единственный путь, которым заметка исчезает
-        // без собственного события. Здесь файл убирается с диска мимо стора, как это делает рука.
+        // The same argument as for skills: a reload is the only way a note disappears without an
+        // event of its own. Here the file is removed from disk behind the store's back, the way a
+        // human hand would do it.
         var bus = new AgentEventBus(256);
 
         var first = new PlayerNoteStore(_dir, Sawmill);

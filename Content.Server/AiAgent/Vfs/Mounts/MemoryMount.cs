@@ -6,19 +6,19 @@ using Content.Server.AiAgent.Skills;
 namespace Content.Server.AiAgent.Vfs.Mounts;
 
 /// <summary>
-/// Долгая память агента как один файл. Под ним — нетронутый <see cref="MemoryStore"/>.
+/// The agent's long-term memory as a single file. An untouched <see cref="MemoryStore"/> sits underneath.
 ///
 /// <para>
-/// Файловая система здесь второй способ добраться до памяти, а не замена первому. Главный —
-/// прежний: <c>MEMORY.md</c> целиком стоит в системном промпте и грузится при старте сессии.
-/// Замороженный снимок сохраняется: запись уходит на диск немедленно, а зона 0 держит старый
-/// текст до следующей перестройки префикса, и именно это удерживает KV-кэш живым весь цикл
-/// компакции.
+/// The filesystem is a second way to reach memory here, not a replacement for the first. The main
+/// one is the old one: <c>MEMORY.md</c> sits whole in the system prompt and loads at session start.
+/// A frozen snapshot is kept: a write goes to disk immediately, while zone 0 holds the old text
+/// until the next prefix rebuild, and that's exactly what keeps the KV cache alive through the
+/// whole compaction cycle.
 /// </para>
 /// <para>
-/// Отсюда странность, которую надо знать: сразу после записи <c>cat /memory.md</c> покажет новую
-/// запись, а блок ПАМЯТЬ выше по промпту — ещё старый текст. Это не рассинхрон, а устройство; оно
-/// сходится на ближайшей перестройке префикса.
+/// Hence an oddity worth knowing: right after a write, <c>cat /memory.md</c> shows the new entry,
+/// while the MEMORY block earlier in the prompt still shows the old text. This isn't a desync, it's
+/// the design; it converges on the next prefix rebuild.
 /// </para>
 /// </summary>
 public sealed class MemoryMount : VfsMount
@@ -75,12 +75,12 @@ public sealed class MemoryMount : VfsMount
     public override void Reload() => Store.LoadFromDisk();
 
     /// <summary>
-    /// Дописать запись. Перезаписи файла целиком нет, и это не упущение переходника.
+    /// Append an entry. There is no full-file rewrite, and that's not an oversight of the adapter.
     /// </summary>
     /// <remarks>
-    /// Правило стора: тот, кому позволено переписать память целиком, однажды вернёт укороченную
-    /// версию, и накопленное исчезнет за один ход, молча. Поэтому <c>write_file</c> здесь значит
-    /// «добавить запись», а не «заменить файл».
+    /// The store's rule: whoever is allowed to rewrite memory wholesale will eventually return a
+    /// shortened version, and everything accumulated disappears in one silent move. So
+    /// <c>write_file</c> here means "add an entry", not "replace the file".
     /// </remarks>
     public override VfsWrite Write(VfsPath relative, string desc, string content)
     {

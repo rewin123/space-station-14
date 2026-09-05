@@ -4,14 +4,15 @@ import { ref, watch } from 'vue'
 const KEY = 'aidebug.endpoint'
 
 /**
- * Адрес и токен.
+ * Endpoint and token.
  *
- * В localStorage, а не в URL: токен даёт полный разговор агента, его память и право говорить его
- * голосом, и адресная строка — худшее место для такого (история, шаринг, логи прокси).
+ * In localStorage, not in the URL: the token grants the full conversation of the agent, its
+ * memory, and the right to speak in its voice, and the address bar is the worst place for
+ * something like that (history, sharing, proxy logs).
  */
 export const useSettings = defineStore('settings', () => {
-  // На dev-сервере Vite ходим напрямую в отладочный сервер (кросс-ориджин, как в проде);
-  // в собранном виде страница живёт за обратным прокси и API у неё на том же origin.
+  // On the Vite dev server we go straight to the debug server (cross-origin, as in prod);
+  // in the built version the page lives behind a reverse proxy with the API on the same origin.
   const baseUrl = ref(location.port === '5173' ? 'http://127.0.0.1:9080' : '/api')
   const token = ref('')
 
@@ -23,14 +24,14 @@ export const useSettings = defineStore('settings', () => {
       token.value = parsed.token ?? ''
     }
   } catch {
-    // Испорченный localStorage — не повод не запуститься.
+    // Corrupted localStorage isn't a reason to fail to start.
   }
 
   watch([baseUrl, token], () => {
     try {
       localStorage.setItem(KEY, JSON.stringify({ baseUrl: baseUrl.value, token: token.value }))
     } catch {
-      // Приватный режим — работаем без сохранения.
+      // Private mode — work without persisting.
     }
   })
 

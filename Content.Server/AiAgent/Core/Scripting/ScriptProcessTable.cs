@@ -5,20 +5,25 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Content.Server.AiAgent.Locale;
+
 namespace Content.Server.AiAgent.Core.Scripting;
 
 /// <summary>
-/// Процессы одной сессии: кто сейчас работает, кто уже кончился и о ком ещё не доложено.
+/// The processes of one session: who's running now, who has already finished, and who hasn't been
+/// reported yet.
 ///
 /// <para>
-/// Очередь завершившихся существует потому, что процесс умирает на своём потоке, а сказать об этом
-/// агенту можно только с главного: <c>ObservationQueue.Push</c> зовут из обработчиков событий, и
-/// вторая точка входа с чужого потока сломала бы её единственное правило. Поэтому поток кладёт
-/// процесс в очередь, а <c>Update</c> её разбирает — тем же приёмом, что и сработавшие будильники.
+/// The finished-process queue exists because a process dies on its own thread, and the agent can
+/// only be told about it from the main one: <c>ObservationQueue.Push</c> is called from event
+/// handlers, and a second entry point from a foreign thread would break its one rule. So the thread
+/// puts the process in the queue, and <c>Update</c> drains it — the same trick used for fired timers.
 /// </para>
 /// </summary>
 public sealed class ScriptProcessTable
 {
+    public AgentLocale Locale { get; set; } = AgentLocale.Ru;
+
     private readonly object _lock = new();
     private readonly Dictionary<int, ScriptProcess> _all = new();
     private readonly ConcurrentQueue<ScriptProcess> _toReport = new();
@@ -26,7 +31,7 @@ public sealed class ScriptProcessTable
 
     private int _nextPid;
 
-    /// <summary>Сколько законченных процессов помнить, чтобы <c>bp_get_output</c> ещё отвечал.</summary>
+    /// <summary>How many finished processes to remember so <c>bp_get_output</c> can still answer.</summary>
     private const int KeepFinished = 8;
 
     public IReadOnlyList<ScriptProcess> Running()
@@ -41,7 +46,7 @@ public sealed class ScriptProcessTable
             return _all.TryGetValue(pid, out var process) ? process : null;
     }
 
-    /// <summary>Завести процесс и пустить его. Хост строит вызывающий — таблица про Lua не знает.</summary>
+    /// <summary>Create a process and start it. The host builds the caller — the table knows nothing about Lua.</summary>
     public ScriptProcess Start(string code, int maxLines, Func<ScriptProcess, LuaHost> build)
     {
         ScriptProcess process;
@@ -53,17 +58,17 @@ public sealed class ScriptProcessTable
             Prune();
         }
 
-        // Подписка ДО старта: скрипт может кончиться раньше, чем мы вернёмся из Start.
+        // Subscribe BEFORE starting: the script can finish before we return from Start.
         process.Finished.ContinueWith(_ => _toReport.Enqueue(process), TaskContinuationOptions.ExecuteSynchronously);
 
         process.Start(build(process));
         return process;
     }
 
-    /// <summary>Забрать процесс, о завершении которого агенту ещё не сказали.</summary>
+    /// <summary>Take a process whose completion hasn't been reported to the agent yet.</summary>
     public bool TryTakeReport(out ScriptProcess process) => _toReport.TryDequeue(out process!);
 
-    /// <summary>Снять всё. Зовётся на освобождении сессии и на конце раунда.</summary>
+    /// <summary>Stop everything. Called when the session is released and at the end of the round.</summary>
     public void StopAll()
     {
         lock (_lock)
@@ -72,8 +77,8 @@ public sealed class ScriptProcessTable
                 process.Stop();
         }
 
-        // Отменяем и связанный источник: процесс, застрявший в вызове инструмента, узнает об этом
-        // оттуда, а не с ближайшего среза.
+        // Also cancel the linked source: a process stuck in a tool call learns about it from there,
+        // not from the nearest slice.
         try
         {
             _life.Cancel();
@@ -83,14 +88,20 @@ public sealed class ScriptProcessTable
         }
     }
 
-    /// <summary>Строка для SELF: чем агент занят прямо сейчас, кроме собственного хода.</summary>
+    /// <summary>The SELF line: what the agent is doing right now besides its own turn.</summary>
     public string SelfLine()
     {
         var running = Running();
         if (running.Count == 0)
             return "";
 
-        return string.Join(", ", running.Select(p => $"#{p.Pid} идёт {p.Elapsed.TotalSeconds:0} с"));
+        return string.Join(", ", running.Select(p =>
+        {
+            var loc = Locale;
+            return loc.English
+                ? $"#{p.Pid} {loc.ScriptRunning} {p.Elapsed.TotalSeconds:0}s"
+                : $"#{p.Pid} идёт {p.Elapsed.TotalSeconds:0} с";
+        }));
     }
 
     private void Prune()

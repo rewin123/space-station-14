@@ -27,9 +27,9 @@ namespace Content.AiBench;
 public sealed class AwarenessTests
 {
     /// <summary>
-    /// Идентификатор прототипа, а не строка в вызове: <c>Index&lt;T&gt;("Passenger")</c> запрещён
-    /// аналитиком RA0033, и запрет по делу — опечатка в литерале всплыла бы только на прогоне,
-    /// а здесь её ловит компилятор.
+    /// A prototype identifier, not a string in the call: <c>Index&lt;T&gt;("Passenger")</c> is
+    /// forbidden by analyzer RA0033, and the ban is warranted — a typo in the literal would only
+    /// surface on a test run, while here the compiler catches it.
     /// </summary>
     private static readonly ProtoId<JobPrototype> Passenger = "Passenger";
 
@@ -165,14 +165,15 @@ public sealed class AwarenessTests
     }
 
     /// <summary>
-    /// Поднять спавн так, как это делает GameTicker.
+    /// Raise a spawn the way GameTicker does it.
     /// </summary>
     /// <remarks>
-    /// <c>lateJoin: false</c> здесь не про смысл сценария, а про соседей по событию: на этом
-    /// событии сидят ещё AntagSelectionSystem и ArrivalsSystem, и обе первым делом проверяют
-    /// именно этот флаг. С ним false они выходят сразу, и тест остаётся тестом нашего обработчика,
-    /// а не всей цепочки поздних заходов. Наш обработчик на LateJoin не смотрит вовсе.
-    /// Профиль пустой, но не null: TraitSystem читает у него список черт без проверки.
+    /// <c>lateJoin: false</c> here is not about the meaning of the scenario but about neighbors on
+    /// the event: AntagSelectionSystem and ArrivalsSystem also sit on this event, and both check
+    /// exactly this flag first thing. With it false they exit immediately, and the test stays a
+    /// test of our own handler, not of the whole late-join chain. Our handler does not look at
+    /// LateJoin at all. The profile is empty but not null: TraitSystem reads its trait list off it
+    /// without checking.
     /// </remarks>
     private static async Task Spawn(AiWorld w, EntityUid mob, string jobId, bool silent = false)
     {
@@ -191,9 +192,10 @@ public sealed class AwarenessTests
     [Test]
     public async Task CrewArrival_ReachesTheAgent()
     {
-        // Найдено на живом сервере: за 15 августа четыре человека отыграли смену, и агент не узнал
-        // ни об одном. В наблюдения попадали только речь, рация и объявления, так что молчаливый
-        // игрок не существовал для него вовсе — он вёл смену, обращаясь к пустой станции.
+        // Found on a live server: on August 15th four people played through the shift, and the
+        // agent never found out about a single one of them. Only speech, radio, and announcements
+        // made it into observations, so a silent player simply did not exist for it — it ran the
+        // shift addressing an empty station.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -202,11 +204,13 @@ public sealed class AwarenessTests
 
         await Spawn(w, mob, "Passenger");
 
-        // Должность сверяем с прототипом, а не с «Пассажиром» строкой: локаль тестового сервера
-        // не обязана быть русской, и захардкоженное слово ловило бы язык, а не проводку.
+        // The job title is checked against the prototype, not against the string "Passenger": the
+        // test server's locale is not required to be Russian, and a hardcoded word would test the
+        // language, not the wiring.
         //
-        // Через Read, потому что LocalizedName идёт в Loc, а тот резолвится через IoC — с потока
-        // NUnit его контекста нет, и обращение падает ассертом ещё до проверки.
+        // Through Read, because LocalizedName goes through Loc, and that is resolved via IoC — the
+        // NUnit thread has no context for it, and the call fails on an assertion before the check
+        // even runs.
         var job = await w.Read(() => w.Pair.Server.ResolveDependency<IPrototypeManager>()
             .Index(Passenger).LocalizedName);
 
@@ -219,9 +223,9 @@ public sealed class AwarenessTests
     [Test]
     public async Task SilentSpawn_IsNotReported()
     {
-        // Тихий спавн — это администратор, спрятавший появление от станции: тем же флагом выше по
-        // стеку гасится и объявление о прибытии. Агент, объявляющий такого человека в эфир, сводит
-        // на нет всё решение админа.
+        // A silent spawn is an admin hiding the appearance from the station: the same flag further
+        // up the stack also suppresses the arrival announcement. An agent that broadcasts such a
+        // person entirely undoes the admin's decision.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -237,10 +241,10 @@ public sealed class AwarenessTests
     }
 
     /// <summary>
-    /// Реплика от одноразового техника; имя говорящего — «Тестовый Техник».
+    /// A line from a throwaway technician; the speaker's name is «Тестовый Техник».
     ///
-    /// Binary, а не Common: это тот канал, на котором ядро в этой обвязке гарантированно слушает,
-    /// и на нём же построены остальные тесты рации.
+    /// Binary, not Common: this is the channel the core is guaranteed to be listening on in this
+    /// harness, and the rest of the radio tests are built on it too.
     /// </summary>
     private static async Task Say(AiWorld w, string text)
     {
@@ -256,8 +260,8 @@ public sealed class AwarenessTests
     [Test]
     public async Task NoteHint_FollowsTheFirstUtteranceOnlyOnce()
     {
-        // Заметки поданы лениво: в системный промпт они не вклеиваются, и без этой строки знакомый
-        // человек ничем не отличался бы для агента от нового.
+        // Notes are served lazily: they are not spliced into the system prompt, and without this
+        // line a familiar person would be indistinguishable to the agent from a new one.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 

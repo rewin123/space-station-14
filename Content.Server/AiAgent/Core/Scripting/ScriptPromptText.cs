@@ -1,11 +1,13 @@
 namespace Content.Server.AiAgent.Core.Scripting;
 
 /// <summary>
-/// Что агент читает о режиме скрипта. Про мир здесь нет ни слова — текст одинаков для любого тела.
+/// What the agent reads about script mode. Not a word here about the world — the text is the same
+/// for any body.
 ///
 /// <para>
-/// Константы, потому что это зона 0: текст уходит в замороженный префикс, и всё изменчивое в нём
-/// сдвигало бы хэш каждый ход, а значит стоило бы полного prefill на каждом обращении к модели.
+/// These are constants because this is zone 0: the text goes into the frozen prefix, and anything
+/// changeable in it would shift the hash every turn, which would cost a full prefill on every call
+/// to the model.
 /// </para>
 /// </summary>
 public static class ScriptPromptText
@@ -64,7 +66,7 @@ public static class ScriptPromptText
         не «вызови device_action с handle», а device_action{handle='door-3', action='open'}.
         """;
 
-    /// <summary>Что робот умеет, когда он пишет скрипты. Заменяет обычный список инструментов.</summary>
+    /// <summary>What the robot can do when it writes scripts. Replaces the usual tool list.</summary>
     public const string BorgAbilities = """
         ЧТО ТЫ УМЕЕШЬ
 

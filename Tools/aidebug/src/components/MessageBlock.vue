@@ -14,9 +14,9 @@ const ROLE_LABEL: Record<string, string> = {
 }
 
 /**
- * Наблюдение приходит одним куском, где первая строка — это SELF: где глаз, есть ли питание,
- * какая тревога. Это первое, что спрашивают, когда агент ведёт себя странно, поэтому она
- * вытаскивается в отдельную строку, а не тонет в тексте.
+ * An observation arrives as one chunk, where the first line is SELF: where the eye is, whether
+ * there's power, what the alert level is. That's the first thing people ask when an agent
+ * behaves strangely, so it's pulled out into its own line instead of getting lost in the text.
  */
 const selfLine = computed(() => {
   if (props.row.message.role !== 'user') return null
@@ -47,7 +47,7 @@ const bodyText = computed(() => {
 
     <div v-if="bodyText" class="text">{{ bodyText }}</div>
 
-    <!-- Результат сироты — это JSON, а не проза: печатаем как JSON. -->
+    <!-- An orphan result is JSON, not prose: print it as JSON. -->
     <JsonBlock v-if="row.orphanResult" :raw="row.message.content ?? ''" />
 
     <template v-if="paired">
@@ -64,7 +64,7 @@ const bodyText = computed(() => {
 
 <style scoped>
 .msg {
-  /* Блоки во всю ширину, а не «пузыри»: JSON инструментов требует горизонтали. */
+  /* Full-width blocks, not "bubbles": tool JSON needs the horizontal space. */
   border-left: 3px solid var(--system);
   padding: 6px 0 6px 10px;
   margin-bottom: 10px;

@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-// Одно из двух: либо уже разобранное значение, либо сырая строка с провода. Второе — не то же
-// самое, что первое: сырую строку нельзя нормализовать, иначе битый аргумент станет невидимым.
+// One of two things: either an already-parsed value, or a raw string off the wire. The second
+// isn't the same as the first: the raw string can't be normalized, or a malformed argument would
+// become invisible.
 const props = defineProps<{ value?: unknown; raw?: string }>()
 
 /**
- * Печатает JSON с отступами, а при неудаче отдаёт исходную строку как есть.
+ * Prints JSON with indentation, and on failure returns the original string as-is.
  *
- * Откат обязателен. Аргументы вызова инструмента приезжают сырой строкой ровно так, как их выдала
- * модель, и сервер намеренно их не нормализует: отладчик, показывающий причёсанный JSON, спрятал
- * бы именно тот битый аргумент, ради которого его и открыли.
+ * The fallback is mandatory. Tool call arguments arrive as a raw string exactly as the model
+ * produced it, and the server deliberately doesn't normalize them: a debugger that shows
+ * prettified JSON would hide exactly the malformed argument it was opened to find.
  */
 const text = computed(() => {
   if (props.raw !== undefined) {
@@ -51,7 +52,7 @@ const malformed = computed(() => {
   color: var(--dim);
 }
 
-/* Не распарсилось — это находка, а не помеха: подсвечиваем, а не прячем. */
+/* Failing to parse is a finding, not a nuisance: highlight it, don't hide it. */
 .malformed {
   color: var(--bad);
 }

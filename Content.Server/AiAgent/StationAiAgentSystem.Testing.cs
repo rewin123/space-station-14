@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Content.Server.AiAgent.Llm;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Tools;
 
 namespace Content.Server.AiAgent;
@@ -67,8 +68,9 @@ public sealed partial class StationAiAgentSystem
     /// reach, and there was no way to ask the running server a direct question.
     /// </summary>
     /// <param name="agentId">
-    /// Кому адресовать. Пусто — первому попавшемуся, что годилось, пока агент был один; с боргом
-    /// на станции «первый попавшийся» стал лотереей по порядку словаря.
+    /// Who to address. Empty means whichever comes first, which used to be fine while there was one
+    /// agent; with a borg on the station, "whichever comes first" turned into a lottery over
+    /// dictionary order.
     /// </param>
     public bool InvokeToolFromConsole(string tool, string argsJson, out string reason, string? agentId = null)
     {
@@ -91,7 +93,7 @@ public sealed partial class StationAiAgentSystem
         return true;
     }
 
-    /// <summary>Идентификаторы живых агентов — для внятного отказа в консоли.</summary>
+    /// <summary>Identifiers of live agents — for a clear refusal in the console.</summary>
     public string KnownAgentIds() =>
         _sessions.Count == 0 ? "(ни одного)" : string.Join(", ", _sessions.Values.Select(s => s.Body.Id));
 
@@ -126,12 +128,13 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Сколько строк наблюдения выпущено с начала процесса.
+    /// How many observation lines have been issued since the process started.
     ///
-    /// Существует ради ОТРИЦАТЕЛЬНОГО теста, и это главное. Проверять, что далёкое событие не
-    /// попало в наблюдение, по тексту сообщения — значит проверять формат: строки может не быть и
-    /// потому, что она не построилась. Ноль в счётчике означает, что ворота отказали до всякой
-    /// работы, а это ровно то утверждение, которое защищает паритет.
+    /// Exists for the NEGATIVE test, and that's the whole point. Checking that a distant event
+    /// didn't make it into the observation by looking at the message text means testing the
+    /// formatting: the line could be missing simply because it never got built. A zero counter means
+    /// the gate refused before any work happened, and that's exactly the assertion that protects
+    /// parity.
     /// </summary>
     public int WitnessedCount() => _witnessed;
 
@@ -139,36 +142,36 @@ public sealed partial class StationAiAgentSystem
     public (string What, double Ms) SlowestMainThreadCall() => (_world.Slowest, _world.SlowestMs);
 
     /// <summary>
-    /// Во что обошёлся главный поток по каждой операции, самые дорогие сверху.
+    /// What the main thread cost per operation, the most expensive on top.
     ///
-    /// Одного максимума для разбора не хватает: тридцать вызовов по 26 мс и один на 73 мс дают
-    /// одинаковый максимум, но отличаются по суммарной цене в двадцать раз, а чинятся по-разному —
-    /// первое дроблением, второе удешевлением. Колонка <c>Total</c> и есть та, по которой стоит
-    /// решать, что трогать.
+    /// A single maximum isn't enough for diagnosis: thirty calls at 26 ms and one at 73 ms give the
+    /// same maximum, but differ twentyfold in total cost, and they get fixed differently — the first
+    /// by splitting, the second by making it cheaper. The <c>Total</c> column is the one worth
+    /// deciding what to touch by.
     /// </summary>
     public IReadOnlyList<(string What, long Count, double P50, double P95, double Max, double Total, long Overruns)>
         MainThreadReport() => _world.Report();
 
-    /// <summary>Сколько всего главного потока съел агент с начала процесса.</summary>
+    /// <summary>Total main-thread time the agent has consumed since the process started.</summary>
     public double MainThreadTotalMs() => _world.TotalMs;
 
     /// <summary>
-    /// Здоровье шины мира. Три из пяти чисел обязаны быть нулями, и это утверждение, а не надежда:
-    /// переполнение означает параллелизм, которого в модуле нет, а большое ожидание — голодание.
+    /// World bus health. Three of the five numbers must be zero, and that's an assertion, not a
+    /// hope: an overflow means parallelism the module doesn't have, and a large wait means starvation.
     /// </summary>
     public (int Depth, long Deferrals, long Promotions, long Overflows, double MaxWaitMs) WorldBusHealth() =>
         (_world.Depth, _world.Deferrals, _world.Promotions, _world.Overflows, _world.MaxWaitMs);
 
-    /// <summary>Прогнать очередь мира вручную — для тестов, которые тикают сервер сами.</summary>
+    /// <summary>Drain the world queue manually — for tests that tick the server themselves.</summary>
     public void PumpWorldBusForTest() => _world.Pump();
 
     /// <summary>
-    /// Поставить произвольный джоб в шину мира от имени живой сессии.
+    /// Submit an arbitrary job onto the world bus on behalf of a live session.
     ///
-    /// Существует ради тестов на дробление и на устаревшее поколение: настоящие инструменты пока
-    /// все атомарные, и проверить многосрезовый путь на них нечем. Поколение берётся у сессии
-    /// по-настоящему, поэтому <c>ReleaseAll</c> в середине теста роняет заявку тем же способом,
-    /// каким её уронило бы закарживание в бою.
+    /// Exists for tests on slicing and on a stale generation: the real tools are all atomic for now,
+    /// so there's nothing to exercise the multi-slice path with. The generation is taken from the
+    /// session for real, so a <c>ReleaseAll</c> in the middle of a test drops the request the same
+    /// way a carding would drop it in combat.
     /// </summary>
     public Task<T> SubmitWorldJobForTest<T>(Threading.IWorldJob job, Task<T> result,
         TimeSpan? timeout = null)
@@ -182,16 +185,17 @@ public sealed partial class StationAiAgentSystem
             CancellationToken.None, timeout ?? TimeSpan.FromSeconds(30));
     }
 
-    /// <summary>Последняя строка о длительности тика и сколько их опоздало (>1.5 периода).</summary>
+    /// <summary>The last line about tick duration and how many ticks ran late (>1.5 of the period).</summary>
     public (string Last, long Ticks, long Overruns) FrameReport() =>
         (_frames.Last, _frames.Ticks, _frames.Overruns);
 
     /// <summary>
-    /// Во что обошёлся последний обзор.
+    /// What the last look cost.
     ///
-    /// <c>Queries</c> здесь — главное, а миллисекунды приложены. Тест на «ровно один поход в
-    /// broadphase» детерминирован и не зависит ни от машины, ни от того, что за карта загружена;
-    /// тест на миллисекунды меряет сборочный агент и шумит. Поэтому сторожем ставится первый.
+    /// <c>Queries</c> is the main thing here, with the milliseconds attached alongside. A test for
+    /// "exactly one trip into broadphase" is deterministic and depends on neither the machine nor
+    /// which map is loaded; a test on milliseconds measures the build agent and is noisy. So the
+    /// former is the one used as the guard.
     /// </summary>
     public (int Queries, int Tiles, int Candidates, int OnScreen, int Rows,
         double ViewMs, double GatherMs, double RowsMs) LastLookCost() =>
@@ -199,17 +203,18 @@ public sealed partial class StationAiAgentSystem
             _lastLook.ViewMs, _lastLook.GatherMs, _lastLook.RowsMs);
 
     /// <summary>
-    /// Оба пути сбора по одному и тому же кадру.
+    /// Both gathering paths against the very same frame.
     ///
-    /// Существует ради теста эквивалентности: тот требует, чтобы быстрый путь не потерял ничего из
-    /// увиденного медленным. Сравнивать по ответу инструмента нельзя — его режет
-    /// <c>ai.look_limit</c>, и пропажа на трёхсотой строке выглядела бы как обрезка.
+    /// Exists for the equivalence test: it requires that the fast path not lose anything the slow
+    /// path saw. Comparing by the tool's response won't do — <c>ai.look_limit</c> truncates it, and a
+    /// disappearance at the three-hundredth line would look like a cutoff.
     ///
-    /// <b>Оба замера обязаны лежать в одном вызове, и это не удобство.</b> Первая версия теста
-    /// дёргала пути по очереди через CVar, между ними проходил тик — и на радиусе в двадцать
-    /// тайлов она нашла «потерю» одной сущности из двух с половиной тысяч. Потери не было: кто-то
-    /// успел перейти границу видимости. Тест, который ловит шаги вместо геометрии, хуже
-    /// отсутствующего: он врёт в обе стороны и приучает не верить красному.
+    /// <b>Both measurements must happen within one call, and that's not a convenience.</b> The
+    /// first version of the test toggled the paths one after another via a CVar, with a tick passing
+    /// between them — and at a twenty-tile radius it found a "loss" of one entity out of two and a
+    /// half thousand. There was no loss: someone had crossed the visibility boundary in between. A
+    /// test that catches footsteps instead of geometry is worse than no test at all: it lies in both
+    /// directions and teaches you not to trust red.
     /// </summary>
     public (List<EntityUid> Slow, List<EntityUid> Fast, double SlowMs, double FastMs)
         CompareLookPathsForTest(EntityUid brain, int expand)
@@ -228,24 +233,25 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Прогнать апстримовый обзор и наш нарезаемый по одному глазу в ОДНОМ кадре и вернуть оба
-    /// множества тайлов.
+    /// Run the upstream view and our own sliced one for a single eye in ONE frame and return both
+    /// sets of tiles.
     ///
     /// <para>
-    /// Ради этого метода нарезаемая версия и имеет право существовать. Свой теневой каст — это
-    /// копия чужого алгоритма, а копия расходится с оригиналом молча: ИИ начинает видеть на тайл
-    /// больше или меньше, чем увидел бы игрок на этой роли, и заметить это в игре невозможно.
-    /// Утверждение «мы перенесли точно» либо проверяемо, либо это обещание.
+    /// This method is the whole reason the sliced version has a right to exist. Our own shadow-cast
+    /// is a copy of someone else's algorithm, and a copy silently drifts from the original: the AI
+    /// starts seeing a tile more or less than a player would have seen from that role, and there is
+    /// no way to notice it in-game. The claim "we ported it exactly" is either verifiable or it's
+    /// just a promise.
     /// </para>
     /// <para>
-    /// Оба прогона в одном кадре — по тому же доводу, что и у сравнения быстрого и медленного
-    /// сбора: между двумя кадрами кто-то успевает шагнуть, и тест поймал бы чужой шаг вместо
-    /// геометрии.
+    /// Both runs happen in one frame, for the same reason as the fast/slow gathering comparison:
+    /// between two frames someone can take a step, and the test would catch that step instead of the
+    /// geometry.
     /// </para>
     /// <param name="grain">
-    /// Бюджет одного среза в миллисекундах. Ноль означает «резать на каждом удобном месте» — это
-    /// и есть самый злой режим: чем мельче срез, тем больше шансов, что состояние между кадрами
-    /// сохранено неверно.
+    /// The budget of a single slice, in milliseconds. Zero means "cut at every convenient point" —
+    /// which is the nastiest mode there is: the finer the slice, the more chances that state carried
+    /// across frames is preserved incorrectly.
     /// </param>
     /// </summary>
     public (HashSet<Vector2i> Upstream, HashSet<Vector2i> Sliced, int Slices)
@@ -271,8 +277,9 @@ public sealed partial class StationAiAgentSystem
         var slices = 0;
         while (true)
         {
-            // Дедлайн в прошлом = бюджет исчерпан сразу, то есть срез рвётся при первой же
-            // возможности. Именно так проверяется, что состояние переживает границу кадра.
+            // A deadline in the past means the budget is exhausted immediately, i.e. the slice breaks
+            // at the very first opportunity. This is exactly how it's verified that state survives a
+            // frame boundary.
             var deadline = System.Diagnostics.Stopwatch.GetTimestamp()
                            + (long)(grain / 1000.0 * System.Diagnostics.Stopwatch.Frequency);
 
@@ -295,7 +302,8 @@ public sealed partial class StationAiAgentSystem
     /// the frozen prefix costs a full prefill on every turn and presents only as "the AI got slow",
     /// with no error anywhere. Two identical builds is the cheapest way to prove there isn't one.
     /// </summary>
-    public string BuildSystemPromptForTest() => BuildSystemPrompt();
+    public string BuildSystemPromptForTest() =>
+        BuildSystemPrompt(scripted: false, lang: AgentLangUtil.Parse(_cfg.GetCVar(AiCVars.Language)));
 
     /// <summary>Build the observation message synchronously on the main thread.</summary>
     public string? BuildObservationForTest(EntityUid brain, bool force = true)
@@ -308,6 +316,7 @@ public sealed partial class StationAiAgentSystem
         NoticeLawChange(session);
 
         var (items, dropped) = session.Queue.Drain();
-        return Perception.ObservationFormatter.Format(items, dropped, RoundTime(), SelfLine(session), force);
+        return Perception.ObservationFormatter.Format(
+            items, dropped, RoundTime(), SelfLine(session), force, session.Locale);
     }
 }

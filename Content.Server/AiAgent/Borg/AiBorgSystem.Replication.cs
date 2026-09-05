@@ -8,35 +8,36 @@ using Robust.Shared.GameObjects;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Как тело робота доезжает до клиентов.
+/// How the borg's body makes it to clients.
 ///
 /// <para>
-/// Здесь нет ни одной игровой способности: рисует клиент по-прежнему только то, что попало в поле
-/// зрения, а робот не узнаёт и не может от этого файла ничего нового. Речь про состав того, что
-/// уезжает чужому клиенту, и только про него.
+/// There is not a single gameplay capability here: the client still renders only what fell into
+/// its field of view, and the borg neither learns nor can gain anything new from this file. This
+/// is purely about the composition of what ships to another client, and nothing else.
 /// </para>
 /// <para>
-/// <b>Почему это вообще чинится здесь, а не в PVS.</b> Дельта сущности, которой у клиента нет,
-/// стоит ему <c>MissingMetadata</c> и полного состояния на 250 КБ. А ванильный клиент
-/// подтверждает буфер, а не применение мира (<c>docs/problems.md</c>, №19), так что серверные
-/// патчи вокруг <c>EntityLastAcked</c> опираются на ложь протокола и петлю не закрывают.
-/// Закрывает её состав мира: сущность, которую чужой клиент никогда не рисовал, не должна к нему
-/// ехать вовсе. Наш робот — самый громкий поставщик таких сущностей на карте: он ходит всю смену,
-/// входит в чужие зоны видимости чаще всех, и внутри него десяток предметов, ни один из которых
-/// на экране чужого игрока не появляется.
+/// <b>Why this is fixed here at all, and not in PVS.</b> A delta for an entity the client doesn't
+/// have costs it a <c>MissingMetadata</c> and a full 250 KB state. And the vanilla client
+/// acknowledges the buffer, not the application of the world (<c>docs/problems.md</c>, #19), so
+/// server-side patches around <c>EntityLastAcked</c> rest on a protocol lie and don't close the
+/// loop. What closes it is world composition: an entity that another client has never rendered
+/// must never be sent to it at all. Our borg is the loudest supplier of such entities on the
+/// map: it walks around the whole shift, enters other people's visibility zones more often than
+/// anything else, and carries a dozen items inside it, not one of which ever appears on another
+/// player's screen.
 /// </para>
 /// <para>
-/// <b>Корень шасси не прячется никогда.</b> С ним экипаж кликает, бьёт, говорит и передаёт
-/// предметы; спрятанный робот — не оптимизация, а другая игра.
-/// <c>VisibilitySystem.RefreshVisibility</c> толкает маску вниз рекурсивно, поэтому слой на корне
-/// унёс бы за собой и тело.
+/// <b>The chassis root is never hidden.</b> The crew clicks it, hits it, talks to it, and hands
+/// it items; a hidden borg isn't an optimization, it's a different game.
+/// <c>VisibilitySystem.RefreshVisibility</c> pushes the mask down recursively, so a layer on the
+/// root would drag the body along with it.
 /// </para>
 /// <para>
-/// <b>Известная цена.</b> Под скрытие попадает ВСЁ поддерево, включая руки и слоты одежды, — то
-/// есть предмет, который экипаж дал роботу, на чужом экране в его руке не нарисуется. Сама
-/// передача при этом работает: цель взаимодействия — корень шасси, а он видим. Если рисовать руки
-/// когда-нибудь понадобится, лечится исключением контейнеров рук и инвентаря из обхода, а не
-/// возвратом к репликации всего.
+/// <b>Known cost.</b> The hiding covers the ENTIRE subtree, including hands and clothing slots —
+/// meaning an item the crew handed to the borg won't render in its hand on another screen. The
+/// handoff itself still works: the interaction target is the chassis root, and that is visible.
+/// If rendering hands ever becomes necessary, the fix is to exclude the hand and inventory
+/// containers from the traversal, not to go back to replicating everything.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -46,41 +47,43 @@ public sealed partial class AiBorgSystem
 
     private void InitializeReplication()
     {
-        // Внутренности приезжают ПОЗЖЕ захвата: ячейка и лазер кладутся на MapInit, модули —
-        // ContainerFill'ом, манипулятор и клинок — при активации шасси. Один проход по детям в
-        // момент claim половину из них не увидит.
+        // Internals arrive AFTER the claim: the cell and laser are placed on MapInit, modules
+        // via ContainerFill, and the gripper and blade on chassis activation. A single pass over
+        // children at claim time would miss half of them.
         SubscribeLocalEvent<EntInsertedIntoContainerMessage>(OnInserted);
         SubscribeLocalEvent<EntRemovedFromContainerMessage>(OnRemoved);
     }
 
-    /// <summary>Убрать поддерево тела из чужих зон видимости.</summary>
+    /// <summary>Remove the body's subtree from other players' visibility zones.</summary>
     /// <remarks>
-    /// Зовётся при захвате, а не при спавне, и это осознанно: незанятое шасси стоит на месте и в
-    /// чужую зону видимости не входит — чинить там нечего. Занятое начинает ходить.
+    /// Called on claim, not on spawn, and that's deliberate: an unclaimed chassis stays put and
+    /// never enters anyone's visibility zone — there is nothing to fix there. A claimed one
+    /// starts walking.
     /// </remarks>
     private void HideSubtree(EntityUid borg)
     {
         SetInternalOnChildren(borg, hidden: true);
     }
 
-    /// <summary>Вернуть поддерево под обычные правила: незанятое шасси должно быть обычным.</summary>
+    /// <summary>Return the subtree to normal rules: an unclaimed chassis should be ordinary.</summary>
     private void ShowSubtree(EntityUid borg)
     {
         SetInternalOnChildren(borg, hidden: false);
     }
 
     /// <summary>
-    /// Пройти детей и выставить (или снять) им <see cref="VisibilityFlags.Internal"/>.
+    /// Walk the children and set (or clear) <see cref="VisibilityFlags.Internal"/> on them.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Сам <paramref name="root"/> пропускается всегда</b> — см. замечание про корень шасси в
-    /// описании файла.
+    /// <b><paramref name="root"/> itself is always skipped</b> — see the note about the chassis
+    /// root in the file description.
     /// </para>
     /// <para>
-    /// Обновление маски просится на КАЖДОГО ребёнка отдельно, а не одним <c>RefreshVisibility</c>
-    /// на корне. <c>RecursivelyApplyVisibility</c> выходит сразу, если пересчитанная маска сущности
-    /// совпала с прежней, — а у корня она и не менялась, значит до детей проход не дошёл бы вовсе.
+    /// The mask update needs to be requested on EACH child individually, not with a single
+    /// <c>RefreshVisibility</c> on the root. <c>RecursivelyApplyVisibility</c> bails out
+    /// immediately if the entity's recomputed mask matches the old one — and on the root it never
+    /// changed at all, so the traversal would never even reach the children.
     /// </para>
     /// </remarks>
     private void SetInternalOnChildren(EntityUid root, bool hidden)
@@ -103,14 +106,15 @@ public sealed partial class AiBorgSystem
         else
             _visibility.RemoveLayer(uid, (int) VisibilityFlags.Internal);
 
-        // Вниз — своим ходом, а не только пересчётом маски. Пересчёт унаследовал бы бит от
-        // родителя, но НЕ записал бы его в VisibilityComponent внука: вынь внука наружу, и он
-        // окажется видимым, хотя мы его и не показывали. Своя запись у каждого уровня делает
-        // сокрытие и снятие симметричными — а вынутое наружу разбирает OnRemoved.
+        // Recurse downward under its own power, not just via a mask recompute. A recompute would
+        // inherit the bit from the parent but NOT write it into the grandchild's
+        // VisibilityComponent: pull the grandchild out, and it turns up visible even though we
+        // never showed it. Writing it explicitly at every level makes hiding and unhiding
+        // symmetric — and OnRemoved handles whatever gets pulled out.
         SetInternalOnChildren(uid, hidden);
     }
 
-    /// <summary>Приехавшее в занятого робота — тоже внутренности.</summary>
+    /// <summary>Anything that arrives inside a claimed borg is internal too.</summary>
     private void OnInserted(EntInsertedIntoContainerMessage ev)
     {
         if (!BelongsToClaimedBorg(ev.Container.Owner))
@@ -120,11 +124,12 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Уехавшее из занятого робота снова обычная сущность.
+    /// Anything that leaves a claimed borg becomes an ordinary entity again.
     /// </summary>
     /// <remarks>
-    /// Без этого робот, уронивший клинок, ронял бы его в невидимость: слой лежит на самом предмете,
-    /// а <c>OnParentChange</c> лишь пересчитывает маску и честно оставляет бит на месте.
+    /// Without this, a borg dropping a blade would drop it into invisibility: the layer sits on
+    /// the item itself, and <c>OnParentChange</c> merely recomputes the mask, faithfully leaving
+    /// the bit in place.
     /// </remarks>
     private void OnRemoved(EntRemovedFromContainerMessage ev)
     {
@@ -134,10 +139,11 @@ public sealed partial class AiBorgSystem
         SetInternal(ev.Entity, hidden: false);
     }
 
-    /// <summary>Стоит ли сущность внутри тела, которое мы ведём.</summary>
+    /// <summary>Whether an entity sits inside a body we are driving.</summary>
     /// <remarks>
-    /// Вверх по родителям, а не только сравнение с корнем: модуль — ребёнок шасси, а предмет
-    /// модуля — уже внук, и вставка в него приходит с контейнером-модулем.
+    /// Walks up through the parents rather than just comparing against the root: a module is a
+    /// child of the chassis, and a module's item is already a grandchild, so an insertion into it
+    /// arrives with the module container as the immediate parent.
     /// </remarks>
     private bool BelongsToClaimedBorg(EntityUid uid)
     {
@@ -157,18 +163,19 @@ public sealed partial class AiBorgSystem
         return false;
     }
 
-    // TODO: жертвы раунда 255 за пределами робота. Тот же бит Internal просится на:
-    //   * SolutionLungGas и прочие solution-сущности внутри мобов (4 полных ресинка на коте);
-    //   * содержимое закрытых непрозрачных контейнеров — WelderMini в шкафу, 3 ресинка;
-    //     снимать при открытии EntityStorage, а не по сессиям.
-    // Не сделано в этом заходе намеренно: у мобов в закрытом шкафу есть свой клиент, и цена
-    // ошибки — игрок без собственного тела. Нужен отдельный стенд именно на этот случай.
+    // TODO: victims of round 255 outside the borg. The same Internal bit is wanted on:
+    //   * SolutionLungGas and other solution entities inside mobs (4 full resyncs on a cat);
+    //   * contents of closed opaque containers — a WelderMini in a locker, 3 resyncs;
+    //     clear it on EntityStorage opening, not per-session.
+    // Deliberately not done in this pass: mobs in a closed locker have their own client, and the
+    // cost of a mistake is a player left without a body. This needs its own dedicated bench case.
 
-    /// <summary>Держать это тело у всех клиентов постоянно.</summary>
+    /// <summary>Keep this body present for all clients permanently.</summary>
     /// <remarks>
-    /// Отрицательный контроль стенда: постоянная репликация убирает вход в зону видимости как
-    /// событие, но платит за это трафиком на каждого клиента и лечит следствие, а не состав мира.
-    /// По умолчанию выключено — см. разбор у <see cref="AiCVars.BorgPvsOverride"/>.
+    /// A negative control for the bench: permanent replication removes entering a visibility zone
+    /// as an event, but pays for it with per-client traffic and treats the symptom rather than
+    /// world composition. Off by default — see the discussion at
+    /// <see cref="AiCVars.BorgPvsOverride"/>.
     /// </remarks>
     private void HoldInPvs(EntityUid borg)
     {
@@ -178,12 +185,12 @@ public sealed partial class AiBorgSystem
         _pvsOverride.AddGlobalOverride(borg);
     }
 
-    /// <summary>Вернуть тело под обычные правила дальности.</summary>
+    /// <summary>Return the body to normal range rules.</summary>
     /// <remarks>
-    /// Снимать при освобождении обязательно, а вот при удалении — не нужно:
-    /// <c>PvsOverrideSystem</c> сам чистит запись по <c>EntityTerminatingEvent</c>. Проверка cvar
-    /// здесь НЕ повторяется: настройку могли выключить между захватом и освобождением, и тогда
-    /// запись осталась бы висеть на теле, которое никто не ведёт.
+    /// Must be cleared on release, but not on deletion: <c>PvsOverrideSystem</c> already cleans up
+    /// the entry on <c>EntityTerminatingEvent</c>. The cvar check is NOT repeated here: the setting
+    /// might have been turned off between claim and release, and then the entry would stay hanging
+    /// on a body nobody is driving.
     /// </remarks>
     private void ReleaseFromPvs(EntityUid borg)
     {

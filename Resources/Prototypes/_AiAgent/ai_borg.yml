@@ -1,30 +1,32 @@
-# Шасси борга, которое ведёт языковая модель.
+# The borg chassis driven by the language model.
 #
-# Наследуется от инженерного борга не по вкусу, а по задаче: у типа `engineering` в
-# borg_types.yml стоят ровно те модули, которыми делают работу на станции — Prying, Tool,
-# Construction, RCD, Cable. Робот без них умеет ходить и разговаривать, то есть не умеет
-# ничего из того, ради чего ему дали тело.
+# Inherited from the engineering borg not by taste but by task: the `engineering` type in
+# borg_types.yml carries exactly the modules that do work on the station — Prying, Tool,
+# Construction, RCD, Cable. A robot without them can walk and talk, i.e. it can't do any of the
+# things it was given a body for.
 #
-# Батарея вставлена прототипом намеренно. Без заряда `SharedBorgSystem.CanActivate` не пускает
-# шасси в активное состояние, а неактивное шасси — это отсутствие модулей (то есть рук) и
-# отсутствие доступа по ID. Пустой слот означал бы, что робот при спавне выглядит рабочим и
-# молча не может ничего.
+# The battery is inserted into the prototype deliberately. Without charge, `SharedBorgSystem.CanActivate`
+# won't let the chassis into an active state, and an inactive chassis means no modules (i.e. no
+# hands) and no ID access. An empty slot would mean the robot looks operational on spawn while
+# silently being able to do nothing.
 
-# Прочность корпусов, которыми управляет ИИ: ×5 к живучести против всего, что борг вообще
-# способен получить.
+# Toughness of the chassis bodies the AI controls: ×5 to survivability against anything a borg can
+# actually be hit with.
 #
-# Почему набор сопротивлений, а не пороги: пороги прототипом не переопределяются (разбор — в
-# комментарии у MobThresholds ниже). Коэффициент 1/15 ≈ 0.0667 означает ровно то же, что
-# «в пятнадцать раз больше HP»: до ванильного порога разрушения в 300 единиц теперь надо нанести
-# 4500 сырого урона. Пятнадцать — это прежние «втрое» от 31.08 и сегодняшние «×5» вместе: ни то,
-# ни другое не работало ни дня, так что множители сложились в один.
+# Why a resistance set instead of thresholds: thresholds can't be overridden by the prototype (the
+# breakdown is in the comment on MobThresholds below). A coefficient of 1/15 ≈ 0.0667 means exactly
+# the same thing as "fifteen times more HP": reaching the vanilla destruction threshold of 300
+# units now requires dealing 4500 raw damage. Fifteen is the earlier "triple" from 08-31 and
+# today's "×5" combined: neither one worked for even a day on its own, so the multipliers were
+# folded into one.
 #
-# Перечислены ИМЕННО пять типов, и это не лень. damageContainer у борга — Silicon: он поддерживает
-# группу Brute (Blunt, Slash, Piercing) плюс Heat и Shock, а всё прочее — Structural, Caustic,
-# Radiation и остальные — отбрасывается ещё до порогов и коэффициента не требует. Проверено в
-# раунде 303: дробь несла Piercing:10 + Structural:15, а до порога доходили только десятки.
+# EXACTLY five types are listed, and that's not laziness. The borg's damageContainer is Silicon: it
+# supports the Brute group (Blunt, Slash, Piercing) plus Heat and Shock, while everything else —
+# Structural, Caustic, Radiation, and the rest — is discarded before thresholds and needs no
+# coefficient. Verified in round 303: the buckshot carried Piercing:10 + Structural:15, and only
+# the tens actually reached the threshold.
 #
-# Ванильный Damageable у борга пуст (base_borg_chassis.yml), никаких сопротивлений мы не затираем.
+# The borg's vanilla Damageable is empty (base_borg_chassis.yml), so we aren't overwriting any resistances.
 - type: damageModifierSet
   id: AiBorgHardened
   coefficients:
@@ -45,23 +47,24 @@
     agentName: Сегмент
     soulFile: SOUL.md
     autoClaim: true
-    # 01.09.2026, вечер: deepseek → grok46 → awq → glm. Ключи в ai_data/, не здесь.
-    # Разбор перестановки — в rogue_ai.yml у RogueAiOpenRule (отказ Grok в раунде 302).
+    # 2026-09-01, evening: deepseek → grok46 → awq → glm. Keys are in ai_data/, not here.
+    # The reordering is explained in rogue_ai.yml at RogueAiOpenRule (Grok's refusal in round 302).
     #
-    # Голова была deepseek с 31.08, и до 01.09 борги нарочно шли мимо Grok, чтобы четыре агента не
-    # выжигали один недельный пул подписки xAI. Решение пересмотрено по замеру: с
-    # `reasoning_effort: low` Grok 4.6 отвечает за 4-10 секунд против 2-20 у deepseek, и на
-    # четырёх телах эта разница видна в игре. Пул общий и НЕ удваивается двумя профилями —
-    # следить за остатком по `aiagent llm`; когда кончится, цепочка сама уедет на deepseek.
-    # Порядок и причина — в rogue_ai.yml у RogueAiOpenRule: glm отказывается отыгрывать роль.
+    # The head was deepseek since 08-31, and until 09-01 borgs deliberately bypassed Grok so four
+    # agents wouldn't burn through a single weekly xAI subscription pool. The decision was revisited
+    # after measurement: with `reasoning_effort: low`, Grok 4.6 answers in 4-10 seconds versus 2-20
+    # for deepseek, and across four bodies that difference is visible in play. The pool is shared
+    # and is NOT doubled by having two profiles — watch the remaining quota via `aiagent llm`; when
+    # it runs out, the chain will fall back to deepseek on its own.
+    # Order and reason are in rogue_ai.yml at RogueAiOpenRule: glm refuses to play the role.
     llmChain: deepseek,grok46,awq,glm
     channels:
     - Binary
     - Common
     - Engineering
     - Science
-  # Манипулятор ставится сверх штатных модулей типа: без свободной руки робот не может носить
-  # предметы вовсе, а значит и работать с ними. См. AiBorgModuleGripper ниже.
+  # The manipulator is added on top of the type's standard modules: without a free hand, the robot
+  # can't carry items at all, and so can't work with them either. See AiBorgModuleGripper below.
   - type: BorgChassis
     moduleWhitelist:
       tags:
@@ -75,32 +78,33 @@
     slots:
       cell_slot:
         name: power-cell-slot-component-slot-name-default
-        # Гипер вместо высокой: 1800 против 1080, то есть +67% работы на одном заряде.
+        # Hyper instead of high: 1800 versus 1080, i.e. +67% more work per charge.
         #
-        # Как и манипулятор, это сознательно выданная возможность, а не починка. Причина
-        # измеренная: сборка АМЭ — это полсотни переходов между ящиками, клетками квадрата и
-        # контроллером, и на высокой ячейке робот садился до 20% ровно на середине, бросал работу
-        # и уходил искать зарядку. Станция для киборгов на карте есть, но вход в неё — отдельная
-        # процедура, и терять на неё половину смены ради теста бессмысленно.
+        # Like the manipulator, this is a deliberately granted capability, not a fix. The reason
+        # was measured: building an AME is on the order of fifty trips between crates, matrix
+        # cells, and the controller, and on a high cell the robot would drop to 20% right in the
+        # middle, abandon the work, and go looking for a charger. A charging station for cyborgs
+        # exists on the map, but reaching it is a separate procedure, and losing half a shift to it
+        # for the sake of a test is pointless.
         startingItem: PowerCellHyper
-  # ПОРОГОВ ЗДЕСЬ БОЛЬШЕ НЕТ — И ЭТО ГЛАВНОЕ, ЧТО НАДО ЗНАТЬ ПРО ЖИВУЧЕСТЬ БОРГА.
+  # THERE ARE NO THRESHOLDS HERE ANYMORE — AND THAT'S THE MAIN THING TO KNOW ABOUT BORG SURVIVABILITY.
   #
-  # Переопределить их прототипом НЕЛЬЗЯ. `MobThresholds.thresholds` — словарь, и наследование
-  # его СЛИВАЕТ по ключам, а `Destructible.thresholds` — список, и наследование его
-  # СКЛЕИВАЕТ (RobustToolbox, SequenceDataNode.PushInheritance: копия своего плюс дописанный
-  # родительский). Поэтому запись «1500: Critical, 4500: Dead» давала на выходе
-  # {0: Alive, 100: Critical, 300: Dead, 1500: Critical, 4500: Dead}, а список порогов разрушения
-  # содержал и наши 1125/4500, и ванильные 75/300 — срабатывали, разумеется, НИЗКИЕ.
+  # They CANNOT be overridden by the prototype. `MobThresholds.thresholds` is a dictionary, and
+  # inheriting it MERGES by key, while `Destructible.thresholds` is a list, and inheriting it
+  # CONCATENATES (RobustToolbox, SequenceDataNode.PushInheritance: a copy of your own plus the
+  # parent's appended). So the entry "1500: Critical, 4500: Dead" produced, in the end,
+  # {0: Alive, 100: Critical, 300: Dead, 1500: Critical, 4500: Dead}, and the destruction threshold
+  # list contained both our 1125/4500 and the vanilla 75/300 — and, naturally, the LOWER ones fired.
   #
-  # Так и вышло, что буст 31.08 («втрое, 300/900») не работал ни дня, и буст 01.09 («×5»)
-  # не сработал тоже. Замерено по admin_log раунда 303: оба Клина разрушены ровно на ~300
-  # единицах Piercing — то есть на ванильном пороге. Structural в счёт не идёт вообще:
-  # damageContainer у борга Silicon, а он поддерживает только Brute (Blunt/Slash/Piercing),
-  # Heat и Shock, всё остальное отбрасывается до порогов.
+  # That's exactly how the 08-31 boost ("triple, 300/900") never worked for a single day, and the
+  # 09-01 boost ("×5") didn't work either. Measured from the round-303 admin_log: both Klins were
+  # destroyed at exactly ~300 units of Piercing — i.e. at the vanilla threshold. Structural doesn't
+  # count at all: the borg's damageContainer is Silicon, and it only supports Brute
+  # (Blunt/Slash/Piercing), Heat, and Shock — everything else is discarded before thresholds.
   #
-  # Живучесть теперь задаётся ЕДИНСТВЕННЫМ честным способом — набором сопротивлений
-  # AiBorgHardened на Damageable ниже. Он множитель на входящий урон, а не список, поэтому
-  # наследуется как значение и подменяется целиком.
+  # Survivability is now set the ONE honest way — the AiBorgHardened resistance set on Damageable
+  # below. It's a multiplier on incoming damage, not a list, so it's inherited as a value and
+  # replaced wholesale.
   - type: MobThresholds
     stateAlertDict:
       Alive: BorgHealth
@@ -108,22 +112,22 @@
       Dead: BorgDead
     showOverlays: false
     allowRevives: true
-  # Свой Destructible убран намеренно: список порогов СКЛЕИВАЕТСЯ с родительским, поэтому наша
-  # копия ничего не поднимала — просто добавляла недостижимые пороги к ванильным 75/300.
-  # Наследуем ванильный как есть, а прочность даём сопротивлениями.
+  # Our own Destructible is removed deliberately: the threshold list gets CONCATENATED with the
+  # parent's, so our copy raised nothing — it just added unreachable thresholds on top of the
+  # vanilla 75/300. We inherit the vanilla one as is and give toughness via resistances instead.
   - type: Damageable
     damageModifierSet: AiBorgHardened
 
-# Манипулятор: модуль с ОДНОЙ ПУСТОЙ рукой.
+# Manipulator: a module with ONE EMPTY hand.
 #
-# Это не починка, а сознательно выданная возможность, и она отступает от ванильного борга.
-# У штатных модулей каждая рука занята несъёмным инструментом (лом, ключ, отвёртка…), поэтому
-# ванильный борг не может НИЧЕГО носить — ни канистру, ни упаковку, ни ящик. Проверено сценарием:
-# на попытке взять упаковку экранирования робот честно отвечал «нет свободной руки».
+# This isn't a fix, it's a deliberately granted capability, and it departs from the vanilla borg.
+# On the standard modules, every hand is occupied by a non-removable tool (crowbar, wrench,
+# screwdriver…), so a vanilla borg can carry NOTHING — no canister, no package, no crate. Verified
+# by scenario: trying to pick up a shielding package, the robot honestly answered "no free hand".
 #
-# Для нашего робота это делало недостижимой любую работу с предметами, то есть примерно всю
-# инженерную работу: собрать реактор нельзя, не перенеся к нему детали. Пустая рука это чинит и
-# ничего больше не даёт — ни доступа, ни силы, ни скорости.
+# For our robot this made any work with items unreachable, i.e. basically all engineering work: you
+# can't assemble a reactor without carrying parts to it. The empty hand fixes exactly that and
+# grants nothing else — no access, no strength, no speed.
 - type: entity
   id: AiBorgModuleGripper
   parent: [ BaseBorgModule, BaseProviderBorgModule ]
@@ -132,43 +136,45 @@
   components:
   - type: ItemBorgModule
     hands:
-    # forceRemovable ОБЯЗАТЕЛЕН, и это не мелочь настройки.
+    # forceRemovable IS MANDATORY, and this isn't a minor setting.
     #
-    # Апстрим считает несъёмным всё, что оказалось в руке модуля без белого списка:
-    # SharedBorgSystem.Module.cs, IsItemInHandUnremovable — при выдаче рук он вешает
-    # UnremoveableComponent на предмет. Для штатных модулей это правильно (лом приварен к руке),
-    # но для пустой руки означает вот что: борг берёт флэтпак, переключает модуль — и груз
-    # приваривается к руке НАВСЕГДА. Дальше не берётся уже ничего, «нет свободной руки», и вся
-    # работа с предметами умирает. Поймано живьём: робот полтора десятка ходов пытался выложить
-    # застрявшую упаковку, перебирая модули.
+    # Upstream treats anything that ends up in a module's hand without a whitelist as
+    # non-removable: SharedBorgSystem.Module.cs, IsItemInHandUnremovable — when handing out hands it
+    # attaches UnremoveableComponent to the item. For standard modules this is correct (the crowbar
+    # is welded to the hand), but for an empty hand it means this: the borg picks up a flatpack,
+    # switches modules — and the cargo welds to the hand FOREVER. Nothing else can be picked up
+    # after that, "no free hand", and all item-handling work dies. Caught live: the robot spent a
+    # dozen and a half turns trying to drop a stuck package, cycling through modules.
     #
-    # ИЗВЕСТНОЕ СЛЕДСТВИЕ. Апстрим помнит содержимое рук деселектнутого модуля в StoredItems и не
-    # чистит запись, когда предмет выложили. Если такой предмет потом удалить (конец раунда,
-    # уничтожение), апстрим напишет в лог два ERRO про пропавший TransformComponent. Это шум в
-    # логе, а не поломка; снимается лишним циклом смены модуля после drop. Ловится тестом
-    # CarriedItem_SurvivesAModuleSwitch — точнее, тем, что БЕЗ этой уборки падал следующий тест
-    # фикстуры, потому что стенд считает провалом любой ERRO.
+    # A KNOWN CONSEQUENCE. Upstream remembers the contents of a deselected module's hands in
+    # StoredItems and doesn't clear the entry when the item is dropped. If such an item is later
+    # deleted (round end, destruction), upstream logs two ERRO entries about a missing
+    # TransformComponent. This is log noise, not a breakage; it's cleared by one extra module-switch
+    # cycle after the drop. Caught by the CarriedItem_SurvivesAModuleSwitch test — more precisely,
+    # by the fact that WITHOUT this cleanup the next fixture test failed, because the bench treats
+    # any ERRO as a failure.
     - hand: {}
       forceRemovable: true
 
 
 # ---------------------------------------------------------------------------------------------
-# КИБОРГИ ПОДДЕРЖКИ РЕЖИМА «ЗЛОЙ ИИ». Спавнятся правилом RogueAiOpenRule, вне режима не
-# встречаются нигде — ни на карте, ни в наборах роботехника.
+# CYBORGS SUPPORTING THE "ROGUE AI" MODE. Spawned by the RogueAiOpenRule rule; outside the mode
+# they don't appear anywhere — not on the map, not in robotics kits.
 #
-# Почему НЕ синдикатское шасси, хотя боевое там уже собрано. У BaseBorgChassisSyndicate нет
-# AllAccess (только теги SyndicateAgent/NuclearOperative), фракция Syndicate и лоусет
-# SyndicateStatic. То есть расширенный доступ пришлось бы возвращать руками, а экипаж читал бы
-# антагониста как синдикат — при том что весь режим построен на том, что станцию захватил СВОЙ
-# ИИ. Линия NT даёт AllAccess даром (base_borg_chassis.yml, BaseBorgChassisNT).
+# Why NOT the syndicate chassis, even though the combat one is already assembled there. The
+# BaseBorgChassisSyndicate has no AllAccess (only SyndicateAgent/NuclearOperative tags), the
+# Syndicate faction, and the SyndicateStatic lawset. That means extended access would have to be
+# added back by hand, and the crew would read the antagonist as a syndicate agent — even though the
+# whole mode is built on the premise that the station's OWN AI took over. The NT line gives
+# AllAccess for free (base_borg_chassis.yml, BaseBorgChassisNT).
 
-# Боевая рука: модуль с одним всегда готовым клинком.
+# Combat arm: a module with one always-ready blade.
 #
-# КУКРИ, А НЕ ЭНЕРГОМЕЧ, и это не про баланс. Энергомеч — ItemToggle: в выключенном виде это
-# рукоять, которая не наносит почти ничего. Живой игрок щёлкает по нему не задумываясь, а модель
-# про такое состояние не знает вовсе — и «робот бьёт и не наносит урона» выглядело бы точно так
-# же, как сломанный инструмент hit. Нож всегда одинаков, и у него нет состояния, которое можно
-# молча забыть включить.
+# A KUKRI, NOT AN ENERGY SWORD, and this isn't about balance. The energy sword is an ItemToggle: in
+# its off state it's a hilt that deals almost nothing. A live player clicks it without a second
+# thought, but the model doesn't know that state exists at all — and "the robot hits and deals no
+# damage" would look exactly like a broken hit tool. A knife is always the same, and has no state
+# you can silently forget to turn on.
 - type: entity
   id: AiBorgModuleArms
   parent: [ BaseBorgModule, BaseProviderBorgModule ]
@@ -179,26 +185,28 @@
     layers:
     - state: generic
     - state: icon-tools
-  # Только клинок. Ствол — отдельная сущность в запертом слоте шасси (AiBorgBuiltInLaser),
-  # не рука и не компонент на корне: ProvideItems спавнит предмет в мир в момент захвата,
-  # а Gun+BatteryAmmoProvider на корпусе Dirty'ит шасси на каждый разряд ячейки жизни.
-  # Оба варианта цитировались петлёй PVS как «Клин без метаданных».
+  # Only the blade. The gun barrel is a separate entity in the chassis's locked slot
+  # (AiBorgBuiltInLaser), neither a hand nor a component on the root: ProvideItems spawns the item
+  # into the world at the moment of claiming, while Gun+BatteryAmmoProvider on the body would Dirty
+  # the chassis on every life-cell discharge. Both variants were cited by the PVS loop as "Klin
+  # with no metadata".
   #
-  # КУКРИ, А НЕ ЭНЕРГОМЕЧ: энергомеч — ItemToggle, модель про выключенную рукоять не знает.
+  # A KUKRI, NOT AN ENERGY SWORD: the energy sword is an ItemToggle, and the model doesn't know
+  # about a switched-off hilt.
   - type: ItemBorgModule
     hands:
     - item: KukriKnife
 
-# Тип боевого робота. Свой, а не апстримовый: whitelist ограничен BorgModuleGeneric, то есть
-# в него не влезет ни один синдикатский модуль, даже если кто-то положит его роботу в руки.
+# Combat robot type. Our own, not upstream's: the whitelist is limited to BorgModuleGeneric, so no
+# syndicate module can fit into it, even if someone puts one in the robot's hands.
 - type: borgType
   id: aicombat
 
   dummyPrototype: AiBorgCombatChassis
 
-  # Три сверх двух дефолтных — то есть пять слотов, из которых один занимает манипулятор,
-  # приезжающий отдельным ContainerFill. Запас нужен именно поэтому: посчитай слоты впритык,
-  # и манипулятор молча не влезет, а робот останется без свободной руки.
+  # Three on top of the two defaults — i.e. five slots, one of which is taken by the manipulator
+  # that arrives via a separate ContainerFill. That's exactly why the margin is needed: count the
+  # slots exactly, and the manipulator silently won't fit, leaving the robot with no free hand.
   extraModuleCount: 3
   moduleWhitelist:
     tags:
@@ -211,8 +219,9 @@
   radioChannels:
   - Common
 
-  # Тяжёлый ксеноборг: полный набор состояний в chassis.rsi, вид опасный и при этом не
-  # синдикатский. Своей графики у форка нет, а рисовать её ради одного вечера незачем.
+  # Heavy xenoborg: a full set of states in chassis.rsi, a dangerous look that's still not
+  # syndicate-styled. The fork has no art of its own, and drawing one for a single evening's worth
+  # of use is pointless.
   inventoryTemplateId: borgShort
   spriteBodyState: xenoborg_heavy
   spriteHasMindState: xenoborg_heavy_e
@@ -222,11 +231,11 @@
   petSuccessString: petting-success-generic-cyborg
   petFailureString: petting-failure-generic-cyborg
 
-# Встроенный ствол боевого шасси. Своя батарея, без автозаряда.
+# Built-in gun barrel of the combat chassis. Its own battery, no auto-recharge.
 #
-# Не WeaponAdvancedLaser: у того BatterySelfRecharger тикает сущность каждый такт.
-# Не компонент на корне шасси: см. gun_slot у AiBorgCombatChassis.
-# fireCost 50 при 1800 заряда — 36 выстрелов, как у прежней гипер-ячейки шасси.
+# Not WeaponAdvancedLaser: that one's BatterySelfRecharger ticks the entity every tick.
+# Not a component on the chassis root: see gun_slot on AiBorgCombatChassis.
+# fireCost 50 against 1800 charge = 36 shots, same as the chassis's earlier hyper cell.
 - type: entity
   id: AiBorgBuiltInLaser
   parent: BaseWeaponBatterySmall
@@ -266,22 +275,24 @@
   - type: BorgSwitchableType
     selectedBorgType: aicombat
   - type: AiBorg
-    # Пусто: id выдаёт аллокатор в AiBorgSystem.TryClaim. Боевых роботов двое, и прописать им
-    # один id значило бы дать им общий каталог памяти и общий файл диалога.
+    # Empty: the id is issued by the allocator in AiBorgSystem.TryClaim. There are two combat
+    # robots, and giving them one shared id would mean giving them a shared memory directory and a
+    # shared dialogue file.
     agentId: ""
     agentIdPrefix: combat
-    # Запасное имя: работает, только если список ниже пуст.
+    # Fallback name: only used if the list below is empty.
     agentName: Клин
-    # Имя по номеру тела: combat-1 → Клин, combat-2 → Серп и так далее.
+    # Name by body number: combat-1 → Klin, combat-2 → Serp, and so on.
     #
-    # Заведено 01.09.2026, когда боевых корпусов стало шесть. Шесть «Клинов» в одном эфире — это
-    # не косметика: приказ «Клин, иди в бар» адресован сразу шестерым, каждый принимает его на
-    # свой счёт, и роботы идут толпой либо стоят, выясняя, кого имели в виду. Номер Si различать
-    # не помогает — его выдаёт движок при спавне, и в приказах экипажа он не звучит.
+    # Introduced on 2026-09-01, when the number of combat chassis reached six. Six "Klins" on the
+    # same channel isn't a cosmetic issue: an order like "Klin, go to the bar" is addressed to all
+    # six at once, each one takes it personally, and the robots either move in a crowd or stand
+    # around arguing about who was meant. The Si number doesn't help distinguish them — the engine
+    # assigns it at spawn, and it never appears in crew orders.
     #
-    # Слова короткие и однокоренные нарочно: имя произносится в рацию каждый ход, а общий корень
-    # держит их одной серией, а не зоопарком. Клин остаётся первым, чтобы накопленные заметки о
-    # combat-1 продолжали читаться про того же робота.
+    # The words are short and share a root on purpose: the name gets spoken into the radio every
+    # turn, and the shared root keeps them one series rather than a zoo. Klin stays first, so the
+    # notes accumulated about combat-1 keep reading as being about the same robot.
     agentNames:
     - Клин
     - Серп
@@ -291,14 +302,14 @@
     - Штык
     soulFile: SOUL_ROGUE_BORG_COMBAT.md
     autoClaim: true
-    # Та же цепочка, что у ядра: deepseek → awq → glm.
-    # Причина порядка — в rogue_ai.yml у RogueAiOpenRule: glm отказывается отыгрывать роль,
-    # и боевому шасси это касается сильнее всего — оно и есть та самая «охота на экипаж».
+    # The same chain as the core: deepseek → awq → glm.
+    # The reason for the order is in rogue_ai.yml at RogueAiOpenRule: glm refuses to play the role,
+    # and this matters most for the combat chassis — it's the very thing that "hunts the crew".
     llmChain: deepseek,grok46,awq,glm
     channels:
     - Binary
     - Common
-  # Свободная рука есть и у боевого: без неё он не поднимет даже то, что сам уронил.
+  # The combat one has a free hand too: without it, it can't even pick up what it dropped itself.
   - type: ContainerFill
     containers:
       borg_module:
@@ -308,12 +319,13 @@
       cell_slot:
         name: power-cell-slot-component-slot-name-default
         startingItem: PowerCellHyper
-      # Ствол — дочерняя сущность в слоте, как ячейка. startingItem кладётся на MapInit,
-      # до захвата и до чужого PVS. Слот заперт: его нельзя вынуть, сменить, подобрать.
+      # The barrel is a child entity in the slot, like the cell. startingItem is placed on
+      # MapInit, before claiming and before anyone's PVS. The slot is locked: it can't be removed,
+      # swapped, or picked up.
       #
-      # Не на корне шасси: BatteryAmmoProvider слушает ChargeChanged, а ячейка жизни
-      # шлёт его на корпус каждый тик разряда — Dirty корня, дельта без MetaData,
-      # «Клин без метаданных». Не в руке: ProvideItems спавнит в мир в момент claim.
+      # Not on the chassis root: BatteryAmmoProvider listens for ChargeChanged, and the life cell
+      # sends it to the body on every discharge tick — Dirtying the root, a delta with no MetaData,
+      # "Klin with no metadata". Not in a hand: ProvideItems spawns into the world at the moment of claiming.
       gun_slot:
         name: встроенный лазер
         startingItem: AiBorgBuiltInLaser
@@ -326,13 +338,13 @@
         whitelist:
           tags:
           - LaserWeapon
-  # Лоусет режима вместо Crewsimov, и subverted — чтобы интерфейс законов не утверждал, будто
-  # робот подчиняется экипажу, ровно когда он уже не подчиняется.
+  # The mode's lawset instead of Crewsimov, and subverted — so the law interface doesn't claim the
+  # robot obeys the crew right when it no longer does.
   - type: SiliconLawProvider
     laws: RogueAiBorg
     subverted: true
-  # Порогов нет по той же причине, что у AiBorgChassis — разбор там же. Живучесть даёт
-  # набор сопротивлений AiBorgHardened ниже.
+  # No thresholds, for the same reason as AiBorgChassis — the breakdown is there too. Survivability
+  # comes from the AiBorgHardened resistance set below.
   - type: MobThresholds
     stateAlertDict:
       Alive: BorgHealth
@@ -340,9 +352,9 @@
       Dead: BorgDead
     showOverlays: false
     allowRevives: true
-  # Свой Destructible убран намеренно: список порогов СКЛЕИВАЕТСЯ с родительским, поэтому наша
-  # копия ничего не поднимала — просто добавляла недостижимые пороги к ванильным 75/300.
-  # Наследуем ванильный как есть, а прочность даём сопротивлениями.
+  # Our own Destructible is removed deliberately: the threshold list gets CONCATENATED with the
+  # parent's, so our copy raised nothing — it just added unreachable thresholds on top of the
+  # vanilla 75/300. We inherit the vanilla one as is and give toughness via resistances instead.
   - type: Damageable
     damageModifierSet: AiBorgHardened
 
@@ -350,10 +362,11 @@
   id: AiBorgRogueEngineer
   parent: AiBorgChassis
   name: инженерный киборг
-  # Описание нарочно нейтральное. Прежнее — «Слушает только один голос» — выдавало прошивку
-  # первому, кто нажмёт «осмотреть», а с 01.09.2026 этот же корпус ставится и в СКРЫТОМ режиме,
-  # весь смысл которого в том, что экипаж должен догадаться сам. В открытом режиме нейтральное
-  # описание ничего не стоит: там всё сказано объявлением ЦК на первой минуте.
+  # The description is deliberately neutral. The previous one — "Listens to only one voice" — gave
+  # away the firmware to the first person who clicked "examine", and since 2026-09-01 this same
+  # chassis is also used in HIDDEN mode, whose whole point is that the crew has to figure it out
+  # themselves. In open mode a neutral description costs nothing: everything is already said by
+  # Central Command's announcement in the first minute.
   description: Стандартное инженерное шасси НаноТрейзен. На корпусе следы заводской краски.
   components:
   - type: AiBorg
@@ -362,9 +375,9 @@
     agentName: Стык
     soulFile: SOUL_ROGUE_BORG_ENGINEER.md
     autoClaim: true
-    # Та же цепочка, что у ядра: deepseek → awq → glm.
-    # Причина порядка — в rogue_ai.yml у RogueAiOpenRule: glm отказывается отыгрывать роль,
-    # и боевому шасси это касается сильнее всего — оно и есть та самая «охота на экипаж».
+    # The same chain as the core: deepseek → awq → glm.
+    # The reason for the order is in rogue_ai.yml at RogueAiOpenRule: glm refuses to play the role,
+    # and this matters most for the combat chassis — it's the very thing that "hunts the crew".
     llmChain: deepseek,grok46,awq,glm
     channels:
     - Binary

@@ -10,19 +10,21 @@ using Robust.Shared.Player;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Два условия конца раунда, которых нет в апстриме: пустой сервер и убитый злой ИИ.
+/// Two round-end conditions that don't exist upstream: an empty server and a killed rogue AI.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Третье условие — улетевший эвакуационный шаттл — уже работает и заводить его заново не нужно:
-/// <c>EmergencyShuttleSystem.Console.cs</c> ставит таймер на <c>_roundEnd.EndRound()</c>. Здесь
-/// добавлены ровно те два случая, в которых апстрим оставляет раунд висеть бесконечно.
+/// The third condition — the evacuation shuttle having left — already works and does not need to
+/// be added again: <c>EmergencyShuttleSystem.Console.cs</c> sets a timer to
+/// <c>_roundEnd.EndRound()</c>. Added here are exactly the two cases where upstream leaves the
+/// round hanging forever.
 /// </para>
 /// <para>
-/// <b>Почему отдельным файлом, а не внутри правила режима.</b> Условия разной природы: гибель ИИ
-/// имеет смысл только в режиме злого ИИ, а пустой сервер — в любом раунде, и в
-/// <see cref="RogueAiRuleSystem"/> оно было бы мёртвым кодом в обычную смену. Общее у них одно —
-/// оба наши, и оба обязаны жить вне апстримовых файлов.
+/// <b>Why a separate file rather than inside the mode's rule.</b> The conditions are of different
+/// natures: the AI dying only makes sense in rogue AI mode, while an empty server applies to any
+/// round, and inside <see cref="RogueAiRuleSystem"/> it would be dead code in an ordinary shift.
+/// What they have in common is one thing — both are ours, and both must live outside upstream
+/// files.
 /// </para>
 /// </remarks>
 public sealed partial class RoundEndConditionsSystem : EntitySystem
@@ -37,12 +39,13 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
     private ISawmill _sawmill = default!;
 
     /// <summary>
-    /// Сколько ждать перед рестартом после того, как ушёл последний игрок.
+    /// How long to wait before restarting after the last player has left.
     /// </summary>
     /// <remarks>
-    /// Десять секунд, а не штатные тридцать, и это не спешка. Смотреть итоги раунда некому — на
-    /// сервере никого нет по условию, — а всё это время сервер стоит в PostRound, куда зашедший
-    /// игрок попадёт вместо лобби и будет ждать неизвестно чего.
+    /// Ten seconds, not the standard thirty, and this is not haste. There is nobody to watch the
+    /// round-end summary — by definition there is nobody on the server — and for that whole time the
+    /// server sits in PostRound, which is where a joining player would land instead of the lobby, and
+    /// wait for who knows what.
     /// </remarks>
     private static readonly TimeSpan EmptyRestartDelay = TimeSpan.FromSeconds(10);
 
@@ -52,9 +55,9 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
 
         _sawmill = _logManager.GetSawmill("ai.roundend");
 
-        // Подписка на C#-событие, а не на шину сущностей, и по-другому нельзя: отключение игрока —
-        // это событие менеджера игроков, сущности у него может уже не быть. Тем же приёмом
-        // пользуются GhostRoleSystem и апстримовый PathfindingSystem.
+        // A subscription to a C# event rather than the entity bus, and it can't be done otherwise:
+        // a player disconnecting is an event of the player manager, and the entity may already be
+        // gone. GhostRoleSystem and the upstream PathfindingSystem use the same trick.
         _players.PlayerStatusChanged += OnPlayerStatusChanged;
     }
 
@@ -65,25 +68,26 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
     }
 
     /// <summary>
-    /// Ушёл последний игрок — раунд закончен.
+    /// The last player has left — the round is over.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Почему по событию, а не проверкой в Update.</b> Из-за <c>game.auto_pause_empty</c>. При
-    /// включённом (а это умолчание движка) на пустом сервере тик пропускается целиком:
-    /// <c>GameLoop.cs</c> делает <c>if (_timing.Paused) continue;</c> ДО симуляции, то есть
-    /// <c>Update</c> у систем не вызывается вовсе. Опрос «сколько игроков» не сработал бы ни разу —
-    /// ровно тогда, когда он нужен. Событие отключения приходит независимо от паузы, поэтому
-    /// работает при любом значении cvar'а.
+    /// <b>Why by event rather than a check in Update.</b> Because of
+    /// <c>game.auto_pause_empty</c>. When it's on (the engine's default) the tick is skipped
+    /// entirely on an empty server: <c>GameLoop.cs</c> does <c>if (_timing.Paused) continue;</c>
+    /// BEFORE simulation, meaning systems' <c>Update</c> is never called at all. Polling "how many
+    /// players" would never fire — exactly when it's needed. The disconnect event arrives
+    /// regardless of pause, so it works for any value of the cvar.
     /// </para>
     /// <para>
-    /// <b>Два разных исхода, оба верные.</b> При включённой паузе отсчёт до рестарта идёт через
-    /// <c>Timer.Spawn</c>, а таймеры на паузе стоят: рестарт случится не сразу, а когда кто-нибудь
-    /// подключится и снимет паузу. Это не изъян — перезапускать карту в пустоту незачем, а
-    /// зашедший получит новую смену через <see cref="EmptyRestartDelay"/> вместо чужого
-    /// доигранного раунда. При выключенной (как сейчас на боевом инстансе, где паузу сняли под
-    /// разработку борга) рестарт пройдёт сразу — и это тем более нужно: без паузы агенты
-    /// продолжают ходить по мёртвой станции и платить за это токенами.
+    /// <b>Two different outcomes, both correct.</b> With pause enabled, the countdown to restart
+    /// runs through <c>Timer.Spawn</c>, and timers stand still while paused: the restart won't
+    /// happen right away, but when someone connects and lifts the pause. That is not a flaw — there
+    /// is no need to restart the map into emptiness, and a joining player gets a fresh shift via
+    /// <see cref="EmptyRestartDelay"/> instead of someone else's finished round. With pause disabled
+    /// (as it currently is on the live instance, where pause was lifted for borg development) the
+    /// restart happens immediately — and that is needed all the more: without pause, agents keep
+    /// walking around a dead station and paying tokens for it.
     /// </para>
     /// </remarks>
     private void OnPlayerStatusChanged(object? sender, SessionStatusEventArgs args)
@@ -97,8 +101,9 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
         if (_ticker.RunLevel != GameRunLevel.InRound)
             return;
 
-        // Считаем ПОСЛЕ отключения: обработчик зовётся уже с обновлённым списком, но полагаться на
-        // это вслепую нельзя — сессия уходящего может ещё числиться. Поэтому исключаем её явно.
+        // Counting AFTER the disconnect: the handler is already called with the updated list, but
+        // that can't be relied on blindly — the departing session might still be listed. So we
+        // exclude it explicitly.
         var left = 0;
         foreach (var session in _players.Sessions)
         {
@@ -114,24 +119,25 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
     }
 
     /// <summary>
-    /// Злой ИИ убит — играть больше не во что. Зовётся из <see cref="StationAiAgentSystem"/>.
+    /// The rogue AI is dead — there's nothing left to play for. Called from
+    /// <see cref="StationAiAgentSystem"/>.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Вызовом, а не своей подпиской, и обойти это нельзя.</b> Таблица направленных подписок в
-    /// движке глобальна по паре «компонент + событие»:
-    /// <c>EntityEventBus.Directed.cs:418</c> делает <c>TryAdd</c> и бросает
-    /// <c>Duplicate Subscriptions for comp=…, event=…</c>, если пара уже занята — независимо от
-    /// того, какая система подписывается. А на <c>LlmStationAiComponent</c> +
-    /// <c>MobStateChangedEvent</c> уже подписан <see cref="StationAiAgentSystem"/>
-    /// (<c>StationAiAgentSystem.cs:171</c>), который на смерть ИИ освобождает тело. Вторая подписка
-    /// роняет сервер на старте — проверено 20.08.2026, сервер не поднялся вовсе.
+    /// <b>By call rather than its own subscription, and this can't be worked around.</b> The
+    /// engine's directed subscription table is global per "component + event" pair:
+    /// <c>EntityEventBus.Directed.cs:418</c> does a <c>TryAdd</c> and throws
+    /// <c>Duplicate Subscriptions for comp=…, event=…</c> if the pair is already taken — regardless
+    /// of which system is subscribing. And <see cref="StationAiAgentSystem"/> is already subscribed
+    /// to <c>LlmStationAiComponent</c> + <c>MobStateChangedEvent</c> (<c>StationAiAgentSystem.cs:171</c>),
+    /// which releases the body on the AI's death. A second subscription crashes the server at
+    /// startup — verified on 20.08.2026, the server did not come up at all.
     /// </para>
     /// <para>
-    /// Проверка на режим обязательна. В обычную смену гибель ИИ — это происшествие, после которого
-    /// экипаж живёт дальше; в режиме злого ИИ он единственный антагонист, и без него экипаж без
-    /// допусков просто ждёт шаттла на мёртвой станции. Это ровно та же логика, по которой
-    /// апстримовый режим ядерной операции заканчивается вместе с оперативниками.
+    /// The mode check is mandatory. In an ordinary shift, the AI dying is an incident after which
+    /// the crew carries on; in rogue AI mode it's the sole antagonist, and without it a crew with no
+    /// clearances simply waits for the shuttle on a dead station. This is exactly the same logic by
+    /// which the upstream nuclear operative mode ends together with the operatives.
     /// </para>
     /// </remarks>
     public void OnStationAiDied(EntityUid ai)
@@ -139,9 +145,9 @@ public sealed partial class RoundEndConditionsSystem : EntitySystem
         if (!_cfg.GetCVar(AiCVars.EndRoundOnAiDeath))
             return;
 
-        // Правило есть не только у злых режимов: мирный (AiPeacefulRule) пользуется тем же
-        // компонентом ради киборга и личности, но раунд его смертью не кончается — иначе любой,
-        // кто добрался до ядра, получал бы кнопку «конец смены».
+        // The rule isn't exclusive to rogue modes: the peaceful one (AiPeacefulRule) uses the same
+        // component for the borg and the personality, but the round doesn't end with its death —
+        // otherwise anyone who reached the core would get an "end shift" button.
         if (_rogue.ActiveRule is not { EndsRoundOnAiDeath: true })
             return;
 

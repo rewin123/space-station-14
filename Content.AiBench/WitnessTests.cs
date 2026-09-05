@@ -20,19 +20,21 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Видит ли агент, что происходит перед его глазом.
+/// Whether the agent sees what happens right in front of its eye.
 ///
 /// <para>
-/// До этих подписок он не видел ничего: слышал рацию и речь у ядра, а мир для него был неподвижной
-/// картинкой, которую можно только опросить инструментом <c>look</c>. Дырой это делала не
-/// пропущенная драка, а невыполнимая просьба — «когда я вставлю плазму, запусти генератор»
-/// упиралась в то, что узнать о вставленной плазме нечем.
+/// Before these subscriptions it saw nothing: it heard the radio and speech near the core, while
+/// the world for it was a frozen picture that could only be polled with the <c>look</c> tool. What
+/// made this a hole wasn't a missed fight, but an impossible request — "when I insert the plasma,
+/// start the generator" ran into the fact that there was no way to learn the plasma had been
+/// inserted.
 /// </para>
 /// <para>
-/// Половина этого файла — отрицательные проверки, и это не перестраховка. Зрение, которое видит всё
-/// подряд по всей станции, — не зрение, а всезнание с красивым форматом; отличает одно от другого
-/// ровно то, что дальнее событие в наблюдение НЕ попадает. Поэтому здесь проверяется не только
-/// «строка пришла», но и «строки нет, и работа под неё даже не начиналась».
+/// Half of this file is negative checks, and that's not just caution. Vision that sees everything
+/// happening across the whole station isn't vision at all — it's omniscience in a nice format;
+/// what tells the two apart is exactly the fact that a distant event does NOT make it into the
+/// observation. So here we check not only "the line arrived", but also "the line is absent, and the
+/// work behind it never even started".
 /// </para>
 /// </summary>
 [TestFixture]
@@ -40,14 +42,15 @@ namespace Content.AiBench;
 public sealed class WitnessTests
 {
     /// <summary>
-    /// Идентификатор прототипа, а не строка в вызове: <c>Index&lt;T&gt;("Blunt")</c> запрещён
-    /// аналитиком RA0033, и запрет по делу — опечатка в литерале всплыла бы только на прогоне.
+    /// A prototype identifier, not a string at the call site: <c>Index&lt;T&gt;("Blunt")</c> is
+    /// forbidden by the RA0033 analyzer, and the ban is warranted — a typo in the literal would
+    /// only surface at run time.
     /// </summary>
     private static readonly ProtoId<DamageTypePrototype> Blunt = "Blunt";
 
     /// <summary>
-    /// Остановить петлю, оставив сессию: обработчики наблюдения продолжают наполнять очередь, и
-    /// никто не гонится с проверкой за право её осушить.
+    /// Stop the loop while keeping the session: observation handlers keep filling the queue, and
+    /// nothing is racing the check for the right to drain it.
     /// </summary>
     private static async Task Freeze(AiWorld w)
     {
@@ -56,11 +59,11 @@ public sealed class WitnessTests
     }
 
     /// <summary>
-    /// Выбросить всё, что накопилось за подготовку сцены.
+    /// Discard everything that piled up while the scene was set up.
     ///
-    /// Спавн сущностей сам по себе шумит: человек появляется одетым, то есть с десятком вложений в
-    /// контейнеры — и все они рядом с ядром. Без этой чистки проверка «строки нет» ловила бы
-    /// собственную подготовку теста.
+    /// Spawning entities is noisy by itself: a human appears dressed, meaning with a dozen
+    /// insertions into containers — and all of them near the core. Without this cleanup, the "no
+    /// line" check would be catching the test's own setup.
     /// </summary>
     private static async Task Drain(AiWorld w) =>
         await w.Read(() => w.System.BuildObservationForTest(w.Brain));
@@ -68,7 +71,7 @@ public sealed class WitnessTests
     private static async Task<string> Observation(AiWorld w) =>
         await w.Read(() => w.System.BuildObservationForTest(w.Brain)) ?? "";
 
-    // ------------------------------------------------------------------ проводка
+    // ------------------------------------------------------------------ wiring
 
     [Test]
     public async Task Interaction_NearTheEye_ReachesTheAgent()
@@ -102,7 +105,7 @@ public sealed class WitnessTests
     [Test]
     public async Task ContainerInsert_NearTheEye_ReachesTheAgent()
     {
-        // Тот самый механизм, ради которого задача поставлена: «вставлю плазму — запусти генератор».
+        // The very mechanism the task was set up for: "insert the plasma - start the generator".
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -155,8 +158,8 @@ public sealed class WitnessTests
     [Test]
     public async Task Healing_IsNotReportedAsDamage()
     {
-        // Обратная сторона: лечение проходит по тому же событию, и без проверки знака агент
-        // докладывал бы о медике, который «бьёт» пациента.
+        // The flip side: healing goes through the same event, and without a sign check the agent
+        // would report the medic as "hitting" the patient.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -176,10 +179,11 @@ public sealed class WitnessTests
     [Test]
     public async Task OpeningDoor_ReportsOnce_NotTwice()
     {
-        // Регрессия по боевой сессии 16 августа. Дверь идёт Closed → Opening → Open, событие
-        // прилетает дважды, а ярлык у обоих состояний был один — агент получал две неотличимые
-        // строки и честно тратил ход на «повторное событие, уже учтено». Семь ходов из сорока двух
-        // ушли на этот пересказ самому себе, и заметить это можно было только в логе живого раунда.
+        // A regression from the live session on August 16. The door goes Closed -> Opening -> Open,
+        // the event fires twice, and both states carried the same label — the agent got two
+        // indistinguishable lines and dutifully spent a turn on "duplicate event, already noted".
+        // Seven turns out of forty-two went into this self-narration, and it could only be spotted
+        // in the log of a live round.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -188,7 +192,7 @@ public sealed class WitnessTests
 
         await w.Post(() => w.Pair.Server.System<SharedDoorSystem>().StartOpening(door));
 
-        // Достаточно тиков, чтобы анимация доиграла до конца: ловим ОБА события, а не только первое.
+        // Enough ticks for the animation to finish playing out: we catch BOTH events, not just the first.
         await w.Pair.Server.WaitRunTicks(60);
 
         var observation = await Observation(w);
@@ -236,13 +240,13 @@ public sealed class WitnessTests
         });
     }
 
-    // ------------------------------------------------------------------ паритет
+    // ------------------------------------------------------------------ parity
 
     [Test]
     public async Task Interaction_FarFromTheEye_IsNotReported()
     {
-        // Главный тест файла. Зрение, которое видит всю станцию, — это всезнание, и отличается оно
-        // от зрения ровно тем, что здесь проверяется.
+        // The main test in this file. Vision that sees the whole station is omniscience, and what
+        // sets it apart from vision is exactly what's checked here.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -267,29 +271,29 @@ public sealed class WitnessTests
             Assert.That(observation, Does.Not.Contain("OBSERVED"),
                 "событие в сорока тайлах от глаза агент видеть не может: " + observation);
 
-            // Счётчик, а не текст. Отсутствие строки одинаково хорошо объясняется и воротами, и
-            // тем, что строка не построилась; ноль здесь означает, что ворота отказали до всякой
-            // работы, и только это и есть утверждение о паритете.
+            // A counter, not text. The absence of a line is equally well explained by the gate and
+            // by the line simply failing to build; zero here means the gate rejected before any
+            // work was done, and that's the only claim about parity being made.
             Assert.That(after - before, Is.Zero,
                 $"наблюдение всё-таки выпустило {after - before} строк о том, чего глаз не видит");
         });
     }
 
-    // ------------------------------------------------------------------ опознание
+    // ------------------------------------------------------------------ identification
 
     [Test]
     public async Task ObservedHandle_MatchesTheOneLookGives()
     {
-        // Согласованность мепперов. Разойдись реестры — и одно и то же устройство стало бы для
-        // агента двумя разными вещами: одной из обзора, другой из наблюдения.
+        // Consistency between mappers. If the registries diverged, the same device would become
+        // two different things for the agent: one from look, another from observation.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
         var device = await w.Spawn("SMESBasic", dx: 3);
         var item = await w.Spawn("Crowbar", dx: 2);
 
-        // Сначала обзор — он и минтит хендл. Наблюдение обязано взять уже существующий, а не
-        // завести второй.
+        // Look happens first - it's what mints the handle. Observation must take the existing one,
+        // not mint a second one.
         var expected = await w.Handle(device);
         await Drain(w);
 
@@ -314,8 +318,8 @@ public sealed class WitnessTests
     [Test]
     public async Task ObservedHandle_ResolvesBackToTheEntity()
     {
-        // Строка, по которой нельзя действовать, бесполезна: весь смысл хендла в том, что агент
-        // вызывает по нему инструмент, не разыскивая вещь обзором заново.
+        // A line you can't act on is useless: the whole point of a handle is that the agent invokes
+        // a tool by it, without hunting the thing down with look all over again.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -347,14 +351,14 @@ public sealed class WitnessTests
             $"хендл «{handle}» из строки не указывает ни на вложенное, ни на то, куда вложили");
     }
 
-    // ------------------------------------------------------------------ очередь
+    // ------------------------------------------------------------------ queue
 
     [Test]
     public async Task ObservedFlood_DoesNotEvictSpeech()
     {
-        // Очередь выбрасывает старейшее безотносительно вида, а наблюдений приходит поток. Без
-        // отдельного потолка возня в кадре выталкивала бы из очереди обращение по рации — то есть
-        // агент переставал бы слышать просьбы ровно тогда, когда их больше всего.
+        // The queue evicts the oldest entry regardless of kind, and observations arrive in a flood.
+        // Without a separate cap, activity in view would push a radio call out of the queue - i.e.
+        // the agent would stop hearing requests exactly when there are the most of them.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -372,8 +376,8 @@ public sealed class WitnessTests
                 throw new InvalidOperationException("реплику не удалось передать: " + why);
         });
 
-        // Двадцать вложений на пятёрку потолка: строка по рации переживёт это, только если
-        // подрезается своя категория, а не старейшее вообще.
+        // Twenty insertions against a cap of five: the radio line survives this only if it's each
+        // category that gets trimmed, and not just the oldest entry overall.
         await w.Post(() =>
         {
             var containers = w.Pair.Server.System<SharedContainerSystem>();
@@ -401,21 +405,23 @@ public sealed class WitnessTests
         });
     }
 
-    // ------------------------------------------------------------------ объём
+    // ------------------------------------------------------------------ volume
 
     [Test]
     public async Task OnePersonAppearing_CostsABoundedNumberOfLines()
     {
-        // Замер объёма, он же сторож от шланга.
+        // A volume measurement, also a guard against a firehose.
         //
-        // Троттлинга у наблюдения нет по решению владельца, а контекст модели 256k, так что сотня
-        // строк за ход ничего не ломает. Ломало бы другое: подписка на что-нибудь, что срабатывает
-        // на каждое движение, — и тогда один человек, вошедший в кадр, стоил бы не десятков строк, а
-        // тысяч. Число печатается, чтобы им можно было пользоваться, а потолок стоит там, где ловит
-        // катастрофу, а не там, где хочется видеть результат.
+        // Observation has no throttling by owner's decision, and the model's context is 256k, so a
+        // hundred lines per turn breaks nothing. What would break things is something else: a
+        // subscription to anything that fires on every movement - then a single person entering
+        // view would cost not tens of lines, but thousands. The number is printed so it can be used,
+        // and the cap sits where it catches a catastrophe, not where one would like to see a nice
+        // result.
         //
-        // Появление одетого человека — самый дорогой одиночный случай из дешёвых: снаряжение едет
-        // вложениями в контейнеры, и все они рядом с глазом.
+        // A dressed person appearing is the most expensive single case among the cheap ones:
+        // equipment rides in as insertions into containers, and all of them are right next to the
+        // eye.
         await using var w = await AiWorld.Create();
         await Freeze(w);
         await Drain(w);
@@ -439,20 +445,21 @@ public sealed class WitnessTests
         });
     }
 
-    // ------------------------------------------------------------------ реактивность
+    // ------------------------------------------------------------------ responsiveness
 
     [Test]
     public async Task WhatItSaw_IsActionableInTheSameTurn()
     {
-        // Ради этого задача и ставилась. Просьба «когда я вставлю плазму — запусти генератор» была
-        // невыполнима не потому, что агент ленив, а потому, что узнать о вставленной плазме ему было
-        // нечем: оставалось переспрашивать по рации. Здесь проверяется вся цепочка целиком —
-        // событие в мире, строка наблюдения, хендл из этой строки, вызов инструмента по нему и
-        // ответ про ТУ САМУЮ сущность.
+        // This is exactly what the task was set up for. The request "when I insert the plasma -
+        // start the generator" was impossible not because the agent is lazy, but because it had no
+        // way to learn the plasma had been inserted: all it could do was ask again over the radio.
+        // Here we check the whole chain end to end - the event in the world, the observation line,
+        // the handle from that line, the tool call by that handle, and the answer about THAT EXACT
+        // entity.
         //
-        // Модель подменена клиентом, который читает строку и действует по ней механически. Это
-        // намеренно: проверяется проводка, а не сообразительность — сообразительность меряется
-        // живыми прогонами, и её нельзя ставить в покоммитный тест.
+        // The model is replaced by a client that reads the line and acts on it mechanically. This is
+        // deliberate: what's being checked is the wiring, not intelligence - intelligence is
+        // measured by live runs, and it can't be put into a pre-commit test.
         var llm = new ActsOnWhatItSees();
 
         await using var w = await AiWorld.CreateWith(llm);
@@ -482,12 +489,12 @@ public sealed class WitnessTests
     }
 
     /// <summary>
-    /// Подставная модель, которая делает ровно одно: увидев строку о вложении, вызывает инструмент
-    /// по хендлу из этой строки.
+    /// A stub model that does exactly one thing: on seeing a line about an insertion, it calls the
+    /// tool using the handle from that line.
     ///
-    /// Ничего не решает и не выбирает — потому и годится в покоммитный прогон. Всё, что она
-    /// доказывает: хендл, приехавший в наблюдении, работает как адрес без единого промежуточного
-    /// <c>look</c>.
+    /// It doesn't decide or choose anything - that's exactly why it's fit for a pre-commit run. All
+    /// it proves is that a handle that arrived in an observation works as an address without a
+    /// single intermediate <c>look</c>.
     /// </summary>
     private sealed class ActsOnWhatItSees : Content.Server.AiAgent.Llm.ILlmClient
     {
@@ -501,14 +508,14 @@ public sealed class WitnessTests
         {
             ct.ThrowIfCancellationRequested();
 
-            // Ищем результат инструмента ПЕРЕБОРОМ С КОНЦА, а не берём последнее сообщение.
+            // We find the tool result by SCANNING BACKWARDS FROM THE END, rather than taking the
+            // last message.
             //
-            // Раньше здесь стояло messages[^1], и это работало ровно потому, что результат
-            // инструмента был последним сообщением перед следующим обращением к модели. С
-            // появлением блока NEW_EVENTS (steering) после результатов батча вставляется ещё и
-            // сообщение пользователя, так что «последнее» — уже не «tool». Заглушка обязана знать
-            // про порядок сообщений не больше, чем настоящая модель, а настоящая модель ищет
-            // результат по tool_call_id, а не по позиции.
+            // This used to be messages[^1], and that worked exactly because the tool result was the
+            // last message before the next call to the model. With the arrival of the NEW_EVENTS
+            // (steering) block, a user message now also gets inserted after the batch results, so
+            // "last" is no longer "tool". The stub must know no more about message ordering than a
+            // real model does, and a real model looks up the result by tool_call_id, not by position.
             if (ToolResult == null)
             {
                 for (var i = messages.Count - 1; i >= 0; i--)
@@ -528,8 +535,9 @@ public sealed class WitnessTests
                     if (messages[i].Role != "user")
                         continue;
 
-                    // Второй участник — то, КУДА вложили: именно по нему агенту и предстоит
-                    // действовать в просьбе вида «вставлю плазму — запусти генератор».
+                    // The second participant is the thing INTO WHICH it was inserted: that's exactly
+                    // the one the agent is meant to act on in a request like "insert the plasma -
+                    // start the generator".
                     var handle = HandleFrom(messages[i].Content ?? "", "OBSERVED вложил", segment: 2);
                     if (handle == null)
                         continue;
@@ -565,12 +573,12 @@ public sealed class WitnessTests
     [Test]
     public async Task NewEvents_KeepSpeechAheadOfWhatWasSeen()
     {
-        // Блок NEW_EVENTS подмешивается в разговор посреди хода: пока модель ведёт многошаговый
-        // ход, она иначе глуха, и бот, отвечающий на вопрос, которого не слышал, читается как
-        // сломанный. Событий в очереди бывает много — любая возня в кадре даёт десятки строк
-        // OBSERVED, — и реплика, ради которой блок и заведён, обязана лежать ВЫШЕ них, а не
-        // теряться в конце. Порядок задаёт ObservationFormatter.OrderedKinds, и проверяется тут
-        // именно он, а не сам факт наличия строки.
+        // The NEW_EVENTS block gets mixed into the conversation mid-turn: while the model is running
+        // a multi-step turn, it would otherwise be deaf, and a bot answering a question it never
+        // heard reads as broken. There can be a lot of events in the queue - any activity in view
+        // yields dozens of OBSERVED lines - and the line this block exists for must sit ABOVE them,
+        // not get lost at the end. The order is set by ObservationFormatter.OrderedKinds, and that's
+        // exactly what's checked here, not just the mere presence of the line.
         await using var w = await AiWorld.Create();
         await Freeze(w);
 
@@ -612,21 +620,22 @@ public sealed class WitnessTests
         Assert.That(speechAt, Is.LessThan(seenAt),
             "реплика оказалась ниже строк OBSERVED: модель прочитает её последней");
 
-        // Доставлено — значит удалено. Это и есть вся дедупликация: второй раз те же строки
-        // прийти не могут, потому что их больше нет в очереди.
+        // Delivered means removed. That's the entire deduplication story: the same lines can't
+        // arrive a second time, because they're no longer in the queue.
         var again = await w.NewEvents();
         Assert.That(again, Is.Null, "события остались в очереди и приедут второй раз следующим ходом");
     }
 
-    // ------------------------------------------------------------------ подсобное
+    // ------------------------------------------------------------------ helpers
 
     /// <summary>
-    /// Переименовать существо так, чтобы новое имя увидел и агент.
+    /// Rename a creature so that the agent sees the new name too.
     ///
-    /// Одного <c>SetEntityName</c> мало, и это не мелочь теста, а свойство продукта: наблюдение
-    /// зовёт людей через <c>Identity.Name</c> — то самое имя, которое видит игрок на экране, — а оно
-    /// живёт на отдельной сущности личности и обновляется отложенно. Именно поэтому человек в маске
-    /// приходит в строке как «Unknown», и это правильно: агент видит фигуру, а не паспорт.
+    /// <c>SetEntityName</c> alone isn't enough, and that's not a test quirk but a product property:
+    /// observation refers to people through <c>Identity.Name</c> - the very name the player sees on
+    /// screen - and it lives on a separate identity entity and updates with a delay. That's exactly
+    /// why a masked person shows up in the line as "Unknown", and that's correct: the agent sees a
+    /// figure, not an ID card.
     /// </summary>
     private static async Task Rename(AiWorld w, EntityUid uid, string name)
     {
@@ -639,7 +648,7 @@ public sealed class WitnessTests
         await w.Pair.Server.WaitRunTicks(3);
     }
 
-    /// <summary>Нанести (или снять) урон от чужого лица — тот же путь, которым бьёт оружие.</summary>
+    /// <summary>Deal (or heal) damage from another entity - the same path a weapon uses to hit.</summary>
     private static async Task Hurt(AiWorld w, EntityUid victim, EntityUid origin, int amount)
     {
         await w.Post(() =>
@@ -656,13 +665,13 @@ public sealed class WitnessTests
     }
 
     /// <summary>
-    /// Выкусить хендл из строки наблюдения с заданным началом.
+    /// Extract the handle from an observation line with the given prefix.
     /// </summary>
     /// <param name="segment">
-    /// Какой участник по счёту, начиная с первого. Формат строки:
-    /// <c>OBSERVED &lt;что&gt; | &lt;хендл&gt; &lt;имя&gt; | … | Δ(..) (..)</c> — участники идут в
-    /// порядке «кто, чем, над чем», так что у вложения первый это вложенное, а второй — то, куда
-    /// вложили.
+    /// Which participant, by position, starting from the first. Line format:
+    /// <c>OBSERVED &lt;what&gt; | &lt;handle&gt; &lt;name&gt; | … | Δ(..) (..)</c> - participants go
+    /// in the order "who, with what, on what", so for an insertion the first is the thing inserted,
+    /// and the second is what it was inserted into.
     /// </param>
     private static string? HandleFrom(string observation, string prefix, int segment = 1)
     {

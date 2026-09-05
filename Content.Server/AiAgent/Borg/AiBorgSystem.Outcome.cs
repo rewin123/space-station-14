@@ -11,26 +11,26 @@ using Robust.Shared.Containers;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Чем кончилось действие руками.
+/// What the outcome of a hands action was.
 ///
 /// <para>
-/// Появилось после живого прогона, где робот 520 вызовов подряд бил ломом по ящику, который
-/// открывается простым нажатием. Инструмент отвечал <c>ok</c> и «состояние не изменилось» — а это
-/// три разных случая под одной вывеской: действие идёт и займёт время; действие прошло, но
-/// незаметно в грубой сводке; действие вообще неприменимо. Модель выбрала неверный способ и не
-/// получила ни одного сигнала об этом.
+/// Introduced after a live run where a robot made 520 calls in a row hitting a crate with a crowbar,
+/// when the crate opens with a simple press. The tool responded with <c>ok</c> and "state unchanged" —
+/// but that's three different cases under one label: the action is in progress and will take time; the
+/// action succeeded but is invisible in the coarse summary; the action simply doesn't apply here. The
+/// model picked the wrong method and got no signal about it at all.
 /// </para>
 /// <para>
-/// Здесь снимается подробный снимок цели до и после, и разница переводится в слова: что
-/// изменилось, был ли это удар вместо работы инструментом, и подходит ли инструмент к этой вещи
-/// вообще.
+/// This takes a detailed snapshot of the target before and after, and turns the difference into words:
+/// what changed, whether it was a hit instead of tool work, and whether the tool even applies to this
+/// object at all.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
 {
     [Dependency] private DamageableSystem _damageable = default!;
 
-    /// <summary>Всё, по чему видно, что с вещью что-то произошло.</summary>
+    /// <summary>Everything that shows something happened to the object.</summary>
     private readonly record struct TargetSnapshot(
         string? Door,
         bool? StorageOpen,
@@ -42,15 +42,15 @@ public sealed partial class AiBorgSystem
 
     private TargetSnapshot Snapshot(EntityUid uid)
     {
-        // Очередь на удаление — это тоже «вещи больше нет».
+        // A queued deletion also counts as "the object is gone."
         //
-        // Половина полезных применений УНИЧТОЖАЕТ цель: упаковка превращается в машину, деталь
-        // уходит в конструкцию, реагент расходуется. Удаляют такое через QueueDel, то есть
-        // ОТЛОЖЕННО, до конца тика; а снимок «после» снимается тут же, в том же тике. Без этой
-        // проверки Exists ещё true, разницы не видно — и инструмент докладывал «НЕ ПОЛУЧИЛОСЬ,
-        // инструмент к этой вещи не применяется» ровно в тот момент, когда всё получилось.
-        // Поймано тестом сборки экранирования: девять упаковок стали щитами, и все девять раз
-        // робот услышал, что мультитул тут не при чём.
+        // Half of useful tool applications DESTROY the target: a flatpack turns into a machine, a
+        // part goes into a construction, a reagent is consumed. Such removals go through QueueDel,
+        // i.e. DEFERRED until the end of the tick, while the "after" snapshot is taken right away, in
+        // the same tick. Without this check, Exists is still true, no difference is visible, and the
+        // tool reported "DIDN'T WORK, the tool doesn't apply to this object" at the exact moment it
+        // actually succeeded. Caught by the shield-assembly test: nine flatpacks became shields, and
+        // all nine times the robot was told the multitool had nothing to do with it.
         if (!Exists(uid) || TerminatingOrDeleted(uid) || EntityManager.IsQueuedForDeletion(uid))
             return new TargetSnapshot(null, null, null, null, 0f, 0, false);
 
@@ -65,18 +65,18 @@ public sealed partial class AiBorgSystem
         bool? welded = TryComp<WeldableComponent>(uid, out var weld) ? weld.IsWelded : null;
         bool? locked = TryComp<LockComponent>(uid, out var l) ? l.Locked : null;
 
-        // Через систему, а не через поле: TotalDamage закрыт атрибутом [Access] на чтение
-        // извне, и правильно закрыт — считать сумму урона должен тот, кто её поддерживает.
+        // Through the system, not through the field: TotalDamage is closed off from outside reads by
+        // the [Access] attribute, and rightly so — summing damage should be done by whoever maintains it.
         var damage = HasComp<DamageableComponent>(uid)
             ? _damageable.GetTotalDamage(uid).Float()
             : 0f;
 
-        // Сколько всего вложено во все контейнеры цели.
+        // Total contents across all of the target's containers.
         //
-        // Половина работы с машинами — это «вставить»: канистру в контроллер, батарею в слот,
-        // плату в консоль. Ни одно из полей выше такого не замечает, и инструмент честно
-        // докладывал «ничего не изменилось» о вставленной канистре. Считаем не конкретный слот, а
-        // всё содержимое: так же ловится и извлечение, и любой ящик, о котором мы не думали.
+        // Half of the work with machines is "insert": a canister into a controller, a battery into a
+        // slot, a board into a console. None of the fields above notice that, and the tool would
+        // honestly report "nothing changed" about an inserted canister. We count not a specific slot
+        // but all contents: that catches removal too, and any container we didn't think of.
         var contained = 0;
 
         if (TryComp<ContainerManagerComponent>(uid, out var containers))
@@ -89,7 +89,7 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Словами: что именно изменилось в вещи.
+    /// In words: exactly what changed about the object.
     /// </summary>
     private static List<string> Diff(TargetSnapshot before, TargetSnapshot after)
     {
@@ -123,23 +123,23 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Почему ничего не вышло, если ничего не вышло.
+    /// Why nothing worked, if nothing worked.
     /// </summary>
     /// <remarks>
-    /// Отказ обязан называть следующий шаг. «Состояние не изменилось» его не называет и стоило
-    /// прогона: ящик открывается нажатием, а робот бил по нему ломом, потому что ничто не сказало
-    /// ему, что лом тут не при чём.
+    /// A failure must name the next step. "State unchanged" doesn't name one, and it cost a whole run:
+    /// the crate opens with a press, and the robot kept hitting it with a crowbar because nothing told
+    /// it the crowbar had nothing to do with it.
     /// </remarks>
     private string Explain(EntityUid target, string? tool, TargetSnapshot before, TargetSnapshot after)
     {
-        // Заперто или заварено — это конкретная причина, и у неё конкретное лечение.
+        // Locked or welded is a specific reason, and it has a specific remedy.
         if (after.Locked == true)
             return "заперто на замок: нужен доступ по ID или взлом, инструментом не открыть";
 
         if (after.Welded == true)
             return "заварено: сначала срезать шов сваркой (use tool: welding), потом открывать";
 
-        // Вещь, которая открывается нажатием, а к ней применили инструмент.
+        // An object that opens with a press, and a tool was applied to it instead.
         if (after.StorageOpen == false && !string.IsNullOrWhiteSpace(tool))
             return "это открывается ПРОСТЫМ НАЖАТИЕМ — вызови use без параметра tool. " +
                    "Инструмент нужен только заваренным и разбираемым вещам";

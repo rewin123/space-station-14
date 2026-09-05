@@ -29,12 +29,13 @@ using Robust.Shared.Map.Components;
 namespace Content.AiBench;
 
 /// <summary>
-/// Агент в теле борга: захват, ноги, глаза, руки.
+/// The agent inside a borg body: claiming, legs, eyes, hands.
 ///
 /// <para>
-/// Стенд — настоящая станция (<see cref="AiStation"/>, карта Box), потому что всё интересное здесь
-/// про мир: пол под ногами, стены между роботом и целью, навигационные маяки и настоящие шлюзы.
-/// На тринадцати тайлах тестового грида ни один из этих вопросов не задать.
+/// The bench is a real station (<see cref="AiStation"/>, the Box map), because everything
+/// interesting here is about the world: floor underfoot, walls between the robot and the target,
+/// navigation beacons and real airlocks. None of these questions can be asked on the thirteen
+/// tiles of a test grid.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -43,7 +44,7 @@ public sealed class BorgAgentTests
 {
     private const string BorgProto = "AiBorgChassis";
 
-    /// <summary>Заспавнить ИИ-борга рядом с ядром и занять его.</summary>
+    /// <summary>Spawn an AI borg near the core and claim it.</summary>
     private static async Task<EntityUid> SpawnAndClaim(AiStation w)
     {
         var ent = w.Ent;
@@ -53,9 +54,9 @@ public sealed class BorgAgentTests
         {
             var system = w.Pair.Server.System<AiBorgSystem>();
 
-            // Через настоящую постановку, а не «рядом с ядром»: комната ИИ-ядра заперта, и робот,
-            // поставленный в неё, честно не находит дороги никуда. Первая версия теста делала
-            // именно так и проверяла тем самым сломанную сцену.
+            // Via real placement, not "next to the core": the AI core room is locked, and a robot
+            // placed inside it genuinely finds no way out anywhere. The first version of the test
+            // did exactly that and thereby tested a broken scene.
             Assert.That(system.TrySpawnBorg(null, out borg, out var placed), Is.True,
                 $"не удалось поставить робота: {placed}");
 
@@ -67,14 +68,15 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Три робота подряд получают три РАЗНЫХ идентификатора.
+    /// Three robots spawned in a row get three DIFFERENT identifiers.
     /// </summary>
     /// <remarks>
-    /// Совпадение id — не падение, а тихая порча: у агентов общий каталог <c>ai_data/agents/id</c>,
-    /// общий файл диалога и общая «сессия» на шине. Проявляется это через раунд, после рестарта,
-    /// когда робот восстанавливает чужую память как свою, — то есть в момент, когда связать
-    /// причину со следствием уже нечем. Пока id был константой прототипа, единственной защитой
-    /// была внимательность того, кто пишет YAML.
+    /// An id collision is not a crash but silent corruption: the agents share the
+    /// <c>ai_data/agents/id</c> directory, share a dialogue file, and share a "session" on the
+    /// bus. It surfaces a round later, after a restart, when a robot restores someone else's
+    /// memory as its own — that is, at a point where cause can no longer be linked to effect.
+    /// While id was a prototype constant, the only defense was the attentiveness of whoever wrote
+    /// the YAML.
     /// </remarks>
     [Test]
     public async Task AgentIds_AreHandedOutOnePerRobot()
@@ -112,11 +114,12 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Занятый идентификатор, прописанный в прототипе явно, — отказ, а не наложение.
+    /// An identifier taken explicitly in a prototype is a refusal, not an overwrite.
     /// </summary>
     /// <remarks>
-    /// Это единственное место, где ошибку в прототипе ещё видно. Дальше она выглядит как «робот
-    /// почему-то помнит чужую смену», и искать её будут в компакции, а не в YAML.
+    /// This is the only place where a mistake in a prototype is still visible. Beyond this point
+    /// it looks like "the robot somehow remembers someone else's shift," and people will go
+    /// looking for it in compaction rather than in the YAML.
     /// </remarks>
     [Test]
     public async Task AgentId_TakenExplicitly_IsRefused()
@@ -136,17 +139,18 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Инструмент <c>hit</c> действительно наносит урон.
+    /// The <c>hit</c> tool actually deals damage.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Тест написан после находки: <c>hit</c> звал <c>UserInteraction</c>, то есть КЛИК, и урона
-    /// не наносил вовсе. Отличить это от промаха было нельзя ничем — инструмент отвечал «ударил»
-    /// в обоих случаях, а модель верила. Удар живёт в <c>MeleeWeaponSystem</c> и поднимается
-    /// событием от клиента, которого у робота нет.
+    /// This test was written after a discovery: <c>hit</c> called <c>UserInteraction</c>, i.e. a
+    /// CLICK, and dealt no damage at all. There was no way to tell this apart from a miss — the
+    /// tool reported "hit" in both cases, and the model believed it. The actual hit lives in
+    /// <c>MeleeWeaponSystem</c> and is raised by a client-side event that the robot doesn't have.
     /// </para>
     /// <para>
-    /// Проверяется именно урон, а не успех вызова: успех вернулся бы и у сломанной версии.
+    /// It's the damage that's checked, not the call's success: success would have come back even
+    /// on the broken version.
     /// </para>
     /// </remarks>
     [Test]
@@ -155,13 +159,14 @@ public sealed class BorgAgentTests
         await using var w = await AiStation.Create();
         var borg = await SpawnAndClaim(w);
 
-        // Мишень ставится в ТУ ЖЕ клетку, что и робот, и это не небрежность.
+        // The target is placed in the SAME tile as the robot, and that's not carelessness.
         //
-        // Соседняя клетка на настоящей карте с равным успехом оказывается полом и переборкой, а
-        // за переборкой удар честно не проходит: DoLightAttack проверяет InRangeUnobstructed.
-        // Первая версия теста ставила мишень на клетку восточнее и была зелёной ровно до тех пор,
-        // пока прогон в общем стенде не выдал роботу другое место у маяка. Два моба на одной
-        // клетке — законное состояние, а вопрос теста в том, наносится ли урон, а не в геометрии.
+        // On a real map, the adjacent tile can just as easily turn out to be floor plus a
+        // bulkhead, and the hit genuinely doesn't go through a bulkhead: DoLightAttack checks
+        // InRangeUnobstructed. The first version of the test placed the target one tile east and
+        // stayed green right up until a run on the shared bench handed the robot a different spot
+        // by the beacon. Two mobs on one tile is a legitimate state, and the point of the test is
+        // whether damage is dealt, not the geometry.
         var at = await w.Read(() => w.Ent.System<SharedTransformSystem>().GetWorldPosition(borg));
         var victim = await w.SpawnCrew("Мишень", at);
 
@@ -170,22 +175,24 @@ public sealed class BorgAgentTests
         var damage = w.Pair.Server.System<Content.Shared.Damage.Systems.DamageableSystem>();
         var before = await w.Read(() => damage.GetTotalDamage(victim));
 
-        // Хендл цели берётся из look: инструмент принимает только их, и подсовывать uid значило бы
-        // проверять не тот путь, которым ходит модель.
+        // The target's handle is taken from look: the tool only accepts those, and slipping in a
+        // uid would mean testing a path the model doesn't actually walk.
         var seen = await w.InvokeOn(borg, "look");
-        // Ищем по ВИДУ, а не по имени, и это не лень.
+        // We search by KIND, not by name, and that's not laziness.
         //
-        // В строку обзора идёт Identity.Name, а система личности прячет имя человека, пока на нём
-        // нет опознавательного жетона: строка «Мишень» не появится там никогда, сколько бы раз
-        // SetEntityName ни звали. Робот видит незнакомца ровно так же, как его видел бы человек.
+        // The look string carries Identity.Name, and the identity system hides a person's name
+        // until they're wearing an ID tag: the name given to the spawned entity (literally
+        // "target") will never appear there, no matter how many times SetEntityName is called.
+        // The robot sees a stranger exactly the way a human would.
         var handle = HandleOfKind(seen.EffectJson(), "crew-");
         Assert.That(handle, Is.Not.Null, $"мишень не попала в обзор: {seen.EffectJson()}");
 
-        // Повтор — часть проверки, а не костыль. Взяв предмет в руку, апстрим сдвигает
-        // MeleeWeaponComponent.NextAttack на один интервал вперёд (ResetOnHandSelected), чтобы
-        // нельзя было бить сменой оружия. Робот только что установил модуль, то есть попал ровно
-        // в это окно, и первый удар честно отказывается. Инструмент отвечает на такой отказ
-        // retry: later, и здесь проверяется в том числе, что этот совет рабочий.
+        // Retrying is part of the check, not a workaround. When an item is picked up into a hand,
+        // upstream pushes MeleeWeaponComponent.NextAttack one interval forward
+        // (ResetOnHandSelected), so you can't attack by switching weapons. The robot just
+        // installed the module, i.e. landed exactly in this window, and the first hit genuinely
+        // gets refused. The tool responds to such a refusal with retry: later, and this also
+        // checks that this advice actually works.
         Content.Server.AiAgent.Tools.ToolResult hit = null!;
 
         for (var attempt = 0; attempt < 10; attempt++)
@@ -208,7 +215,7 @@ public sealed class BorgAgentTests
             "урона нет: инструмент отчитался об ударе, которого не было");
     }
 
-    /// <summary>Первый хендл заданного вида из выдачи <c>look</c>.</summary>
+    /// <summary>The first handle of a given kind from a <c>look</c> result.</summary>
     private static string? HandleOfKind(string lookJson, string kind)
     {
         foreach (var row in lookJson.Split('"'))
@@ -224,12 +231,14 @@ public sealed class BorgAgentTests
 
 
     /// <summary>
-    /// Боевой робот после захвата имеет клинок в руке и ствол в запертом слоте, не на корне шасси.
+    /// After claiming, a combat robot has a blade in hand and a gun in a locked slot, not on the
+    /// chassis root.
     /// </summary>
     /// <remarks>
-    /// Ствол — <c>AiBorgBuiltInLaser</c> в <c>gun_slot</c>. Gun на корпусе Dirty'ил корень
-    /// на каждый разряд ячейки жизни; пистолет в руке спавнился в мир при захвате. Оба
-    /// срывали PVS. Цели здесь нет намеренно: с целью тест проверял бы ещё и попадание.
+    /// The gun is <c>AiBorgBuiltInLaser</c> in <c>gun_slot</c>. A Gun on the chassis root dirtied
+    /// the root on every power-cell discharge; a pistol in hand spawned into the world on claim.
+    /// Both broke PVS. There is deliberately no target here: with a target, the test would also
+    /// be checking whether the hit lands.
     /// </remarks>
     [Test]
     public async Task CombatBorg_HasBothWeapons_AndPicksTheRightHand()
@@ -274,9 +283,10 @@ public sealed class BorgAgentTests
             Assert.That(slotProto, Is.EqualTo("AiBorgBuiltInLaser"), $"в слоте не тот ствол: {slotProto}");
         });
 
-        // Обоим инструментам подсовывается заведомо несуществующий хендл: нас интересует, на чём
-        // именно они спотыкаются. Отказ «нечем бить» или «нечем стрелять» означал бы, что рука с
-        // оружием не найдена, — а отказ про хендл означает, что оружие нашлось и дело дошло до цели.
+        // Both tools are handed a deliberately nonexistent handle: what matters is exactly what
+        // they trip over. A "nothing to hit with" / "nothing to shoot with" refusal would mean the
+        // hand with the weapon wasn't found — a refusal about the handle means the weapon was
+        // found and things got as far as the target.
         var hit = await w.InvokeOn(borg, "hit", "{\"target\":\"obj-999\"}");
         var shot = await w.InvokeOn(borg, "shoot", "{\"target\":\"obj-999\"}");
 
@@ -288,11 +298,11 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Инженерный робот отказывается стрелять, а не делает вид.
+    /// An engineering robot refuses to shoot instead of faking it.
     /// </summary>
     /// <remarks>
-    /// У инженера нет ни ствола в слоте, ни ствола в руках. Проверяется текст отказа: он
-    /// единственное, из чего модель поймёт, что стрелять нечем.
+    /// The engineer has no gun in a slot and no gun in hand. The refusal text is what's checked:
+    /// it's the only thing the model can use to understand there's nothing to shoot with.
     /// </remarks>
     [Test]
     public async Task Shoot_WithoutAGun_IsRefused()
@@ -317,12 +327,12 @@ public sealed class BorgAgentTests
     [Test]
     public async Task LookDelta_IsInTheSameFrameAsSelfAndGoto()
     {
-        // Три числа обязаны жить в одной системе координат: «я» из SELF, Δ из look и точка,
-        // которую понимает goto. Пока Δ считалась в координатах КАРТЫ, а всё остальное в
-        // координатах СЕТКИ, арифметика модели молча давала чужой тайл — расхождение видно только
-        // на повёрнутой сетке, поэтому сетка здесь поворачивается нарочно. На боевом прогоне это
-        // выглядело так: робот считал координату соседней клетки, шёл по ней и оказывался в
-        // соседнем отсеке, раз за разом.
+        // Three numbers must live in one coordinate system: "me" from SELF, Δ from look, and the
+        // point that goto understands. While Δ was computed in MAP coordinates and everything
+        // else in GRID coordinates, the model's arithmetic silently produced the wrong tile — the
+        // discrepancy only shows up on a rotated grid, which is why the grid is rotated on
+        // purpose here. On a live run this looked like: the robot computed the coordinate of the
+        // next tile, walked to it, and ended up in the neighboring compartment, over and over.
         await using var w = await AiStation.Create();
         var borg = await SpawnAndClaim(w);
 
@@ -337,12 +347,13 @@ public sealed class BorgAgentTests
         var rows = seen.EffectJson().Split('"').Where(x => x.Contains(" | Δ(", StringComparison.Ordinal)).ToList();
         Assert.That(rows, Is.Not.Empty, $"обзор пуст: {seen.EffectJson()}");
 
-        // Берём первый объект с ненулевой Δ: на нулевой поворот не проверить.
+        // Take the first object with a nonzero Δ: rotation can't be checked on a zero delta.
         var checkedAny = false;
 
-        // Строка несёт ДВЕ пары: «Δ(dx,dy) (x,y)». Обе обязаны быть в координатах сетки — первая
-        // как смещение, вторая как готовая точка для goto. Абсолютную пару модель подставляет без
-        // арифметики, и если она уедет, ошибка будет не «на шаг», а «в другой отсек».
+        // The line carries TWO pairs: "Δ(dx,dy) (x,y)". Both must be in grid coordinates — the
+        // first as an offset, the second as a ready-made point for goto. The model plugs the
+        // absolute pair in without any arithmetic, and if it drifts, the error won't be "off by a
+        // step" but "in a different compartment."
         var pairs = new Regex(@"Δ\((-?\d+),(-?\d+)\) \((-?\d+),(-?\d+)\)");
 
         foreach (var row in rows)
@@ -399,13 +410,13 @@ public sealed class BorgAgentTests
     [Test]
     public async Task CarriedItem_SurvivesAModuleSwitch_AndCanStillBeDropped()
     {
-        // Живая поломка, стоившая роботу всей работы с предметами. Апстрим вешает
-        // UnremoveableComponent на всё, что оказалось в руке модуля без белого списка
-        // (SharedBorgSystem.Module.cs, IsItemInHandUnremovable). Для штатных модулей это верно —
-        // лом приварен к руке. Для пустого манипулятора это значило: взял флэтпак, переключил
-        // модуль — и груз приварился навсегда, дальше «нет свободной руки» на каждую попытку
-        // что-либо взять. На бою робот полтора десятка ходов перебирал модули, пытаясь его
-        // выложить.
+        // A live bug that cost the robot all of its item handling. Upstream attaches
+        // UnremoveableComponent to anything that ends up in a module hand without a whitelist
+        // (SharedBorgSystem.Module.cs, IsItemInHandUnremovable). For stock modules this is
+        // correct — a crowbar is welded to the hand. For an empty manipulator it meant: pick up a
+        // flatpack, switch modules — and the cargo is welded on forever, after which every
+        // pickup attempt gets "no free hand." In a live run the robot spent a dozen-plus turns
+        // cycling modules trying to put it down.
         await using var w = await AiStation.Create();
         var borg = await SpawnAndClaim(w);
 
@@ -420,7 +431,7 @@ public sealed class BorgAgentTests
         var took = await w.InvokeOn(borg, "pickup", $$"""{"target":"{{handle}}"}""");
         Assert.That(took.Ok, Is.True, took.ToJson());
 
-        // Круг по модулям — именно он и приваривал груз.
+        // The loop through modules — this is exactly what welded the cargo on.
         await w.InvokeOn(borg, "module", """{"name":"tool"}""");
         await w.InvokeOn(borg, "module", """{"name":"manipulator"}""");
 
@@ -434,12 +445,14 @@ public sealed class BorgAgentTests
             Assert.That(put.Ok, Is.True, $"взятое обязано выкладываться обратно: {put.ToJson()}");
         });
 
-        // Лишний цикл модулей после выкладывания — не ритуал, а уборка чужой бухгалтерии.
+        // The extra module cycle after dropping isn't ritual, it's cleaning up someone else's
+        // bookkeeping.
         //
-        // Апстрим помнит содержимое рук деселектнутого модуля в StoredItems и не чистит эту запись
-        // при выкладывании предмета. На разборе стенда он пытается вынуть уже удалённую сущность
-        // из контейнера и пишет ERRO про пропавший TransformComponent — а пул считает провалом
-        // ЛЮБОЙ ERRO в логе, и падал от этого СЛЕДУЮЩИЙ тест фикстуры, а не этот.
+        // Upstream remembers the hand contents of a deselected module in StoredItems and doesn't
+        // clear that record when the item is dropped. When the bench tears down, it tries to pull
+        // an already-deleted entity out of the container and logs an ERRO about a missing
+        // TransformComponent — and the pool treats ANY ERRO in the log as a failure, so this made
+        // the NEXT test in the fixture fail, not this one.
         await w.InvokeOn(borg, "module", """{"name":"tool"}""");
         await w.InvokeOn(borg, "module", """{"name":"manipulator"}""");
         await w.Post(() => w.Ent.DeleteEntity(crowbar));
@@ -447,13 +460,13 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Захват включает шасси — а значит, даёт руки и доступ по ID.
+    /// Claiming activates the chassis — which means it grants hands and ID-based access.
     /// </summary>
     /// <remarks>
-    /// Главное утверждение файла. <c>SharedBorgSystem.CanActivate</c> требует разум, и без него
-    /// шасси остаётся выключенным: модулей нет, доступа нет, скорость шаговая. При этом ничего
-    /// нигде не падает — робот просто стоит и ничего не может. Именно поэтому проверяется
-    /// <c>Active</c>, а не «сессия завелась».
+    /// The central assertion of this file. <c>SharedBorgSystem.CanActivate</c> requires a mind,
+    /// and without one the chassis stays deactivated: no modules, no access, walking speed only.
+    /// And nothing crashes anywhere — the robot just stands there, unable to do anything. That's
+    /// exactly why <c>Active</c> is checked, rather than "the session came up."
     /// </remarks>
     [Test]
     public async Task Claim_ActivatesTheChassis()
@@ -476,11 +489,12 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Два агента пишут в РАЗНЫЕ файлы сессии.
+    /// Two agents write to DIFFERENT session files.
     /// </summary>
     /// <remarks>
-    /// Прямая проверка почина, без которого второго агента заводить нельзя: идентификатор сессии
-    /// был константой <c>"current"</c>, и борг с ядром восстанавливали бы диалоги друг друга.
+    /// A direct check of the fix without which a second agent can't be brought up at all: the
+    /// session identifier used to be the constant <c>"current"</c>, and the borg and the core
+    /// would restore each other's dialogues.
     /// </remarks>
     [Test]
     public async Task TwoAgents_DoNotShareASessionId()
@@ -496,7 +510,7 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// У борга свой набор инструментов: есть руки и ноги, нет станционных консолей.
+    /// The borg has its own toolset: it has hands and legs, no station consoles.
     /// </summary>
     [Test]
     public async Task BorgToolset_HasHandsAndNoStationConsoles()
@@ -512,21 +526,21 @@ public sealed class BorgAgentTests
             foreach (var want in new[] { "goto", "step", "look", "examine", "use", "pickup", "drop", "module", "say", "radio", "noop", "laws" })
                 Assert.That(names, Does.Contain(want), $"у борга нет инструмента {want}");
 
-            // Всё это опирается на встроенные консоли тела Station AI или на вайтлист устройств.
-            // У борга нет ни того, ни другого: он не управляет дверью удалённо, он до неё доходит.
+            // All of these rely on the built-in consoles of the Station AI body or on a device
+            // whitelist. The borg has neither: it doesn't operate a door remotely, it walks up to it.
             foreach (var forbidden in new[] { "announce", "device_action", "device_ui", "move_camera", "jump_to_core", "crew_status" })
                 Assert.That(names, Does.Not.Contain(forbidden), $"борг не должен иметь {forbidden}");
         });
     }
 
     /// <summary>
-    /// Робот видит своими глазами, а не сетью камер.
+    /// The robot sees with its own eyes, not through the camera network.
     /// </summary>
     /// <remarks>
-    /// Отдельный тест именно потому, что переиспользовать <c>StationAiVisionSystem</c> было
-    /// соблазнительно и неверно: тот объединяет обзор ВСЕХ камер в радиусе, и робот в тёмном
-    /// коридоре «видел» бы половину станции. Здесь проверяется, что обзор борга ограничен и
-    /// заметно меньше того, что видит ядро с его камерами.
+    /// A separate test precisely because reusing <c>StationAiVisionSystem</c> was tempting and
+    /// wrong: it merges the view of ALL cameras in range, and a robot in a dark corridor would
+    /// "see" half the station. This checks that the borg's view is limited and noticeably smaller
+    /// than what the core sees with its cameras.
     /// </remarks>
     [Test]
     public async Task Look_SeesLessThanTheCameraNetwork()
@@ -557,12 +571,12 @@ public sealed class BorgAgentTests
 
 
     /// <summary>
-    /// Робот действительно доходит до цели своими ногами.
+    /// The robot actually walks to a target on its own legs.
     /// </summary>
     /// <remarks>
-    /// Целей пробуется несколько: одна вычисленная точка может оказаться за запертой дверью, и
-    /// тогда <c>NoPath</c> — правильный ответ на неправильный вопрос. Тест утверждает не «дошёл
-    /// именно туда», а «умеет ходить».
+    /// Several targets are tried: one computed point can end up behind a locked door, in which
+    /// case <c>NoPath</c> is the right answer to the wrong question. The test asserts not "got to
+    /// that exact spot" but "is able to walk."
     /// </remarks>
     [Test]
     public async Task Goto_ActuallyMovesTheRobot()
@@ -571,9 +585,10 @@ public sealed class BorgAgentTests
         var borg = await SpawnAndClaim(w);
         var ent = w.Ent;
 
-        // Навмеш строится асинхронно после старта раунда, и «подождать N тиков» — не условие, а
-        // ставка: под нагрузкой полного прогона тех же тиков не хватало, и тест падал не по вине
-        // робота. Ждём по факту готовности графа под ногами.
+        // The navmesh is built asynchronously after the round starts, and "wait N ticks" is not a
+        // condition but a gamble: under the load of a full run those same ticks weren't enough,
+        // and the test failed through no fault of the robot's. Instead we wait for the actual
+        // readiness of the graph underfoot.
         for (var i = 0; i < 60; i++)
         {
             var ready = await w.Read(() =>
@@ -642,13 +657,14 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Свой поиск находит дорогу через всю станцию — там, где апстримовый сдаётся.
+    /// Our own pathfinder finds a route across the whole station — where the upstream one gives up.
     /// </summary>
     /// <remarks>
-    /// Смысл теста в сравнении. Апстримовый <c>PathfindingSystem</c> обрывает разворот графа на
-    /// <c>NodeLimit = 512</c>, и переход через станцию для него «дороги нет» — это не поломка, а
-    /// его рабочий диапазон: штатные NPC живут в пределах комнаты. Наш поиск идёт по побитовой
-    /// карте <c>NavMapComponent</c> и обязан находить путь между далёкими отсеками.
+    /// The point of this test is the comparison. Upstream's <c>PathfindingSystem</c> cuts off
+    /// graph expansion at <c>NodeLimit = 512</c>, and for it, crossing the station is "no path" —
+    /// that's not a bug but its working range: stock NPCs live within a single room. Our
+    /// pathfinder walks the bitwise <c>NavMapComponent</c> map and must find a path between
+    /// distant compartments.
     /// </remarks>
     [Test]
     public async Task Pathfinder_CrossesTheWholeStation()
@@ -662,8 +678,8 @@ public sealed class BorgAgentTests
             var grid = ent.GetComponent<TransformComponent>(borg).GridUid!.Value;
             var navMap = ent.GetComponent<Content.Shared.Pinpointer.NavMapComponent>(grid);
 
-            // Две самые далёкие друг от друга проходимые точки, которые дают маяки: это и есть
-            // «через станцию», выраженное в терминах самой карты, а не в наших числах.
+            // The two mutually farthest-apart passable points given by the beacons: this is
+            // "across the station," expressed in terms of the map itself, not our own numbers.
             var beacons = navMap.Beacons.Values
                 .Select(b => new Vector2i((int) MathF.Floor(b.Position.X), (int) MathF.Floor(b.Position.Y)))
                 .Select(t => Content.Server.AiAgent.Borg.BorgPathfinder.NearestPassable(navMap, t))
@@ -706,15 +722,15 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// <c>goto</c> по хендлу ведёт К ЦЕЛИ, а не в начало координат станции.
+    /// <c>goto</c> by handle heads TOWARD THE TARGET, not to the station's coordinate origin.
     /// </summary>
     /// <remarks>
-    /// Регрессия, пойманная на боевом сервере. Цель по хендлу задаётся как
-    /// <c>EntityCoordinates(target, Vector2.Zero)</c>, чтобы следовать за движущейся целью, и
-    /// её <c>Position</c> — смещение относительно САМОЙ ЦЕЛИ, то есть (0,0). Прочитанное как
-    /// координаты сетки, это отправляло робота в точку (0,0) станции: на «подойди к двери в двух
-    /// шагах» он молча уходил за полстанции. Баг тихий — маршрут строится, робот идёт, всё
-    /// выглядит рабочим.
+    /// A regression caught on the live server. A target given by handle is set as
+    /// <c>EntityCoordinates(target, Vector2.Zero)</c>, so it can follow a moving target, and its
+    /// <c>Position</c> is an offset relative to THE TARGET ITSELF, i.e. (0,0). Read as grid
+    /// coordinates, this sent the robot to point (0,0) of the station: for "approach the door two
+    /// steps away," it would silently walk off across half the station. The bug is silent — a
+    /// route is built, the robot walks, everything looks like it's working.
     /// </remarks>
     [Test]
     public async Task Goto_ByHandle_HeadsTowardsTheTarget()
@@ -737,8 +753,8 @@ public sealed class BorgAgentTests
             await w.Pair.Server.WaitRunTicks(10);
         }
 
-        // Мишень в нескольких тайлах: достаточно далеко, чтобы «в начало координат» и «к цели»
-        // расходились, и достаточно близко, чтобы маршрут был коротким.
+        // The target is a few tiles away: far enough that "to the coordinate origin" and "toward
+        // the target" diverge, and close enough that the route is short.
         var target = EntityUid.Invalid;
         await w.Pair.Server.WaitPost(() =>
         {
@@ -775,14 +791,16 @@ public sealed class BorgAgentTests
          - ent.GetComponent<TransformComponent>(b).LocalPosition).Length();
 
     /// <summary>
-    /// Строка SELF: без задвоенного тега и в координатах СЕТКИ.
+    /// The SELF line: no doubled tag, and in GRID coordinates.
     /// </summary>
     /// <remarks>
-    /// Обе грани пойманы вживую. Тег <c>SELF</c> добавляет <c>ObservationFormatter</c>, и своя
-    /// добавка давала «SELF SELF mode=…». Координаты же обязаны совпадать с тем, что понимает
-    /// <c>goto {"to":"x,y"}</c>, то есть быть координатами сетки: печатая координаты карты, робот
-    /// сообщал о себе «я=(-521,435)», а goto по этим же числам увёл бы его в пустоту. Модель
-    /// читает свою позицию отсюда и расхождения систем координат заметить не может.
+    /// Both facets were caught live. The <c>SELF</c> tag is added by
+    /// <c>ObservationFormatter</c>, and the body's own prefix produced "SELF SELF mode=…". The
+    /// coordinates, meanwhile, must match what <c>goto {"to":"x,y"}</c> understands, i.e. be grid
+    /// coordinates: by printing map coordinates, the robot reported its own position (the "me="
+    /// prefix) as (-521,435), and a goto using those same numbers would send it off into empty
+    /// space. The model reads its own position from here and has no way to notice a
+    /// coordinate-system mismatch.
     /// </remarks>
     [Test]
     public async Task SelfLine_IsUntaggedAndInGridCoordinates()
@@ -810,14 +828,14 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Робот слышит рацию и речь рядом с собой.
+    /// The robot hears the radio and nearby speech.
     /// </summary>
     /// <remarks>
-    /// Пойман вживую и был полностью немым отказом. Приём эфира висит на паре
-    /// <c>(LlmStationAiComponent, RadioReceiveEvent)</c> — маркере, названном по первому телу, —
-    /// а слух вблизи в <c>OnEntitySpoke</c> начинался с «нет ядра → пропустить». Борг не имел ни
-    /// того, ни другого: приказ ушёл в Common, Station AI ответил, а робот взял НОЛЬ ходов и
-    /// остался стоять в баре. Ни ошибки, ни строчки в логе — просто глухой агент.
+    /// Caught live, and it was a completely silent failure. Receiving comms hangs on the pair
+    /// <c>(LlmStationAiComponent, RadioReceiveEvent)</c> — a marker named after the first body —
+    /// while nearby hearing in <c>OnEntitySpoke</c> started with "no core → skip." The borg had
+    /// neither: the order went out on Common, Station AI answered, and the robot took ZERO turns
+    /// and stayed standing in the bar. No error, no log line — just a deaf agent.
     /// </remarks>
     [Test]
     public async Task Borg_HearsRadio()
@@ -831,11 +849,12 @@ public sealed class BorgAgentTests
         Assert.That(marker, Is.True,
             "без маркера LLM-агента приём рации на борге не подписан — он глух к эфиру");
 
-        // Замер В ТОМ ЖЕ тике, что и передача.
+        // Measurement in the SAME tick as the transmission.
         //
-        // Очередь наблюдений — не накопитель: петля агента просыпается на её пополнении и тут же
-        // вычерпывает. Первая версия теста считала через десять тиков и видела 0 → 0 у ОБОИХ
-        // агентов, то есть обвиняла приём, когда на самом деле измеряла собственную гонку с петлёй.
+        // The observation queue is not an accumulator: the agent loop wakes up when it's
+        // replenished and immediately drains it. The first version of this test measured ten
+        // ticks later and saw 0 → 0 for BOTH agents, i.e. it was blaming reception when it was
+        // actually measuring its own race against the loop.
         var sent = false;
         var why = string.Empty;
         var before = 0;
@@ -856,7 +875,7 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Диагностика: связность отсеков боевой карты глазами нашего поиска.
+    /// Diagnostic: connectivity of live-map compartments as seen by our own pathfinder.
     /// </summary>
     [Test]
     [Explicit("диагностика связности конкретной карты, не для общего прогона")]
@@ -908,12 +927,13 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Робот доходит от бара до реактора на боевой карте.
+    /// The robot walks from the bar to the reactor on a live map.
     /// </summary>
     /// <remarks>
-    /// Explicit: карта ротации грузится долго, и держать это в общем прогоне незачем. Но именно
-    /// этот маршрут ловил связку двух пределов — нашего поиска и апстримового рулевого, — поэтому
-    /// он записан тестом, а не остался ручной проверкой.
+    /// Explicit: the rotation map takes a long time to load, and there's no need to keep this in
+    /// the general run. But it's exactly this route that caught the combination of two limits —
+    /// our own pathfinder and upstream's steering — which is why it was recorded as a test rather
+    /// than staying a manual check.
     /// </remarks>
     [Test]
     [Explicit("длинный маршрут на карте ротации")]
@@ -930,7 +950,7 @@ public sealed class BorgAgentTests
             Assert.That(sys.TryClaim(borg, out var why), Is.True, why);
         });
 
-        // Навмеш рулевого строится асинхронно; без него первая же нога — NoPath.
+        // The steering navmesh is built asynchronously; without it the very first leg is NoPath.
         for (var i = 0; i < 80; i++)
         {
             var ready = await w.Read(() =>
@@ -980,7 +1000,7 @@ public sealed class BorgAgentTests
         var от = (start - target).Length();
         TestContext.Out.WriteLine($"РЕАКТОР: было {от:F1} тайлов до цели, стало {best:F1}");
 
-        // Где именно встал и что мешает: доступ робота и двери вокруг.
+        // Exactly where it stopped and what's blocking it: the robot's access and the doors around it.
         var stuck = await w.Read(() =>
         {
             var access = ent.TryGetComponent<Content.Shared.Access.Components.AccessComponent>(borg, out var acc)
@@ -1001,7 +1021,7 @@ public sealed class BorgAgentTests
                 return $"{ent.GetComponent<MetaDataComponent>(d.Owner).EntityName}[{st}{(reader ? ",замок" : "")}]";
             });
 
-            // Всё, что стоит вплотную: препятствием может быть не только дверь.
+            // Anything standing right up against it: the obstacle need not be a door.
             var solid = lookup.GetEntitiesInRange(xform.GetMapCoordinates(borg), 1.8f,
                 LookupFlags.Static | LookupFlags.Dynamic | LookupFlags.Approximate);
 
@@ -1026,19 +1046,21 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Робот ведёт себя сам, а не через апстримовый рулевой.
+    /// The robot moves itself, not through upstream steering.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Сторожит архитектурное решение, к которому пришли не сразу. Сначала маршрут строил наш
-    /// поиск, а вести по нему должен был <c>NPCSteeringSystem</c> по коротким ногам. На карте
-    /// ротации это встало намертво: робот проходил 27 тайлов из 47 и отвечал «дороги нет» там,
-    /// где наш путь был построен и проверен ЕГО ЖЕ правилом проходимости.
+    /// This guards an architectural decision that wasn't reached right away. At first our own
+    /// pathfinder built the route, and <c>NPCSteeringSystem</c> was supposed to walk it leg by
+    /// short leg. On the rotation map this locked up dead: the robot got through 27 of 47 tiles
+    /// and reported "no path" at a point where our route had been built and verified by ITS OWN
+    /// passability rule.
     /// </para>
     /// <para>
-    /// Поэтому движение своё, а вместе с рулевым ушли и подпорки под него — <c>ActiveNPCComponent</c>
-    /// и пустая HTN-задача в прототипе, которые нужны были ровно затем, чтобы он согласился
-    /// работать. Тест держит их снятыми: вернутся — значит кто-то снова тащит чужой рулевой.
+    /// So movement is our own now, and along with the steering system went its props too —
+    /// <c>ActiveNPCComponent</c> and an empty HTN task in the prototype, which were needed only
+    /// to make it agree to run. The test keeps them removed: if they come back, someone is
+    /// dragging in someone else's steering again.
     /// </para>
     /// </remarks>
     [Test]
@@ -1062,29 +1084,32 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Робот запускает реактор: доходит, находит пульт, вставляет топливо, включает впрыск.
+    /// The robot starts the reactor: gets there, finds the console, inserts fuel, turns on injection.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Explicit: карта ротации, длинная дорога. Это конечная цель всей затеи с телом — проверить,
-    /// что робот способен не только дойти, но и СДЕЛАТЬ работу руками в правильном порядке.
+    /// Explicit: rotation map, a long road. This is the ultimate point of the whole body
+    /// endeavor — checking that the robot can not only get somewhere but also DO manual work in
+    /// the right order.
     /// </para>
     /// <para>
-    /// <b>Осторожно при чтении вердикта.</b> Сценарий доходит до конца и все его утверждения
-    /// проходят, но NUnit всё равно показывает падение: стенд считает провалом ЛЮБУЮ строчку
-    /// уровня ERROR в логе сервера, а апстримовый <c>SharedDoAfterSystem.ShouldCancel</c> после
-    /// вскрытия упаковки резолвит трансформ у сущности, которую сам же и удалил. Это чужая грабля,
-    /// править апстрим нельзя, а механизма «ожидаемая ошибка» у стенда нет. Смотреть надо на
-    /// строку ЗАПУСК и на утверждение про впрыск.
+    /// <b>Be careful reading the verdict.</b> The scenario runs to completion and all of its
+    /// assertions pass, but NUnit still reports a failure: the bench treats ANY ERROR-level line
+    /// in the server log as a failure, and upstream's <c>SharedDoAfterSystem.ShouldCancel</c>,
+    /// after unpacking a crate, resolves the transform of an entity it deleted itself. This is
+    /// someone else's pitfall, upstream can't be fixed, and the bench has no "expected error"
+    /// mechanism. Look at the LAUNCH line and at the assertion about injection.
     /// </para>
     /// </remarks>
     /// <summary>
-    /// Зарядки ищутся по всей станции, а не по тому, что видно, и только те, в которые робот влезает.
+    /// Chargers are searched for across the whole station, not just what's visible, and only ones
+    /// the robot actually fits into.
     /// </summary>
     /// <remarks>
-    /// В раунде 137 робот обошёл пять отсеков, доложил «BorgCharger не нашёл нигде, задача
-    /// невозможна» и сел на нуле — при трёх станциях на карте. Видеть их он не мог ниоткуда:
-    /// стоят они в робототехнике, а садится он там, где работал.
+    /// In round 137 the robot went through five compartments, reported "BorgCharger found
+    /// nowhere, task impossible," and sat down at zero charge — while there were three charging
+    /// stations on the map. It had no way of seeing them from anywhere: they stand in Robotics,
+    /// and it sits down wherever it happened to be working.
     /// </remarks>
     [Test]
     public async Task FindCharger_SeesTheWholeStation_AndOnlyOnesThatFit()
@@ -1101,7 +1126,7 @@ public sealed class BorgAgentTests
         var effect = JsonDocument.Parse(result.EffectJson()).RootElement;
         var rows = effect.GetProperty("зарядки").EnumerateArray().Select(x => x.GetString()!).ToList();
 
-        // Сколько станций, куда влезает шасси, на самом деле стоит на сетке.
+        // How many stations the chassis actually fits into are really standing on the grid.
         var real = await w.Read(() =>
         {
             var whitelist = ent.System<EntityWhitelistSystem>();
@@ -1129,14 +1154,15 @@ public sealed class BorgAgentTests
             Assert.That(real, Is.GreaterThan(0), "на карте ротации нет ни одной станции для киборгов — сцена не та");
             Assert.That(rows, Has.Count.EqualTo(real), "найдено не столько станций, сколько стоит на сетке");
 
-            // Настольные зарядки для батареек в список попасть не должны: у них свой слот и свой
-            // вайтлист, и робот, придя к такой, потеряет ходы ни на что.
+            // Desktop battery chargers must not make it into the list: they have their own slot
+            // and their own whitelist, and a robot that goes to one wastes turns for nothing.
             foreach (var row in rows)
                 Assert.That(row, Does.Match(@"^-?\d+,-?\d+ \| \d+ тайлов \| (запитана|ОБЕСТОЧЕНА)$"),
                     $"строка не разбирается на координаты: «{row}»");
         });
 
-        // Ближняя должна идти первой — иначе робот на нуле пойдёт через полстанции мимо соседней.
+        // The nearest one must come first — otherwise a robot at zero charge would walk across
+        // half the station past the one right next door.
         var distances = rows
             .Select(r => int.Parse(r.Split('|')[1].Trim().Split(' ')[0], CultureInfo.InvariantCulture))
             .ToList();
@@ -1145,12 +1171,14 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Раскладка АМЭ: пульт снаружи, подход к нему свободен, укладка отступает к выходу.
+    /// The AME layout: the console stays outside, the approach to it is clear, and placement
+    /// retreats toward the exit.
     /// </summary>
     /// <remarks>
-    /// Три условия — три живых прогона, каждый из которых кончился впустую: кольцо вокруг пульта
-    /// (ноль ядер), застроенный подход (реактор собран, впрыск включить нечем) и робот, замуровавший
-    /// себя девятым щитом. Здесь они проверяются разом и без модели.
+    /// Three conditions — three live runs, each of which ended in nothing: a ring around the
+    /// console (zero cores), a blocked approach (reactor assembled, nothing to turn injection on
+    /// with), and a robot that walled itself in with the ninth shield. Here they're all checked
+    /// at once and without a model.
     /// </remarks>
     [Test]
     public async Task AmePlan_KeepsControllerOutside_AndLeavesAWayOut()
@@ -1195,16 +1223,18 @@ public sealed class BorgAgentTests
             Assert.That(order, Does.Not.Contain(exit), "выход внутри квадрата — это не выход");
             Assert.That(order, Does.Not.Contain(approach), "подход к пульту застроен — до консоли будет не добраться");
 
-            // Квадрат обязан касаться пульта стороной, иначе он не попадёт с ним в одну узловую сеть.
+            // The square must touch the console edge-to-edge, otherwise it won't end up in the
+            // same node network as the console.
             var touches = order.Any(c => (Math.Abs(c.X - ctrl.X) + Math.Abs(c.Y - ctrl.Y)) == 1);
             Assert.That(touches, Is.True, "квадрат не примыкает к пульту");
 
-            // Подход должен быть именно у пульта, а не «где-то рядом».
+            // The approach tile must be right at the console, not "somewhere nearby."
             Assert.That(Math.Abs(approach.X - ctrl.X) + Math.Abs(approach.Y - ctrl.Y), Is.EqualTo(1),
                 "клетка подхода не примыкает к пульту");
 
-            // Главное: каждая следующая клетка не дальше от выхода предыдущей. Робот отступает,
-            // а не забирается вглубь, и на последней стоит у самого выхода.
+            // The main point: each next tile is no farther from the exit than the previous one.
+            // The robot retreats rather than working its way deeper in, and on the last tile it
+            // stands right at the exit.
             for (var i = 1; i < order.Count; i++)
             {
                 var prev = (order[i - 1] - exit).Length;
@@ -1219,15 +1249,16 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Закрытый шлюз без доступа робот всё равно открывает, а заболченный — нет.
+    /// The robot still opens a closed airlock it has no access to, but not a bolted one.
     /// </summary>
     /// <remarks>
-    /// Правило владельца форка: проходим любой шлюз, который не заболтили. Повод — дорога от
-    /// инженерного крыла к АМЭ на карте ротации идёт через <c>AirlockAtmosphericsGlassLocked</c>,
-    /// доступа к которому у шасси нет: робот втыкался в створку, перекладывал маршрут, снова
-    /// втыкался и за полчаса раунда 135 так и не вернулся к собранному им же реактору. Болты при
-    /// этом обязаны держать — иначе «закрыть отсек болтами» перестаёт что-либо значить для
-    /// робота, а это уже не послабление, а дыра.
+    /// A fork-owner rule: we go through any airlock that isn't bolted. The reason — the route
+    /// from the engineering wing to the AME on the rotation map goes through
+    /// <c>AirlockAtmosphericsGlassLocked</c>, which the chassis has no access to: the robot kept
+    /// walking into the door, replanning its route, walking into it again, and over half an hour
+    /// of round 135 never made it back to the reactor it had assembled itself. Bolts, meanwhile,
+    /// must still hold — otherwise "bolt the compartment shut" stops meaning anything to the
+    /// robot, and that's no longer a relaxation of the rules but a hole in them.
     /// </remarks>
     [Test]
     public async Task ClosedAirlock_OpensWithoutAccess_ButNotWhenBolted()
@@ -1236,15 +1267,16 @@ public sealed class BorgAgentTests
         var ent = w.Ent;
         var borg = await SpawnAndClaim(w);
 
-        // Створка нужна ЗАПИТАННАЯ: обесточенный шлюз не открывается ничем, кроме лома, и на нём
-        // проверялось бы electricity, а не решение робота о двери.
+        // The door needs to be POWERED: an unpowered airlock won't open by anything but a
+        // crowbar, and that would be testing electricity, not the robot's decision about the door.
         var door = await w.Read(() =>
         {
             var xforms = w.Pair.Server.System<SharedTransformSystem>();
 
-            // Створка нужна ОДИНОЧНАЯ. В тамбуре их бывает пять сразу, робот жмёт ближайшую к
-            // себе, и тест, следящий за одной, читал состояние соседней — прогон выглядел как
-            // «дожим не работает», хотя дверь рядом честно открывалась.
+            // The door needs to be a SINGLE one. An airlock tambour can have five at once, the
+            // robot presses the one nearest to it, and a test watching one door would read the
+            // state of its neighbor — the run would look like "forcing doesn't work" even though
+            // the door next to it was genuinely opening.
             var doors = new List<(EntityUid Uid, Vector2 At)>();
             var all = ent.EntityQueryEnumerator<DoorComponent>();
 
@@ -1271,8 +1303,8 @@ public sealed class BorgAgentTests
         if (!door.IsValid())
             Assert.Ignore("на карте не нашлось закрытого запитанного шлюза");
 
-        // Пускают ли робота права — записываем в вывод, но утверждение делаем не об этом.
-        // Проверяется правило владельца форка: болты держат, всё остальное открывается.
+        // Whether the robot's permissions let it through gets logged, but the assertion isn't
+        // about that. What's checked is the fork-owner rule: bolts hold, everything else opens.
         var allowed = await w.Read(() => ent.System<AccessReaderSystem>().IsAllowed(borg, door));
         TestContext.Out.WriteLine($"права робота на эту створку: {(allowed ? "есть" : "нет")}");
 
@@ -1285,7 +1317,7 @@ public sealed class BorgAgentTests
         });
         await w.Pair.Server.WaitRunTicks(3);
 
-        // Первый заход: болтов нет — дверь обязана поддаться.
+        // First pass: no bolts — the door must give way.
         var system = w.Pair.Server.System<AiBorgSystem>();
 
         var pressed = false;
@@ -1316,7 +1348,7 @@ public sealed class BorgAgentTests
         Assert.That(opened, Is.Not.EqualTo(DoorState.Closed),
             "незаболченный шлюз не открылся — робот снова упрётся в него на маршруте");
 
-        // Второй заход: закрыть и заболтить. Теперь дверь обязана устоять.
+        // Second pass: close it and bolt it. Now the door must hold.
         await w.Post(() =>
         {
             var doors = ent.System<SharedDoorSystem>();
@@ -1343,15 +1375,16 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Пульт берётся с двух тайлов, а не только с расстояния вытянутой руки.
+    /// The console can be reached from two tiles away, not just at arm's length.
     /// </summary>
     /// <remarks>
-    /// Повод — контроллер АМЭ на карте ротации: все четыре клетки по сторонам заняты кабелями и
-    /// стеной, робот встаёт только по диагонали, и на 1.5 тайла <c>console</c> отвечал
-    /// <c>not_visible</c>, стоя вплотную к собранному им же реактору. Проверяется именно граница:
-    /// с двух тайлов пульт открывается, с четырёх — нет, и отказ приходит осмысленным кодом, а не
-    /// исключением. Ворота остаются «протянутой рукой»: проверка препятствий на месте, сквозь
-    /// стену пульт не берётся ни с какого расстояния.
+    /// The reason is the AME controller on the rotation map: all four orthogonally adjacent
+    /// tiles are occupied by cables and a wall, the robot can only stand diagonally, and at 1.5
+    /// tiles <c>console</c> answered <c>not_visible</c> while standing right next to the reactor
+    /// it had assembled itself. What's checked is precisely the boundary: the console opens from
+    /// two tiles, not from four, and the refusal comes back as a meaningful code, not an
+    /// exception. The gate remains "arm's length": the obstruction check stays in place, and the
+    /// console can't be reached through a wall from any distance.
     /// </remarks>
     [Test]
     public async Task Console_ReachesTwoTiles_ButNotFour()
@@ -1371,8 +1404,8 @@ public sealed class BorgAgentTests
         var handle = await w.Read(() => w.System.HandleFor(borg, found));
         var at = await w.Read(() => ent.GetComponent<TransformComponent>(found).LocalPosition);
 
-        // Восемь направлений: какое-то из них упрётся в стену, и это нормально — утверждение
-        // делается о том, что ХОТЯ БЫ одно место на нужной дистанции пульт открывает.
+        // Eight directions: some of them will run into a wall, and that's fine — the assertion is
+        // that AT LEAST one spot at the required distance opens the console.
         var around = new[]
         {
             new Vector2(1, 0), new Vector2(-1, 0), new Vector2(0, 1), new Vector2(0, -1),
@@ -1429,7 +1462,7 @@ public sealed class BorgAgentTests
 
         await w.Pair.Server.WaitRunTicks(120);
 
-        // Что вообще есть на станции: пульт АМЭ и канистры с топливом.
+        // What actually exists on the station: the AME console and fuel jars.
         var found = await w.Read(() =>
         {
             var ctrl = EntityUid.Invalid;
@@ -1455,7 +1488,7 @@ public sealed class BorgAgentTests
         TestContext.Out.WriteLine($"РЕАКТОР: пульт={found.ctrl} канистра={found.jar}");
         Assert.That(found.ctrl.IsValid(), Is.True, "на карте нет пульта АМЭ — сценарий невозможен");
 
-        // Состояние до вмешательства.
+        // State before any intervention.
         var before = await w.Read(() =>
         {
             var c = ent.GetComponent<Content.Server.Ame.Components.AmeControllerComponent>(found.ctrl);
@@ -1468,7 +1501,7 @@ public sealed class BorgAgentTests
 
         var handle = await w.Read(() => w.System.HandleFor(borg, found.ctrl));
 
-        // Дойти до пульта.
+        // Walk over to the console.
         await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
 
         for (var i = 0; i < 120; i++)
@@ -1495,13 +1528,13 @@ public sealed class BorgAgentTests
 
         TestContext.Out.WriteLine($"ДОШЁЛ: {reached:F1} тайлов до пульта");
 
-        // Прочитать пульт.
+        // Read the console.
         var read = await w.InvokeOn(borg, "console", "{\"target\":\"" + handle + "\"}");
         TestContext.Out.WriteLine($"ПУЛЬТ: ok={read.Ok} {read.Error} {read.Detail} {read.EffectJson()}"[..Math.Min(600, $"ПУЛЬТ: ok={read.Ok} {read.Error} {read.Detail} {read.EffectJson()}".Length)]);
 
         Assert.That(read.Ok, Is.True, $"пульт не читается: {read.Error} {read.Detail}");
 
-        // Что вообще есть вокруг реактора: собрано ли ядро и где топливо.
+        // What actually exists around the reactor: whether the core is assembled and where the fuel is.
         var scene = await w.Read(() =>
         {
             var shields = 0;
@@ -1527,7 +1560,8 @@ public sealed class BorgAgentTests
                     flatpacks++;
             }
 
-            // Где упаковки: на полу их можно взять, в ящике — сначала надо открыть.
+            // Where the flatpacks are: on the floor they can be picked up, in a crate they need
+            // opening first.
             var loose = 0;
             var packed = 0;
             var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
@@ -1548,7 +1582,7 @@ public sealed class BorgAgentTests
 
         TestContext.Out.WriteLine("СЦЕНА: " + scene);
 
-        // ---- шаг 1: добыть упаковку экранирования из ящика ----
+        // ---- step 1: get a shielding flatpack out of the crate ----
         var crate = await w.Read(() =>
         {
             var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
@@ -1591,8 +1625,8 @@ public sealed class BorgAgentTests
 
         TestContext.Out.WriteLine($"ЯЩИК: use ok={openRes.Ok} {openRes.Error}; упаковка доступна={packLoose}");
 
-        // Руки даёт только ВЫБРАННЫЙ модуль: пока выбран инструментальный, все руки заняты
-        // несъёмными инструментами и взять ничего нельзя.
+        // Only the SELECTED module provides hands: while the tool module is selected, every hand
+        // is occupied by an unremovable tool and nothing can be picked up.
         var mod = await w.InvokeOn(borg, "module", "{\"name\":\"manipulator\"}");
         await w.Pair.Server.WaitRunTicks(5);
 
@@ -1613,7 +1647,7 @@ public sealed class BorgAgentTests
         TestContext.Out.WriteLine($"ВЗЯЛ УПАКОВКУ: ok={got.Ok} {got.Error} {got.Detail}");
         Assert.That(got.Ok, Is.True, "робот не смог взять упаковку");
 
-        // ---- шаг 2: донести к пульту и развернуть в экран ----
+        // ---- step 2: carry it to the console and deploy it into a shield ----
         await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
 
         for (var i = 0; i < 150; i++)
@@ -1629,13 +1663,13 @@ public sealed class BorgAgentTests
         var dropped = await w.InvokeOn(borg, "drop", "{}");
         await w.Pair.Server.WaitRunTicks(5);
 
-        // Ломом владеет инструментальный модуль, а нёс робот манипулятором: перед вскрытием надо
-        // вернуться к инструментам.
+        // The crowbar belongs to the tool module, but the robot carried the item with the
+        // manipulator: it needs to switch back to tools before unpacking.
         var back = await w.InvokeOn(borg, "module", "{\"name\":\"tool\"}");
         await w.Pair.Server.WaitRunTicks(5);
 
         var packHandle2 = await w.Read(() => w.System.HandleFor(borg, crate.Pack));
-        // Упаковке нужна ПРОЗВОНКА — мультитул, а не лом. Инструмент называем явно.
+        // The flatpack needs to be PROBED — a multitool, not a crowbar. The tool is named explicitly.
         var unpacked = await w.InvokeOn(borg, "use",
             "{\"target\":\"" + packHandle2 + "\",\"tool\":\"multitool\"}");
 
@@ -1655,7 +1689,7 @@ public sealed class BorgAgentTests
 
         Assert.That(shields, Is.GreaterThan(0), "упаковка не развернулась в экранирование");
 
-        // ---- шаг 3: топливо ----
+        // ---- step 3: fuel ----
         var jarInfo = await w.Read(() =>
         {
             var q = ent.EntityQueryEnumerator<Content.Shared.Ame.Components.AmeFuelContainerComponent>();
@@ -1683,7 +1717,7 @@ public sealed class BorgAgentTests
         var tookJar = await w.InvokeOn(borg, "pickup", "{\"target\":\"" + jarHandle + "\"}");
         TestContext.Out.WriteLine($"ТОПЛИВО: взял={tookJar.Ok} {tookJar.Error} {tookJar.Detail}");
 
-        // ---- шаг 4: вставить и включить впрыск ----
+        // ---- step 4: insert it and turn on injection ----
         await w.InvokeOn(borg, "goto", "{\"to\":\"" + handle + "\"}");
 
         for (var i = 0; i < 200; i++)
@@ -1726,34 +1760,35 @@ public sealed class BorgAgentTests
                                   "вставлено, впрыск включён.");
     }
 
-    /// <summary>Позиция предмета в координатах сетки, даже если он лежит в таре.</summary>
+    /// <summary>An item's position in grid coordinates, even if it's sitting inside a container.</summary>
 
     /// <summary>
-    /// Полная сборка экранирования: девять упаковок превращаются в квадрат 3×3, у которого
-    /// появляется ядро.
+    /// Full shielding assembly: nine flatpacks turn into a 3×3 square that gets a core.
     ///
     /// <para>
-    /// Зачем отдельно от <see cref="Borg_StartsTheReactor"/>. Тот доказывает вторую половину дела —
-    /// топливо и запуск впрыска — но обходится ОДНОЙ упаковкой, а одна упаковка ядра не даёт:
-    /// ядром становится клетка, у которой все восемь соседей тоже экранирование
-    /// (<c>AmeNodeGroup.LoadNodes</c>). То есть впрыск включался, а мощность оставалась нулевой, и
-    /// именно этого на живых прогонах агент добиться не мог.
+    /// Why this is separate from <see cref="Borg_StartsTheReactor"/>. That test proves the second
+    /// half of the job — fuel and starting injection — but gets by with a SINGLE flatpack, and one
+    /// flatpack doesn't produce a core: a tile becomes the core only when all eight of its
+    /// neighbors are also shielding (<c>AmeNodeGroup.LoadNodes</c>). In other words injection
+    /// would turn on while output stayed at zero, and that is exactly what the agent could never
+    /// pull off in live runs.
     /// </para>
     /// <para>
-    /// Тест ходит теми же инструментами, что и модель, в том же порядке, который записан в навыке:
-    /// от дальней клетки к выходу, с шагом назад перед распаковкой. Если он зелёный — инструментов
-    /// роботу хватает, и живой прогон проверяет уже только сообразительность модели. Если красный —
-    /// он называет ровно тот шаг, которого не хватает.
+    /// This test uses the same tools as the model, in the same order recorded in the skill: from
+    /// the far tile toward the exit, stepping back before unpacking. If it's green, the robot has
+    /// all the tools it needs, and a live run only tests the model's judgment from there. If it's
+    /// red, it names exactly the missing step.
     /// </para>
     /// <para>
-    /// <b>Сейчас он красный, и это его работа.</b> Он поймал то, чего не видно ни на одном другом
-    /// сценарии: <c>goto</c> по координатам НЕ СТАВИТ робота на заказанную клетку. Строки
-    /// «НЕ ДОШЁЛ до (29,-41): встал на (28,-41)» повторяются все девять раз, а <c>goto</c> при
-    /// этом отвечает успехом. Для «подойти к двери» промах на клетку незаметен и никогда не
-    /// всплывал; для стройки он смертелен — упаковки ложатся мимо, квадрат не сходится, ядро не
-    /// появляется. Часть причины уже найдена и убрана (порог прибытия к последней клетке был
-    /// больше половины клетки), но промах остался, и корень сидит глубже — в выборе целевого
-    /// тайла маршрутом. Тест оставлен красным намеренно: он и есть постановка задачи.
+    /// <b>Right now it's red, and that's its job.</b> It caught something invisible in every other
+    /// scenario: <c>goto</c> by coordinates does NOT PLACE the robot on the requested tile. Lines
+    /// like "DID NOT REACH (29,-41): stopped at (28,-41)" repeat all nine times, while <c>goto</c>
+    /// still reports success. For "approach the door" a one-tile miss is unnoticeable and never
+    /// surfaced; for construction it's fatal — flatpacks land in the wrong spot, the square never
+    /// closes, no core appears. Part of the cause has already been found and removed (the arrival
+    /// threshold for the last tile was more than half a tile), but the miss remains, and the root
+    /// sits deeper — in how the route picks its target tile. The test is left red on purpose: it
+    /// is itself the statement of the problem.
     /// </para>
     /// </summary>
     [Test]
@@ -1781,7 +1816,7 @@ public sealed class BorgAgentTests
 
         Assert.That(controller.IsValid(), Is.True, "на карте нет пульта АМЭ");
 
-        // ---- шаг 1: вскрыть тару с упаковками ----
+        // ---- step 1: open the crate with the flatpacks ----
         var crate = await w.Read(() =>
         {
             var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
@@ -1806,8 +1841,9 @@ public sealed class BorgAgentTests
         var crateHandle = await w.Read(() => w.System.HandleFor(borg, crate));
         await w.InvokeOn(borg, "goto", "{\"to\":\"" + crateHandle + "\"}");
         await WalkUntilNear(w, borg, crate, 1.4f);
-        // Нажатие на тару — переключатель, и первое снимает замок по ID, а не открывает.
-        // Ровно на этом агент терял ходы: жал по кругу и видел пустой пол.
+        // Pressing the crate is a toggle, and the first press removes the ID lock rather than
+        // opening it. This is exactly where the agent used to waste turns: pressing over and over
+        // and seeing an empty floor.
         var loose = 0;
 
         for (var attempt = 0; attempt < 4 && loose == 0; attempt++)
@@ -1821,7 +1857,7 @@ public sealed class BorgAgentTests
         TestContext.Out.WriteLine($"ЯЩИК: упаковок на полу {loose}");
         Assert.That(loose, Is.GreaterThanOrEqualTo(9), "для квадрата 3×3 нужно девять упаковок");
 
-        // ---- шаг 2: выбрать место под квадрат ----
+        // ---- step 2: pick a spot for the square ----
         var square = await w.Read(() => FindSquare(ent, w.Grid, controller));
         Assert.That(square, Is.Not.Null, "рядом с пультом нет свободного места 3×3");
 
@@ -1830,7 +1866,7 @@ public sealed class BorgAgentTests
         var shieldsBefore = await w.Read(() => CountShields(ent));
         TestContext.Out.WriteLine($"ЩИТОВ ДО НАЧАЛА: {shieldsBefore}");
 
-        // ---- шаг 3: разложить и распаковать, отступая к выходу ----
+        // ---- step 3: lay out and unpack, retreating toward the exit ----
         var built = 0;
 
         foreach (var cell in square!)
@@ -1857,11 +1893,12 @@ public sealed class BorgAgentTests
                 break;
             }
 
-            // Три попытки дойти, а не одна.
+            // Three attempts to get there, not one.
             //
-            // Ходьба иногда не доводит с первого раза: робот упирается в чужое тело, дверь или
-            // собственный только что положенный груз. Уронить упаковку там, где встал, — это
-            // молча испортить квадрат; повторить заход — ровно то, что сделал бы толковый агент.
+            // Walking sometimes doesn't get there on the first try: the robot runs into another
+            // body, a door, or cargo it just set down itself. Dropping the flatpack wherever it
+            // stopped would silently ruin the square; retrying is exactly what a sensible agent
+            // would do.
             var arrived = false;
 
             for (var tries = 0; tries < 3 && !arrived; tries++)
@@ -1880,15 +1917,15 @@ public sealed class BorgAgentTests
             await w.InvokeOn(borg, "drop");
             await w.Pair.Server.WaitRunTicks(5);
 
-            // Шаг назад ПЕРЕД распаковкой: распакуешь под собой — окажешься внутри стены.
+            // A step back BEFORE unpacking: unpack it right under yourself and you end up inside the wall.
             await w.InvokeOn(borg, "step", "{\"dir\":\"юг\",\"count\":1}");
             await w.Pair.Server.WaitRunTicks(20);
 
             await w.InvokeOn(borg, "module", "{\"name\":\"tool\"}");
 
-            // Ждущая версия — та самая, которую в режиме скрипта видно как use. Обычная
-            // возвращается на «действие НАЧАЛОСЬ», и тест, смотрящий только на ok, принял бы
-            // начатое за сделанное.
+            // The waiting version — the same one seen as use in scripted mode. The plain one
+            // returns as soon as the action HAS STARTED, and a test that only looks at ok would
+            // mistake "started" for "done."
             var unpacked = await w.InvokeOn(borg, "use_wait",
                 "{\"target\":\"" + packHandle + "\",\"tool\":\"multitool\"}");
             await w.Pair.Server.WaitRunTicks(30);
@@ -1900,7 +1937,7 @@ public sealed class BorgAgentTests
             built = shields;
         }
 
-        // ---- шаг 4: появилось ли ядро ----
+        // ---- step 4: did a core appear ----
         var cores = await w.Read(() =>
         {
             var n = 0;
@@ -1938,7 +1975,7 @@ public sealed class BorgAgentTests
             Assert.That(cores, Is.GreaterThanOrEqualTo(1), "щиты есть, а ядра нет — квадрат сложен неправильно");
         });
 
-        // ---- шаг 5: топливо и запуск ----
+        // ---- step 5: fuel and startup ----
         var jar = await w.Read(() =>
         {
             var q = ent.EntityQueryEnumerator<Content.Shared.Ame.Components.AmeFuelContainerComponent>();
@@ -1947,7 +1984,7 @@ public sealed class BorgAgentTests
 
         Assert.That(jar.IsValid(), Is.True, "на карте нет канистры с топливом");
 
-        // Канистра может лежать в своей таре — её тоже надо вскрыть.
+        // The fuel jar can be sitting in its own crate — that needs opening too.
         var jarCrate = await w.Read(() =>
         {
             var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
@@ -1986,8 +2023,8 @@ public sealed class BorgAgentTests
         await w.InvokeOn(borg, "goto", "{\"to\":\"" + ctrlHandle + "\"}");
         await WalkUntilNear(w, borg, controller, 1.4f);
 
-        // Вставляет только применение того, что держишь: обычное нажатие открывает экран, а
-        // канистра остаётся в руке. На живых прогонах агент терял на этом десяток ходов.
+        // Only using what you're holding inserts it: a plain click opens the UI screen, and the
+        // fuel jar stays in hand. On live runs the agent used to waste a dozen turns on this.
         var inserted = await w.InvokeOn(borg, "use_wait",
             "{\"target\":\"" + ctrlHandle + "\",\"with_item\":true}");
 
@@ -1996,12 +2033,13 @@ public sealed class BorgAgentTests
 
         TestContext.Out.WriteLine($"ТОПЛИВО: вставка ok={inserted.Ok} {inserted.EffectJson()}; в слоте={fuelIn}");
 
-        // Впрыск доводим ровно до безопасного значения — вдвое больше числа ядер.
+        // Injection is dialed in to exactly a safe value — twice the core count.
         //
-        // Не «нажать пару раз»: у пульта есть своё начальное значение, нажатие меняет силу на ±2,
-        // а принять он готов до CoreCount * 8. Выкрутить в потолок значит собрать реактор и тут же
-        // подорвать его. Поэтому читаем текущее и добираем в нужную сторону — так и поступил бы
-        // инженер, а не «понажимал и ушёл».
+        // Not "press it a couple times": the console has its own starting value, each press
+        // changes the strength by ±2, and it will accept up to CoreCount * 8. Cranking it to the
+        // ceiling means assembling the reactor and immediately blowing it up. So we read the
+        // current value and nudge it in the right direction — exactly what an engineer would do,
+        // not "mash the button and walk away."
         var safe = cores * 2;
 
         for (var i = 0; i < 6; i++)
@@ -2046,7 +2084,7 @@ public sealed class BorgAgentTests
     }
 
 
-    /// <summary>Упаковки, лежащие на полу, а не в таре.</summary>
+    /// <summary>Flatpacks lying on the floor, not in a crate.</summary>
     private static List<EntityUid> LoosePacks(IEntityManager ent)
     {
         var container = ent.System<Robust.Shared.Containers.SharedContainerSystem>();
@@ -2074,11 +2112,11 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Девять клеток 3×3 рядом с пультом, в порядке «от дальней к выходу».
+    /// Nine 3×3 tiles near the console, in "far row to exit" order.
     ///
-    /// Порядок здесь не украшение: он ровно тот, что записан в навыке, и именно он не даёт роботу
-    /// замуровать себя. Дальний ряд кладётся первым, ближний — последним, и после него робот уже
-    /// снаружи.
+    /// The order here is not decoration: it's exactly what's recorded in the skill, and it's
+    /// precisely what keeps the robot from walling itself in. The far row is placed first, the
+    /// near row last, and after that the robot is already outside.
     /// </summary>
     private static List<Vector2i>? FindSquare(IEntityManager ent, EntityUid grid, EntityUid controller)
     {
@@ -2091,12 +2129,13 @@ public sealed class BorgAgentTests
 
         bool Free(Vector2i tile)
         {
-            // Той же меркой, что и робот.
+            // By the same yardstick the robot uses.
             //
-            // Первая версия проверяла клетку по-своему — есть пол, нет статичной коллизии — и
-            // выбирала квадрат, часть клеток которого маршрут считал непроходимыми. Робот честно
-            // сворачивал на соседние, упаковки ложились мимо, а выглядело это как его промах.
-            // Тест, меряющий не тем прибором, что проверяемый, находит только собственные ошибки.
+            // The first version checked a tile its own way — has floor, no static collision — and
+            // picked a square some of whose tiles the router considered impassable. The robot
+            // genuinely detoured to a neighboring tile, flatpacks landed in the wrong spot, and it
+            // looked like the robot's mistake. A test that measures with a different instrument
+            // than the one it's checking only finds its own bugs.
             if (!Content.Server.AiAgent.Borg.BorgPathfinder.Passable(navMap, tile))
                 return false;
 
@@ -2119,7 +2158,7 @@ public sealed class BorgAgentTests
             return true;
         }
 
-        // Квадраты вокруг пульта, ближние сначала.
+        // Squares around the console, nearest ones first.
         for (var dy = -4; dy <= 2; dy++)
         {
             for (var dx = -4; dx <= 2; dx++)
@@ -2143,28 +2182,30 @@ public sealed class BorgAgentTests
                 if (!ok)
                     continue;
 
-                // Ниже квадрата нужна свободная клетка: туда робот отступает перед распаковкой.
+                // A free tile is needed below the square: the robot retreats there before unpacking.
                 if (!Free(new Vector2i(corner.X + 1, corner.Y - 1)))
                     continue;
 
-                // И квадрат обязан ПРИМЫКАТЬ к пульту.
+                // And the square must be ADJACENT to the console.
                 //
-                // Иначе щиты и контроллер оказываются в разных узловых сетях: ядро у щитов есть, а
-                // пульт о нём не знает, и GetMaxInjectionAmount (CoreCount * 8 по группе ПУЛЬТА)
-                // возвращает ноль. Внешне это выглядит издевательски: реактор собран, впрыск
-                // включён, сила нулевая. В навыке требование записано, а тест его не проверял.
+                // Otherwise the shields and the controller end up in different node networks: the
+                // shields have a core, but the console doesn't know about it, and
+                // GetMaxInjectionAmount (CoreCount * 8 for the CONSOLE's group) returns zero. On
+                // the surface this looks like mockery: the reactor is assembled, injection is on,
+                // strength is zero. The skill states the requirement, and the test wasn't checking it.
                 var touches = cells.Any(c =>
                     Math.Abs(c.X - origin.X) + Math.Abs(c.Y - origin.Y) == 1);
 
                 if (!touches)
                     continue;
 
-                // И к пульту должен остаться подход.
+                // And there must still be a way to approach the console.
                 //
-                // Квадрат обязан примыкать — но если он съест ВСЕХ свободных соседей пульта, к
-                // самому пульту не подойти: канистру не вставить, кнопку не нажать. Робот
-                // добросовестно собирает реактор и запирает его от себя же. Это та же ошибка, что
-                // «не строй вокруг себя», только с другой стороны.
+                // The square must be adjacent — but if it eats up ALL of the console's free
+                // neighbors, there's no way to get to the console itself: no inserting the fuel
+                // jar, no pressing the button. The robot diligently assembles the reactor and
+                // locks itself out of it. It's the same mistake as "don't build around yourself,"
+                // just from the other side.
                 var approach = new[]
                 {
                     new Vector2i(origin.X + 1, origin.Y), new Vector2i(origin.X - 1, origin.Y),
@@ -2179,7 +2220,7 @@ public sealed class BorgAgentTests
         return null;
     }
 
-    /// <summary>Дождаться, пока робот подойдёт к цели ближе, чем на <paramref name="range"/>.</summary>
+    /// <summary>Wait until the robot gets closer to the target than <paramref name="range"/>.</summary>
     private static async Task WalkUntilNear(AiStation w, EntityUid borg, EntityUid target, float range)
     {
         for (var i = 0; i < 200; i++)
@@ -2194,7 +2235,7 @@ public sealed class BorgAgentTests
         }
     }
 
-    /// <summary>Дождаться, пока робот встанет ровно на клетку.</summary>
+    /// <summary>Wait until the robot lands exactly on the tile.</summary>
     private static async Task<bool> WalkUntilAt(AiStation w, EntityUid borg, Vector2i cell)
     {
         for (var i = 0; i < 200; i++)
@@ -2210,12 +2251,13 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// Позиция в НОМЕР КЛЕТКИ, с округлением вниз.
+    /// Position converted to a TILE NUMBER, rounding down.
     ///
-    /// Приведение (Vector2i) отсекает дробную часть К НУЛЮ, а не вниз: -41.5 превращается в -41,
-    /// хотя клетка это -42. Половина станции на карте живёт в отрицательных координатах, поэтому
-    /// такое приведение ошибается ровно там, где идёт вся работа. Тест сборки на этом молча
-    /// разложил упаковки по дороге: ожидание «встал на клетку» не совпадало никогда.
+    /// A cast to (Vector2i) truncates the fractional part TOWARD ZERO, not downward: -41.5
+    /// becomes -41, even though the tile is -42. Half the station on this map lives in negative
+    /// coordinates, so this kind of cast fails exactly where all the work happens. The assembly
+    /// test silently laid its flatpacks off to the side because of this: the "landed on the tile"
+    /// check never once matched.
     /// </summary>
     private static Vector2i ToTile(Vector2 position) =>
         new((int) MathF.Floor(position.X), (int) MathF.Floor(position.Y));
@@ -2235,13 +2277,14 @@ public sealed class BorgAgentTests
     }
 
     /// <summary>
-    /// <c>use</c> объясняет исход, а не отвечает голым «ok».
+    /// <c>use</c> explains the outcome instead of answering with a bare "ok."
     /// </summary>
     /// <remarks>
-    /// Прямая регрессия на прогон, где робот 520 вызовов подряд бил ломом по ящику, который
-    /// открывается нажатием. Инструмент отвечал <c>ok</c> и «состояние не изменилось» — а это три
-    /// разных исхода под одной вывеской: началось долгое действие; что-то изменилось; действие
-    /// неприменимо. Модель выбрала неверный способ и не получила ни одного сигнала об этом.
+    /// A direct regression from a run where the robot made 520 calls in a row hitting a crate
+    /// with a crowbar when the crate opens with a click. The tool responded <c>ok</c> and "state
+    /// unchanged" — but that's three different outcomes under one label: a long action started;
+    /// something changed; the action doesn't apply. The model picked the wrong approach and got
+    /// no signal about it whatsoever.
     /// </remarks>
     [Test]
     public async Task Use_ExplainsWhatHappened()
@@ -2257,32 +2300,33 @@ public sealed class BorgAgentTests
         {
             var where = ent.GetComponent<TransformComponent>(borg).Coordinates;
             crate = ent.SpawnEntity("CrateGenericSteel", where.Offset(new Vector2(1, 0)));
-            // Шлюз ставится НА КЛЕТКУ САМОГО РОБОТА, и это не небрежность.
+            // The airlock is placed ON THE ROBOT'S OWN TILE, and that's not carelessness.
             //
-            // Соседняя клетка ничем не гарантирована: робот спавнится у произвольного маяка, и
-            // сверху-снизу-сбоку от него запросто оказывается стена. Шлюз, поставленный в стену,
-            // выглядит здоровым по всем полям — Powered=True, State=Closed, ClickOpen=True,
-            // anchored=True, расстояние ровно тайл, — но InteractionActivate до него не доходит:
-            // InRangeUnobstructed упирается лучом в ту самую стену, молча возвращает false, и
-            // инструмент честно докладывает «ничего не изменилось». Ровно это и было снято
-            // диагностикой 21.08.2026.
+            // The adjacent tile is guaranteed nothing: the robot spawns at an arbitrary beacon,
+            // and above/below/beside it can easily be a wall. An airlock placed into a wall looks
+            // healthy on every field — Powered=True, State=Closed, ClickOpen=True, anchored=True,
+            // distance exactly one tile — but InteractionActivate never reaches it:
+            // InRangeUnobstructed's ray runs into that same wall, silently returns false, and the
+            // tool honestly reports "nothing changed." This is exactly what diagnostics caught on
+            // 21.08.2026.
             //
-            // Клетка робота проходима по построению: TryFreeTileNear выбрал её именно за это.
-            // Тест про то, ЧТО инструмент докладывает об исходе, а не про геометрию карты, и
-            // подпирать его везением с координатой незачем.
+            // The robot's own tile is passable by construction: TryFreeTileNear picked it for
+            // exactly that reason. This test is about WHAT the tool reports about the outcome,
+            // not about map geometry, and there's no reason to prop it up with luck on coordinates.
             door = ent.SpawnEntity("Airlock", where);
 
-            // ПИТАНИЕ ШЛЮЗУ ЗАДАЁТСЯ ЯВНО, и это починка, а не удобство.
+            // THE AIRLOCK'S POWER IS SET EXPLICITLY, and that's a fix, not a convenience.
             //
-            // Обесточенный шлюз не открывается нажатием ВООБЩЕ: SharedAirlockSystem.CanChangeState
-            // требует Powered, иначе BeforeDoorOpenedEvent отменяется. А свежий шлюз, поставленный
-            // на произвольную клетку, к местному АПС не подключён — под ним нет кабеля.
+            // An unpowered airlock doesn't open on a click AT ALL: SharedAirlockSystem.CanChangeState
+            // requires Powered, otherwise BeforeDoorOpenedEvent gets cancelled. And a freshly
+            // spawned airlock placed on an arbitrary tile isn't connected to the local APC —
+            // there's no cable under it.
             //
-            // Раньше тест этого не знал и был зелёным ПО СЛУЧАЙНОСТИ: робот спавнился в другой
-            // точке карты, где клетка оказывалась запитанной. 20.08.2026 TryFindGrid начал
-            // фильтровать сетку по StationMemberComponent, точка спавна сместилась — и
-            // утверждение «дверь обязана открыться» перестало выполняться. Тест должен проверять
-            // инструмент, а не везение с координатой.
+            // The test used to not know this and was green PURELY BY LUCK: the robot spawned at a
+            // different point on the map where the tile happened to be powered. On 20.08.2026
+            // TryFindGrid started filtering the grid by StationMemberComponent, the spawn point
+            // shifted — and the assertion "the door must open" stopped holding. The test should
+            // check the tool, not luck with coordinates.
             if (ent.TryGetComponent<Content.Server.Power.Components.ApcPowerReceiverComponent>(
                     door, out var recv))
             {
@@ -2290,18 +2334,18 @@ public sealed class BorgAgentTests
             }
         });
 
-        // Десять тиков, а не пять: питание доезжает до створки отдельным событием от энергосети,
-        // и на пяти оно иногда не успевало.
+        // Ten ticks, not five: power reaches the door via a separate event from the power grid,
+        // and at five ticks it sometimes didn't make it in time.
         await w.Pair.Server.WaitRunTicks(10);
 
         var handle = await w.Read(() => w.System.HandleFor(borg, crate));
 
-        // ПУТЬ ОТКАЗА — и теперь он ДЕЙСТВИТЕЛЬНО про инструмент.
+        // THE FAILURE PATH — and now it's genuinely about the tool.
         //
-        // Прежняя версия заявляла в комментарии «по ящику ломом», а на деле жала на ящик и ждала
-        // отказа от нажатия. Ящик от нажатия открывается, так что утверждение проверяло
-        // собственную опечатку и держалось зелёным ровно до тех пор, пока нажатие не начало
-        // срабатывать. Это был ложный зелёный, а не регрессия.
+        // The previous version claimed in its comment "crowbar on the crate," but actually
+        // clicked the crate and waited for the click to be refused. The crate opens on a click,
+        // so the assertion was checking its own typo and stayed green only for as long as
+        // clicking hadn't started working. This was a false green, not a regression.
         await w.InvokeOn(borg, "module", "{\"name\":\"tool\"}");
 
         var wrong = await w.InvokeOn(borg, "use",
@@ -2315,8 +2359,8 @@ public sealed class BorgAgentTests
         Assert.That(wrongJson, Does.Contain("НЕ ПОЛУЧИЛОСЬ").And.Contain("почему"),
             "ничего не вышло, а причина не названа");
 
-        // ПУТЬ УСПЕХА, ящик. Нажатие идёт через InteractionActivate, то есть инструмент в руке
-        // ему не мешает — переключённый модуль здесь ни при чём.
+        // THE SUCCESS PATH, the crate. Clicking goes through InteractionActivate, so a tool in
+        // hand doesn't get in its way — the selected module is irrelevant here.
         var pressed = await w.InvokeOn(borg, "use", "{\"target\":\"" + handle + "\"}");
         await w.Pair.Server.WaitRunTicks(5);
 
@@ -2335,13 +2379,14 @@ public sealed class BorgAgentTests
                 "не назван характер изменения");
         });
 
-        // ПУТЬ УСПЕХА, дверь: нажатие меняет состояние створки, и это обязано быть сказано.
+        // THE SUCCESS PATH, the door: clicking changes the door's state, and that must be reported.
         //
-        // Створка на клетке робота открывается сама, от касания корпусом (DoorBumpOpener), так что
-        // нажатие её ЗАКРЫВАЕТ: «Open → Closing». Проверяется ровно то, ради чего тест написан, —
-        // что инструмент называет смену состояния, а не отвечает голым ok. В какую сторону эта
-        // смена, здесь не важно и специально не закрепляется: закрепи мы «открылась», тест снова
-        // держался бы на побочном обстоятельстве.
+        // The door on the robot's tile opens on its own, from body contact (DoorBumpOpener), so
+        // the click actually CLOSES it: "Open → Closing." What's checked is exactly the point of
+        // this test — that the tool names the state change instead of answering with a bare ok.
+        // Which direction the change goes doesn't matter here and is deliberately not pinned
+        // down: if we pinned down "opened," the test would once again be resting on an incidental
+        // detail.
         var doorHandle = await w.Read(() => w.System.HandleFor(borg, door));
         var opened = await w.InvokeOn(borg, "use", "{\"target\":\"" + doorHandle + "\"}");
         await w.Pair.Server.WaitRunTicks(5);

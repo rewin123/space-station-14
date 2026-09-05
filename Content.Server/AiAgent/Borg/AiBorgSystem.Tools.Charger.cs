@@ -13,19 +13,21 @@ using Robust.Shared.Map.Components;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Где зарядиться. Поиск по ВСЕЙ сетке, а не по тому, что видно.
+/// Where to recharge. Search across the WHOLE grid, not just what's visible.
 ///
 /// <para>
-/// Зрение здесь бесполезно принципиально: станция для киборгов стоит в робототехнике, а садится
-/// робот там, где работал, и увидеть её он не может ниоткуда. В раунде 137 это стоило смены — он
-/// обошёл АМЭ, инженерию, подстанцию, Atmos Storage и ТЭГ, сообщил «BorgCharger не нашёл нигде,
-/// задача невозможна» и сел на нуле, хотя на карте станций три штуки. Поиск по компонентам знает
-/// про них всё сразу и стоит один вызов.
+/// Sight is fundamentally useless here: the cyborg charging station sits in robotics, while the
+/// robot runs out of charge wherever it was working, and it has no way to see the station from
+/// there. In round 137 this cost a shift — it went around the AME, engineering, the substation,
+/// Atmos Storage, and the TEG, reported "couldn't find a BorgCharger anywhere, task impossible",
+/// and shut down at zero, even though there are three charging stations on the map. A component
+/// query knows about all of them at once and costs one call.
 /// </para>
 /// <para>
-/// Отбор по whitelist самой станции, а не по имени прототипа: вопрос у робота не «где стоит
-/// BorgCharger», а «куда влезаю я». Зарядки для батареек и ксеноборгов при этом отсеиваются сами,
-/// без списка исключений, который пришлось бы чинить после каждого апстрима.
+/// Filtering is by the station's own whitelist, not by prototype name: the robot's question isn't
+/// "where is a BorgCharger", it's "where can I fit". Battery chargers and xenoborg chargers get
+/// filtered out on their own this way, with no exclusion list that would need fixing after every
+/// upstream merge.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -54,8 +56,9 @@ public sealed partial class AiBorgSystem
                 if (Transform(uid).GridUid != grid)
                     continue;
 
-                // «Влезаю ли я» — единственный честный признак. У станции для киборгов слот
-                // entity_storage и вайтлист на шасси; у настольной зарядки — слот под батарейку.
+                // "Can I fit" is the only honest criterion. The cyborg station has an
+                // entity_storage slot and a whitelist on the chassis; a desktop charger has a
+                // slot for a battery.
                 if (charger.Whitelist == null || !_whitelist.IsValid(charger.Whitelist, borg))
                     continue;
 

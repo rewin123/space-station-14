@@ -49,12 +49,12 @@ public sealed class SkillMemoryTests
     }
 
     /// <summary>
-    /// Файловая система под разбор: только личные записи, справочник тут не нужен.
+    /// A filesystem for compaction: personal notes only, no knowledge base needed here.
     ///
-    /// Хранение скиллов переехало в <see cref="DocTree"/>, и его собственные правила — правка
-    /// фрагментом, стоппер близнецов, потолок описания — проверяются в <c>VfsTests</c>. Здесь
-    /// осталось то, ради чего этот файл и существует: что разбор пишет, не пачкает игровую
-    /// историю и шлёт тот же массив инструментов.
+    /// Skill storage moved into <see cref="DocTree"/>, and its own rules — editing by fragment, the
+    /// twin stopper, the description cap — are checked in <c>VfsTests</c>. What remains here is the
+    /// reason this file exists at all: that compaction writes, does not dirty the game history, and
+    /// sends the same tool array.
     /// </summary>
     private Vfs NewVfs() => new VfsBuilder(Sawmill)
         .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
@@ -62,7 +62,7 @@ public sealed class SkillMemoryTests
         .AddText(Path.Combine(_dir, "CURATOR.md"), "curator.md", VfsAccess.Read, "разбор")
         .Build();
 
-    /// <summary>Положить промпт разбора рядом, как это делает боевой каталог.</summary>
+    /// <summary>Put the compaction prompt alongside, the way the live directory does.</summary>
     private void SeedCuratorPrompt(string text = "Разбери отрезок.\n{{КОРЕНЬ}}") =>
         File.WriteAllText(Path.Combine(_dir, "CURATOR.md"), text);
 
@@ -181,10 +181,10 @@ public sealed class SkillMemoryTests
 
     // ------------------------------------------------------------------- skills
 
-    // Тесты самой библиотеки — правка фрагментом, стоппер близнецов, потолок описания,
-    // устойчивость листинга — переехали в VfsTests вместе с хранением. Здесь остаётся разбор.
+    // Tests of the library itself — editing by fragment, the twin stopper, the description cap,
+    // listing stability — moved into VfsTests along with the storage. What remains here is compaction.
 
-    /// <summary>Пустой разговор с готовым префиксом — чтобы не повторять три строки в каждом тесте.</summary>
+    /// <summary>An empty conversation with a ready-made prefix — so three lines don't repeat in every test.</summary>
     private static ConversationState Fresh()
     {
         var conv = new ConversationState();
@@ -217,9 +217,9 @@ public sealed class SkillMemoryTests
                     a.GetProperty("desc").GetString() ?? "",
                     a.GetProperty("content").GetString() ?? "");
 
-                // Подставной обработчик обязан делать то же, что настоящий: счётчик записей
-                // живёт в обработчике инструмента, а не в монтировании (см. Vfs.NoteWrite).
-                // Без этой строки разбор отчитается нулём записей при записанном файле.
+                // The stand-in handler must do the same thing the real one does: the write counter
+                // lives in the tool handler, not in the mount (see Vfs.NoteWrite). Without this line,
+                // compaction would report zero writes even though a file was written.
                 if (r.Ok)
                     vfs.NoteWrite();
 
@@ -255,8 +255,9 @@ public sealed class SkillMemoryTests
     [Test]
     public async Task Curator_CountsNoWrites_WhenItOnlyLooked()
     {
-        // Условие отчёта — «записал», а не «ответил». Иначе каждая компакция тратила бы строку
-        // диалога на «посмотрел и решил, что писать нечего», а это законный исход разбора.
+        // The reporting condition is "wrote", not "replied". Otherwise every compaction would spend
+        // a line of dialogue on "looked and decided there was nothing to write", which is a
+        // legitimate outcome of compaction.
         SeedCuratorPrompt();
 
         var vfs = NewVfs();
@@ -295,8 +296,8 @@ public sealed class SkillMemoryTests
     [Test]
     public async Task Curator_StillRunsWhenThePromptFileIsMissing()
     {
-        // Молча не разбирать нельзя: снаружи это выглядит как «агент перестал учиться» и не даёт
-        // ни строки в лог. Файл не положен намеренно.
+        // Silently skipping compaction is not allowed: from the outside it looks like "the agent
+        // stopped learning" and gives not a single line in the log. The file is deliberately absent.
         var vfs = NewVfs();
         var llm = new RecordingLlmClient();
 

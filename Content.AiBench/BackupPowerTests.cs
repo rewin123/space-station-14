@@ -21,19 +21,20 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Резервное питание для смены без инженеров.
+/// Backup power for a shift with no engineers.
 ///
 /// <para>
-/// Стенд — настоящая станция (<see cref="AiStation"/>, карта Box с настоящей энергосетью), и
-/// раунд она стартует БЕЗ подключённых игроков. То есть условие «инженеров на смене нет»
-/// выполняется само собой, и проверять надо не его, а то, что генератор реально попал в сеть.
+/// The bench is a real station (<see cref="AiStation"/>, the Box map with a real power grid), and
+/// the round starts on it with NO players connected. So the condition "no engineers on shift"
+/// holds automatically, and what needs checking isn't that, but whether the generator actually
+/// made it into the grid.
 /// </para>
 /// <para>
-/// <b>Главное утверждение файла — про энергосеть, а не про факт спавна.</b> Генератор
-/// подключается через <c>CableDeviceNode</c>, а тот соединяется только с кабелем в своём тайле.
-/// Поставленный мимо кабеля он спокойно стоит, гудит и не даёт ничего — <b>без единой ошибки</b>.
-/// «Сущность заспавнилась» такую поломку пропускает целиком, поэтому здесь сравниваются
-/// <see cref="Node.NodeGroup"/> генератора и SMES.
+/// <b>The main assertion in this file is about the power grid, not the fact of spawning.</b> The
+/// generator connects via <c>CableDeviceNode</c>, which only links to a cable on its own tile.
+/// Placed off the cable, it just sits there, hums, and delivers nothing — <b>with no error at
+/// all</b>. "The entity spawned" misses this kind of breakage entirely, which is why this file
+/// compares the generator's and the SMES's <see cref="Node.NodeGroup"/>.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -42,11 +43,11 @@ public sealed class BackupPowerTests
 {
     private const string GeneratorProto = "AiAgentBackupGenerator";
 
-    /// <summary>Тот же департамент, что по умолчанию читает <c>ai.backup_power_department</c>.</summary>
+    /// <summary>The same department that <c>ai.backup_power_department</c> reads by default.</summary>
     private static readonly ProtoId<DepartmentPrototype> EngineeringDepartment = "Engineering";
 
     /// <summary>
-    /// Генератор поставлен и находится в ТОЙ ЖЕ энергосети, что SMES станции.
+    /// The generator is placed and sits in the SAME power grid as the station's SMES.
     /// </summary>
     [Test]
     public async Task BackupGenerator_JoinsTheSameNetAsTheSmes()
@@ -97,7 +98,7 @@ public sealed class BackupPowerTests
             Assert.That(generators, Is.GreaterThan(0),
                 "резервный генератор не поставлен, хотя инженеров на смене нет");
 
-            // Вот это и есть смысл теста. Спавн мимо кабеля выглядит как успех и молчит.
+            // This is the whole point of the test. Spawning off the cable looks like success and stays silent.
             Assert.That(matched, Is.EqualTo(generators),
                 $"из {generators} генераторов в сети SMES оказалось {matched} — " +
                 "остальные стоят вне энергосети и не дают ничего");
@@ -105,13 +106,13 @@ public sealed class BackupPowerTests
     }
 
     /// <summary>
-    /// Суммарная заказанная мощность выставлена на самих машинах, а не осталась прототипной.
+    /// The total requested power is set on the machines themselves, not left at the prototype value.
     /// </summary>
     /// <remarks>
-    /// Мощность пишется в <c>PowerSupplier.MaxSupply</c> после спавна, чтобы
-    /// <c>ai.backup_power_watts</c> можно было крутить на живом сервере. Если этот шаг потеряется,
-    /// сервер будет выдавать прототипные 60 кВт независимо от настройки — и заметить это можно
-    /// будет только по тому, что ручка «не работает».
+    /// Power is written into <c>PowerSupplier.MaxSupply</c> after spawn, so that
+    /// <c>ai.backup_power_watts</c> can be tuned on a live server. If this step gets lost, the
+    /// server will keep handing out the prototype's 60 kW regardless of the setting — and the only
+    /// way to notice would be that the knob "doesn't work".
     /// </remarks>
     [Test]
     public async Task BackupGenerator_SuppliesTheConfiguredTotal()
@@ -121,9 +122,9 @@ public sealed class BackupPowerTests
         var ent = server.ResolveDependency<IEntityManager>();
         var cfg = server.ResolveDependency<IConfigurationManager>();
 
-        // Ожидаемая мощность — из таблицы по станции, если запись есть, и только иначе из CVar'а.
-        // Стенд грузит карту Box, а у неё в таблице своё число; сравнивать с CVar'ом значило бы
-        // проверять, что таблица НЕ работает.
+        // The expected power comes from the per-station table if an entry exists, and only
+        // otherwise from the CVar. The bench loads the Box map, which has its own number in the
+        // table; comparing against the CVar would mean testing that the table does NOT work.
         var wanted = await w.Read(() =>
         {
             var protoMan = server.ResolveDependency<IPrototypeManager>();
@@ -151,13 +152,14 @@ public sealed class BackupPowerTests
     }
 
     /// <summary>
-    /// Таблица по станциям: все карты ротации на месте, числа осмысленны, маяки не ловушки.
+    /// The per-station table: every rotation map is present, the numbers make sense, the beacons
+    /// aren't traps.
     /// </summary>
     /// <remarks>
-    /// Записи составлялись разбором каждой карты, и опечатка в них — самый тихий вид поломки:
-    /// прототип просто не найдётся, система молча уйдёт на общий путь с усреднённой мощностью, и
-    /// заметить это будет нечем. Поэтому список карт проверяется против <c>gameMap</c>, а не
-    /// против самого себя.
+    /// The entries were compiled by inspecting each map, and a typo in them is the quietest kind of
+    /// breakage: the prototype simply won't be found, the system will silently fall back to the
+    /// generic path with an averaged power value, and there'll be nothing to notice it by. That's
+    /// why the map list is checked against <c>gameMap</c>, not against itself.
     /// </remarks>
     [Test]
     public async Task Tuning_CoversTheRotationAndIsSane()
@@ -174,12 +176,12 @@ public sealed class BackupPowerTests
         {
             foreach (var tuning in tunings)
             {
-                // Ключ обязан быть настоящей картой: иначе запись никогда не сработает, а выглядит
-                // как рабочая.
+                // The key must be a real map: otherwise the entry will never fire, while still
+                // looking like it works.
                 Assert.That(protoMan.HasIndex<Content.Shared.Maps.GameMapPrototype>(tuning.ID), Is.True,
                     $"'{tuning.ID}' — не id существующей карты, запись мертва");
 
-                // 15 кВт — мощность одной машины; ниже неё запись не даёт ни одного генератора.
+                // 15 kW is the power of a single machine; below that, the entry yields zero generators.
                 Assert.That(tuning.Watts, Is.InRange(15000, 300000),
                     $"{tuning.ID}: {tuning.Watts}Вт вне разумного диапазона");
 
@@ -187,8 +189,8 @@ public sealed class BackupPowerTests
                 {
                     Assert.That(anchor, Is.Not.Empty, $"{tuning.ID}: пустой маяк в списке");
 
-                    // Сравнение идёт по вхождению подстроки, поэтому короткие имена ловят чужое:
-                    // «CE» попадает в «Science». Два символа — уже ловушка.
+                    // The comparison is by substring match, so short names catch the wrong thing:
+                    // "CE" matches inside "Science". Two characters is already a trap.
                     Assert.That(anchor.Trim().Length, Is.GreaterThan(2),
                         $"{tuning.ID}: маяк '{anchor}' слишком короток для поиска по подстроке");
                 }
@@ -197,21 +199,20 @@ public sealed class BackupPowerTests
     }
 
     /// <summary>
-    /// Условие: пустая смена — инженеров нет; выданная инженерная должность — есть.
+    /// Condition: an empty shift means no engineers; an assigned engineering job means there are.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Проверяется само решение системы, а не спавн. Поднять
-    /// <c>RulePlayerJobsAssignedEvent</c> повторно нельзя: на него подписан
-    /// <c>AntagSelectionSystem</c>, и вне последовательности старта раунда он валится с
-    /// «_postSpawnRules was null» — первая версия этого теста ровно так и падала, причём не по
-    /// вине проверяемой системы.
+    /// This checks the system's own decision, not the spawn. <c>RulePlayerJobsAssignedEvent</c>
+    /// can't be raised again: <c>AntagSelectionSystem</c> is subscribed to it, and outside the
+    /// round-start sequence it blows up with "_postSpawnRules was null" — the first version of this
+    /// test failed exactly that way, and not because of the system under test.
     /// </para>
     /// <para>
-    /// Должность выдаётся настоящим <c>StationJobsSystem.TryAssignJob</c> — тем же путём, которым
-    /// идёт живой <c>GameTicker</c>. Писать в <c>PlayerJobs</c> напрямую нельзя: поле закрыто
-    /// атрибутом <c>[Access]</c>, и правильно закрыто — при выдаче должности должен уменьшаться её
-    /// слот.
+    /// The job is assigned through the real <c>StationJobsSystem.TryAssignJob</c> — the same path a
+    /// live <c>GameTicker</c> takes. Writing into <c>PlayerJobs</c> directly isn't possible: the
+    /// field is closed off with an <c>[Access]</c> attribute, and rightly so — assigning a job must
+    /// decrement its slot.
     /// </para>
     /// </remarks>
     [Test]
@@ -223,14 +224,14 @@ public sealed class BackupPowerTests
 
         var power = server.System<BackupPowerSystem>();
 
-        // Раунд на этом стенде стартует без подключённых клиентов, значит должностей не выдано.
+        // The round on this bench starts with no clients connected, so no jobs have been assigned.
         var beforeAnyJobs = await w.Read(() => power.EngineeringOnDuty(w.Station));
 
         var assigned = await w.Read(() =>
         {
             var jobs = server.System<Content.Server.Station.Systems.StationJobsSystem>();
-            // Через ProtoId, а не строкой: анализатор RA0033 запрещает литерал в Index — иначе
-            // переименование прототипа в апстриме не поймал бы никто.
+            // Via ProtoId, not a string: analyzer RA0033 forbids a literal in Index — otherwise
+            // nobody would catch a prototype rename in upstream.
             var department = protoMan.Index(EngineeringDepartment);
 
             foreach (var role in department.Roles)

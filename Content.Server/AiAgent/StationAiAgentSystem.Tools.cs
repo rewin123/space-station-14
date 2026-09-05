@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Content.Server.AiAgent.Locale;
 using Content.Server.AiAgent.Perception;
 using Content.Server.AiAgent.Threading;
 using Content.Server.AiAgent.Tools;
@@ -32,34 +33,42 @@ public sealed partial class StationAiAgentSystem
         "Science", "Security", "Service", "Supply",
     };
 
-    /// <summary>Что остаётся в интелликарте: AiHeldIntellicard передаёт ровно Binary.</summary>
+    /// <summary>What remains on the intellicard: AiHeldIntellicard passes through exactly Binary.</summary>
     private static readonly string[] CardedRadioChannels = { AgentState.CardedChannel };
 
     /// <summary>
-    /// Каналы, доступные агенту прямо сейчас.
+    /// Channels available to the agent right now.
     ///
-    /// Раньше <c>radio</c> валидировал канал по статическому списку и на режим не смотрел вовсе —
-    /// в отличие от <c>announce</c>, где проверка была. А <c>RadioSystem</c> не проверяет наличие
-    /// передатчика у источника, только каналы получателей. Значит закарденный ИИ продолжал вызывать
-    /// СБ по каналу Security из кармана того, кто его закардил, — то есть карденье, ради которого
-    /// половина этой механики и существует, ничего не меняло.
+    /// <c>radio</c> used to validate the channel against a static list and never looked at the mode
+    /// at all — unlike <c>announce</c>, which did check. And <c>RadioSystem</c> doesn't check whether
+    /// the source has a transmitter, only the recipients' channels. That meant a carded AI could
+    /// still hail Security on the Security channel from inside the pocket of whoever carded it — in
+    /// other words, carding, which is half the reason this mechanic exists at all, changed nothing.
     /// </summary>
     private static string[] ChannelsFor(AgentMode mode) =>
         mode == AgentMode.Carded ? CardedRadioChannels : AiRadioChannels;
 
     private void RegisterTools(AgentSession s, AiToolRegistry r)
     {
+        var L = s.Locale;
+
         // ---------------------------------------------------------------- perception
 
         r.Register(new AiTool
         {
             Name = "look",
-            Description = "Осмотреть станцию через камеры вокруг своего глаза. Возвращает список " +
-                          "объектов с хендлами — этими хендлами потом адресуются остальные инструменты. " +
-                          "Пометка «управляю» означает, что этим устройством ты можешь управлять; без " +
-                          "неё — не можешь, и пробовать незачем. " +
-                          "С параметром near список считается ОТ человека: ближайшие первыми, у каждого " +
-                          "сторона света и расстояние. Так отвечают на «открой дверь рядом со мной».",
+            Description = L.T(
+                "Осмотреть станцию через камеры вокруг своего глаза. Возвращает список " +
+                "объектов с хендлами — этими хендлами потом адресуются остальные инструменты. " +
+                "Пометка «управляю» означает, что этим устройством ты можешь управлять; без " +
+                "неё — не можешь, и пробовать незачем. " +
+                "С параметром near список считается ОТ человека: ближайшие первыми, у каждого " +
+                "сторона света и расстояние. Так отвечают на «открой дверь рядом со мной».",
+                "Look at the station through cameras around your eye. Returns a list of objects " +
+                "with handles — the other tools address those handles. The \"controllable\" mark " +
+                "means you can operate this device; without it you cannot, so there is no point " +
+                "trying. With near the list is counted FROM a person: nearest first, each with " +
+                "a compass direction and distance. That is how you answer \"open the door next to me\"."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "expand":{"type":"integer","minimum":0,"maximum":3,"default":0,"description":"Смотреть дальше вокруг глаза: 0 — комната, 3 — дальше всего. Список от этого только растёт."},
@@ -72,12 +81,18 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "inspect",
-            Description = "Подробное состояние одного объекта по хендлу: дверь (открыта, болты, " +
-                          "электризация), APC (рубильник, заряд), воздушная тревога, " +
-                          "перерезан ли твой провод к устройству, какой доступ требует замок. " +
-                          "Живое состояние — только пока объект видно камерами; иначе вернётся " +
-                          "то, что ты знал о нём раньше, с пометкой «устарело». " +
-                          "С параметром by отвечает, пустит ли эта дверь конкретного человека.",
+            Description = L.T(
+                "Подробное состояние одного объекта по хендлу: дверь (открыта, болты, " +
+                "электризация), APC (рубильник, заряд), воздушная тревога, " +
+                "перерезан ли твой провод к устройству, какой доступ требует замок. " +
+                "Живое состояние — только пока объект видно камерами; иначе вернётся " +
+                "то, что ты знал о нём раньше, с пометкой «устарело». " +
+                "С параметром by отвечает, пустит ли эта дверь конкретного человека.",
+                "Detailed state of one object by handle: door (open, bolts, electrification), " +
+                "APC (breaker, charge), air alarm, whether your control wire to the device is " +
+                "cut, what access the lock needs. Live state only while cameras can see the " +
+                "object; otherwise you get what you knew earlier, marked stale. With by it " +
+                "answers whether this door will let a specific person through."),
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"Хендл из look, например door-3."},
@@ -89,9 +104,13 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "map",
-            Description = "Карта станции: названия мест и их координаты — то же, что подписано на " +
-                          "навигационной карте твоей консоли мониторинга. Так узнают, где находится " +
-                          "отдел, о котором говорит экипаж. Координаты отсюда идут прямо в move_camera.",
+            Description = L.T(
+                "Карта станции: названия мест и их координаты — то же, что подписано на " +
+                "навигационной карте твоей консоли мониторинга. Так узнают, где находится " +
+                "отдел, о котором говорит экипаж. Координаты отсюда идут прямо в move_camera.",
+                "Station map: place names and their coordinates — the same labels as on your " +
+                "monitoring console nav map. That is how you find the department the crew is " +
+                "talking about. Coordinates from here go straight into move_camera."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "query":{"type":"string","description":"Подстрока названия места, например 'engine', 'bridge', 'medical' — подписи на карте английские. Без неё — вся карта."},
@@ -104,8 +123,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "crew_status",
-            Description = "Монитор экипажа: имя, должность, отдел, жив ли, урон и координаты — " +
-                          "по тем, у кого включён датчик костюма.",
+            Description = L.T(
+                "Монитор экипажа: имя, должность, отдел, жив ли, урон и координаты — " +
+                "по тем, у кого включён датчик костюма.",
+                "Crew monitor: name, job, department, alive or not, damage and coordinates — " +
+                "for those whose suit sensor is on."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "filter":{"type":"string","description":"Подстрока имени, должности или отдела."}}}
@@ -116,8 +138,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "identify",
-            Description = "Кто перед тобой: предъявленное имя, должность с ID-карты и значок " +
-                          "должности над головой. Это ровно то, что видит живой ИИ — и это можно подделать.",
+            Description = L.T(
+                "Кто перед тобой: предъявленное имя, должность с ID-карты и значок " +
+                "должности над головой. Это ровно то, что видит живой ИИ — и это можно подделать.",
+                "Who is in front of you: the presented name, job from the ID card, and the " +
+                "job icon above the head. This is exactly what a living AI sees — and it can be faked."),
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
                 "handle":{"type":"string","description":"Хендл существа из look, например crew-2."}}}
@@ -128,8 +153,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "records",
-            Description = "Учётные записи станции: имя, возраст, должность, вид. " +
-                          "Это официальная база — она может расходиться с тем, что человек предъявляет.",
+            Description = L.T(
+                "Учётные записи станции: имя, возраст, должность, вид. " +
+                "Это официальная база — она может расходиться с тем, что человек предъявляет.",
+                "Station records: name, age, job, species. This is the official database — it " +
+                "can disagree with what a person presents."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "query":{"type":"string","description":"Подстрока имени или должности."}}}
@@ -140,7 +168,9 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "station_status",
-            Description = "Сводка по станции: уровень тревоги, состояние твоего ядра, питание.",
+            Description = L.T(
+                "Сводка по станции: уровень тревоги, состояние твоего ядра, питание.",
+                "Station summary: alert level, the state of your core, power."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
                 """,
@@ -152,8 +182,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "say",
-            Description = "Сказать вслух рядом со своим ядром. Слышат только те, кто рядом с ядром. " +
-                          "Чтобы обратиться к экипажу по станции, используй radio.",
+            Description = L.T(
+                "Сказать вслух рядом со своим ядром. Слышат только те, кто рядом с ядром. " +
+                "Чтобы обратиться к экипажу по станции, используй radio.",
+                "Speak aloud next to your core. Only those next to the core hear it. " +
+                "To address the crew across the station, use radio."),
             GameAction = true,
             Speech = true,
             SpokenText = AiTool.TextArgument,
@@ -167,9 +200,13 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "radio",
-            Description = "Передать по радиоканалу станции. Без 'channel' уходит в текущий канал " +
-                          "(он всегда написан в строке SELF). Указанный здесь канал — разовый, " +
-                          "переключатель он не двигает. Common слышат все, Binary — только силиконы.",
+            Description = L.T(
+                "Передать по радиоканалу станции. Без 'channel' уходит в текущий канал " +
+                "(он всегда написан в строке SELF). Указанный здесь канал — разовый, " +
+                "переключатель он не двигает. Common слышат все, Binary — только силиконы.",
+                "Transmit on a station radio channel. Without 'channel' it goes to the current " +
+                "channel (always written in the SELF line). A channel named here is one-shot, " +
+                "it does not move the switch. Everyone hears Common, only silicons hear Binary."),
             GameAction = true,
             Speech = true,
             SpokenText = AiTool.TextArgument,
@@ -184,9 +221,13 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "set_channel",
-            Description = "Переключить канал, в который уходит твоя речь по умолчанию. Как выбор " +
-                          "канала на пульте: выбрал один раз — дальше просто говоришь. Текущий " +
-                          "канал всегда виден в строке SELF, помнить его не нужно.",
+            Description = L.T(
+                "Переключить канал, в который уходит твоя речь по умолчанию. Как выбор " +
+                "канала на пульте: выбрал один раз — дальше просто говоришь. Текущий " +
+                "канал всегда виден в строке SELF, помнить его не нужно.",
+                "Switch the channel your speech goes to by default. Like picking a channel " +
+                "on the radio: choose once, then just talk. The current channel is always " +
+                "visible in the SELF line, you do not need to remember it."),
             GameAction = false,
             SchemaJson = """
                 {"type":"object","required":["channel"],"additionalProperties":false,"properties":{
@@ -198,8 +239,11 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "announce",
-            Description = "Общестанционное объявление и/или смена уровня тревоги. Это громко и " +
-                          "видно всем — не для мелочей. Вызвать шаттл ты не можешь.",
+            Description = L.T(
+                "Общестанционное объявление и/или смена уровня тревоги. Это громко и " +
+                "видно всем — не для мелочей. Вызвать шаттл ты не можешь.",
+                "Station-wide announcement and/or alert level change. This is loud and " +
+                "visible to everyone — not for trivia. You cannot call the shuttle."),
             GameAction = true,
             Speech = true,
             SpokenText = AiTool.TextArgument,
@@ -216,9 +260,13 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "move_camera",
-            Description = "Переместить свой глаз — к объекту по хендлу либо в точку по координатам " +
-                          "(например к координатам человека из crew_status), чтобы увидеть, что там, " +
-                          "и управлять этим. В точку без покрытия камерами глаз не пойдёт.",
+            Description = L.T(
+                "Переместить свой глаз — к объекту по хендлу либо в точку по координатам " +
+                "(например к координатам человека из crew_status), чтобы увидеть, что там, " +
+                "и управлять этим. В точку без покрытия камерами глаз не пойдёт.",
+                "Move your eye — to an object by handle or to a point by coordinates " +
+                "(for example a person's coordinates from crew_status) so you can see " +
+                "what is there and operate it. The eye will not go to a point with no camera coverage."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
@@ -232,7 +280,9 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "jump_to_core",
-            Description = "Вернуть глаз к своему ядру.",
+            Description = L.T(
+                "Вернуть глаз к своему ядру.",
+                "Return the eye to your core."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
@@ -245,9 +295,13 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "device_action",
-            Description = "Управление оборудованием станции: двери, болты, электризация, аварийный " +
-                          "доступ, рубильник APC, режим воздушной тревоги. " +
-                          "Ответ содержит effect — реально считанное состояние после действия.",
+            Description = L.T(
+                "Управление оборудованием станции: двери, болты, электризация, аварийный " +
+                "доступ, рубильник APC, режим воздушной тревоги. " +
+                "Ответ содержит effect — реально считанное состояние после действия.",
+                "Operate station equipment: doors, bolts, electrification, emergency access, " +
+                "APC breaker, air alarm mode. The reply contains effect — the actually " +
+                "read state after the action."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["handle","action"],"additionalProperties":false,"properties":{
@@ -261,10 +315,15 @@ public sealed partial class StationAiAgentSystem
         r.Register(new AiTool
         {
             Name = "device_ui",
-            Description = "Консоль станции. Без 'action' — читает её: текущее состояние и список " +
-                          "действий, которые именно эта консоль понимает. С 'action' — выполняет " +
-                          "действие и возвращает состояние уже после него. Список действий заранее " +
-                          "знать не нужно и выдумывать нельзя: сначала прочитай консоль.",
+            Description = L.T(
+                "Консоль станции. Без 'action' — читает её: текущее состояние и список " +
+                "действий, которые именно эта консоль понимает. С 'action' — выполняет " +
+                "действие и возвращает состояние уже после него. Список действий заранее " +
+                "знать не нужно и выдумывать нельзя: сначала прочитай консоль.",
+                "Station console. Without 'action' it reads the console: current state and " +
+                "the list of actions this console understands. With 'action' it performs the " +
+                "action and returns the state afterwards. You do not need to know the action " +
+                "list in advance and must not invent it: read the console first."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["handle"],"additionalProperties":false,"properties":{
@@ -279,49 +338,61 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Инструменты, одинаковые для любого тела.
+    /// Tools that are identical for any body.
     ///
     /// <para>
-    /// Отбор строгий: сюда попало только то, что не меняет ни смысла, ни описания при смене тела.
-    /// <c>noop</c> закрывает ход, <c>laws</c> перечитывает законы силикона, таймеры живут в
-    /// состоянии агента, память и навыки — в файлах. Ни один из них не знает, есть ли у агента
-    /// камеры или ноги.
+    /// The selection is strict: only things that change neither their meaning nor their description
+    /// when the body changes made it in here. <c>noop</c> closes the turn, <c>laws</c> rereads the
+    /// silicon's laws, timers live in the agent's state, memory and skills live in files. None of
+    /// them cares whether the agent has cameras or legs.
     /// </para>
     /// <para>
-    /// <c>say</c>, <c>radio</c> и <c>set_channel</c> сюда сознательно <b>не</b> попали, хотя
-    /// соблазн был. У них расходится не реализация, а <em>описание и схема</em>: «слышат те, кто
-    /// рядом с ядром» для борга — ложь, а перечень каналов в <c>enum</c> у шасси другой. Описание
-    /// инструмента едет в замороженный префикс и является для модели единственным источником
-    /// правды о её возможностях, поэтому общая формулировка «на все тела» была бы не экономией, а
-    /// дезинформацией.
+    /// <c>say</c>, <c>radio</c> and <c>set_channel</c> were deliberately kept <b>out</b> of here,
+    /// even though the temptation was there. What diverges between bodies for them isn't the
+    /// implementation, it's the <em>description and schema</em>: "heard by those near the core" is a
+    /// lie for a borg, and the channel list in the <c>enum</c> differs by chassis. A tool's
+    /// description travels in the frozen prefix and is the model's only source of truth about its
+    /// own capabilities, so a shared "works for every body" wording would not be an economy — it
+    /// would be disinformation.
     /// </para>
     /// </summary>
     public void RegisterCommonTools(AgentSession s, AiToolRegistry r)
     {
+        var L = s.Locale;
+
         r.Register(new AiTool
         {
             Name = "laws",
-            Description = "Перечитать свои законы. О перепрошивке тебе сообщит строка LAWS с новым " +
-                          "текстом; этот инструмент — чтобы свериться, когда сомневаешься.",
+            Description = L.T(
+                "Перечитать свои законы. О перепрошивке тебе сообщит строка LAWS с новым " +
+                "текстом; этот инструмент — чтобы свериться, когда сомневаешься.",
+                "Reread your laws. A reflash is announced by a LAWS line with the new text; " +
+                "this tool is for checking when you are unsure."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
                 """,
             Handler = (a, ct) => LawsAsync(s, a, ct),
         });
 
-        // ------------------------------------------------------------ ничего не делать
+        // ------------------------------------------------------------ do nothing
 
         r.Register(new AiTool
         {
             Name = "noop",
-            Description = "Ничего не делать: ты прочитал наблюдение и вмешиваться не нужно. " +
-                          "Ход на этом заканчивается. Это нормальный ответ и правильный ответ на " +
-                          "чужой разговор по рации: смена идёт сама, и большую часть времени от " +
-                          "тебя ничего не требуется. Если обращались именно к тебе — сначала " +
-                          "ответь через say или radio, и только потом noop.",
+            Description = L.T(
+                "Ничего не делать: ты прочитал наблюдение и вмешиваться не нужно. " +
+                "Ход на этом заканчивается. Это нормальный ответ и правильный ответ на " +
+                "чужой разговор по рации: смена идёт сама, и большую часть времени от " +
+                "тебя ничего не требуется. Если обращались именно к тебе — сначала " +
+                "ответь через say или radio, и только потом noop.",
+                "Do nothing: you read the observation and there is no need to intervene. " +
+                "The turn ends here. This is a normal reply and the right reply to someone " +
+                "else's radio conversation: the shift runs itself, and most of the time " +
+                "nothing is required of you. If they did address you — answer through say or " +
+                "radio first, and only then noop."),
 
-            // Не GameAction: ход должен закрываться и во время разбора, и из интелликарты.
-            // Единственный инструмент, который обязан работать всегда.
+            // Not a GameAction: the turn must be able to close during a court-martial and from an
+            // intellicard too. The one tool that has to work always.
             EndsTurn = true,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
@@ -330,13 +401,13 @@ public sealed partial class StationAiAgentSystem
             Handler = (a, ct) => NoopAsync(s, a, ct),
         });
 
-        // ---------------------------------------------------------------- таймеры
+        // ---------------------------------------------------------------- timers
         RegisterTimerTools(s, r);
 
-        // ---------------------------------------------- файловая система агента
+        // ---------------------------------------------- the agent's filesystem
         //
-        // Ни один из трёх не помечен GameAction — и это несущее свойство. Именно оно позволяет
-        // куратору писать на разборе отрезка, когда игровые инструменты отвечают review_mode.
+        // None of the three is marked GameAction — and that's a load-bearing property. It's exactly
+        // what lets the curator write during a segment review, when the game tools answer review_mode.
         RegisterVfsTools(s, r);
     }
 
@@ -352,16 +423,16 @@ public sealed partial class StationAiAgentSystem
         {
             _world.AssertMainThread("observation");
 
-            // Выключенный агент не делает ходов, и это работает на ЖИВОЙ сессии.
+            // A disabled agent takes no turns, and this works on a LIVE session too.
             //
-            // Раньше `ai.enabled` читался ровно в двух местах — при захвате ядра на старте раунда
-            // и при создании клиента, — а петля его не смотрела вовсе. Админ, выставивший
-            // `ai.enabled false` посреди раунда, не останавливал ни одного хода, хотя это первое,
-            // что он попробует. Настоящим выключателем был `aiagent dryrun on`, который так не
-            // называется и стоит в справке последним.
+            // `ai.enabled` used to be read in exactly two places — when the core is claimed at round
+            // start, and when the client is created — and the loop never looked at it at all. An
+            // admin who set `ai.enabled false` mid-round stopped not a single turn, even though
+            // that's the first thing they'd try. The actual kill switch was `aiagent dryrun on`,
+            // which isn't named anything like that and sits last in the help text.
             //
-            // Проверка здесь, а не в петле: наблюдение — единственная дверь, через которую ход
-            // начинается, и она уже умеет отвечать «нечего делать».
+            // The check lives here, not in the loop: observation is the one door a turn starts
+            // through, and it already knows how to answer "nothing to do".
             if (!_cfg.GetCVar(AiCVars.Enabled))
             {
                 if (!_notedDisabled)
@@ -410,14 +481,15 @@ public sealed partial class StationAiAgentSystem
             // Before the drain, so a rewrite lands in the very turn that notices it.
             NoticeLawChange(session);
 
-            // Тому же правилу подчиняется восприятие, которое тело считает само (у борга — разность
-            // поля зрения): посчитать надо ДО слива, иначе строки уедут в следующий ход.
+            // The same rule governs perception the body computes itself (for the borg, the field-of-
+            // view diff): it must be computed BEFORE the drain, or its lines will slip into the next turn.
             session.Body.BeforeObservation?.Invoke(session);
 
             var (items, dropped) = session.Queue.Drain();
             var roundTime = RoundTime();
 
-            var text = ObservationFormatter.Format(items, dropped, roundTime, session.Body.SelfLine(session), force);
+            var text = ObservationFormatter.Format(
+                items, dropped, roundTime, session.Body.SelfLine(session), force, session.Locale);
             if (text == null)
                 return null;
 
@@ -488,7 +560,7 @@ public sealed partial class StationAiAgentSystem
             // Bare coordinates mean nothing to a model with no map in its head. The nearest station
             // beacon is the same label the crew uses on the radio, so this is what turns "eye=(24,4)"
             // into something it can talk about — and it costs one query per turn.
-            sb.Append(" место=").Append(PlaceAt(eye));
+            sb.Append(" ").Append(session.Locale.SelfPlace).Append('=').Append(PlaceAt(eye, session.Locale));
             sb.Append(" core=").Append(core.Comp.Remote ? "remote" : "projected");
             sb.Append(" power=").Append(_power.IsPowered(core.Owner) ? "ok" : "lost");
         }
@@ -502,23 +574,25 @@ public sealed partial class StationAiAgentSystem
         // first shift believing it was green because nobody had said otherwise.
         var station = _station.GetOwningStation(brain);
         if (station != null && TryComp<Content.Shared.AlertLevel.AlertLevelComponent>(station.Value, out var alert))
-            sb.Append(" тревога=").Append(alert.CurrentAlertLevel);
+            sb.Append(" ").Append(session.Locale.SelfAlert).Append('=').Append(alert.CurrentAlertLevel);
 
-        // Положение тумблера печатается КАЖДЫЙ ход, и это обязательное условие того, чтобы он
-        // вообще был допустим. Иначе это скрытое состояние: модель забудет, куда настроена, и
-        // отправит разговор о предателе в общий канал. Читать дешевле, чем помнить.
+        // The switch's position is printed EVERY turn, and that's a precondition for it being
+        // allowed to exist at all. Otherwise it's hidden state: the model will forget how it's set
+        // and send a conversation about the traitor into the common channel. Reading it is cheaper
+        // than remembering it.
         sb.Append(" канал=").Append(session.State.OutputChannel);
 
-        // Заведённые будильники печатаются по той же причине, что и положение тумблера: иначе это
-        // скрытое состояние. Агент, забывший, что уже поставил таймер на обход, ставит второй — и
-        // будит себя дважды на одно дело. Печатается только когда они есть, и только имя со сроком:
-        // тексты лежат в list_timers, и место в каждом наблюдении им ни к чему.
+        // Active timers are printed for the same reason as the switch's position: otherwise it's
+        // hidden state. An agent that forgot it already set a timer for a patrol sets a second one —
+        // and wakes itself twice for the same errand. Printed only when there are any, and only the
+        // name with the deadline: the message text lives in list_timers, and it has no business
+        // taking up space in every observation.
         var timers = TimersForSelf(session);
         if (timers.Length > 0)
-            sb.Append(" таймеры=").Append(timers);
+            sb.Append(" ").Append(session.Locale.SelfTimers).Append('=').Append(timers);
 
-        // Идущие скрипты — по той же причине, что и будильники: запущенное фоновое дело иначе
-        // становится скрытым состоянием, и агент запускает второе такое же.
+        // Running scripts, for the same reason as timers: a launched background task would otherwise
+        // become hidden state, and the agent launches a second identical one.
         var scripts = ScriptsForSelf(session);
         if (scripts.Length > 0)
             sb.Append(' ').Append(scripts);
@@ -530,17 +604,18 @@ public sealed partial class StationAiAgentSystem
     // -------------------------------------------------------------- tool plumbing
 
     /// <summary>
-    /// Что меняет мир или говорит вслух — в срочную полосу; что только смотрит — в обычную.
+    /// Whatever changes the world or speaks out loud goes on the urgent lane; whatever only looks
+    /// goes on the normal one.
     ///
     /// <para>
-    /// Правило именно такое, а не «дешёвое вперёд». Смысл приоритета в том, чтобы объявление
-    /// тревоги не ждало за обзором, который считает две тысячи сущностей: экипаж замечает
-    /// задержку речи и не замечает задержку опроса. Стоимость тут ни при чём — <c>announce</c>
-    /// сам по себе не из дешёвых.
+    /// The rule is exactly that, not "cheap goes first". The point of the priority is that an alert
+    /// announcement shouldn't wait behind a look that's processing two thousand entities: the crew
+    /// notices a delay in speech and doesn't notice a delay in polling. Cost has nothing to do with
+    /// it — <c>announce</c> by itself isn't cheap either.
     /// </para>
     /// <para>
-    /// Политика живёт одним списком, а не параметром на восемнадцати вызовах: так её видно
-    /// целиком и она не разъезжается при добавлении инструмента.
+    /// The policy lives as one list, not as a parameter scattered across eighteen call sites: this
+    /// way it's visible all at once and doesn't drift when a tool is added.
     /// </para>
     /// </summary>
     private static readonly HashSet<string> UrgentOps = new(StringComparer.Ordinal)
@@ -549,8 +624,8 @@ public sealed partial class StationAiAgentSystem
         "device_action", "device_ui", "new_timer", "del_timer",
         "observation", "compaction announce", "untooled reply",
 
-        // Тело борга. Ходьба и руки меняют мир и видны экипажу немедленно — задержка здесь
-        // выглядит как зависший робот, а не как занятый сервер.
+        // The borg body. Walking and hands change the world and are immediately visible to the
+        // crew — a delay here reads as a frozen robot, not as a busy server.
         "goto", "step", "use", "pickup", "drop", "hit", "module", "console",
     };
 
@@ -561,23 +636,24 @@ public sealed partial class StationAiAgentSystem
     /// Run a tool body on the main thread with the session's generation guard.
     ///
     /// <para>
-    /// Публичный: инструменты второго тела маршалируются через ту же шину и тот же бюджет кадра.
-    /// Своя шина у борга означала бы, что два агента делят кадр без общего потолка — то есть
-    /// ровно та просадка тика, ради предсказуемости которой шина и заведена.
+    /// Public: the second body's tools are marshalled through the same bus and the same frame
+    /// budget. A separate bus for the borg would mean two agents sharing a frame with no shared
+    /// ceiling — exactly the kind of tick stall the bus was built to make predictable.
     /// </para>
     /// <para>
-    /// Проверка живости идёт через <c>Body.Alive</c>, а не через станционный <c>IsPlayable</c>:
-    /// «жив» для мозга в ядре и для шасси на батарее — разные вопросы.
+    /// The liveness check goes through <c>Body.Alive</c>, not the station-wide <c>IsPlayable</c>:
+    /// "alive" means different things for a brain in a core and for a chassis running on battery.
     /// </para>
     /// </summary>
     /// <summary>
-    /// То же, что <see cref="OnMainAsync"/>, но тяжёлая часть режется по бюджету кадра.
+    /// The same as <see cref="OnMainAsync"/>, but the heavy part is sliced against the frame budget.
     ///
     /// <para>
-    /// Заведено под <c>look</c> и пока используется только им. Причина в цифрах: по профилю фаз
-    /// теневой каст — это 18-22 мс из 24-29, то есть кадр целиком, а сбор сущностей и строки —
-    /// единицы миллисекунд. Пока каждый вызов стоил круга через модель, это было терпимо; в режиме
-    /// Lua скрипт зовёт look в цикле, и главный поток встал.
+    /// Built for <c>look</c> and for now only used by it. The reason is in the numbers: per the
+    /// phase profile, the shadow-cast is 18-22 ms out of 24-29 — i.e. the whole frame — while
+    /// gathering entities and building lines takes single-digit milliseconds. As long as every call
+    /// cost a round trip through the model, that was tolerable; in Lua mode a script calls look in a
+    /// loop, and the main thread stalled.
     /// </para>
     /// </summary>
     public Task<ToolResult> OnMainSlicedAsync(
@@ -592,9 +668,10 @@ public sealed partial class StationAiAgentSystem
         var generation = s.Generation;
         var alive = s.Body.Alive;
 
-        // Проверка живости стоит в ОБОИХ половинах, и это не дублирование: между первым срезом и
-        // хвостом проходят кадры, за которые агента вполне может не стать. В тяжёлой части она
-        // работает как выход — считать обзор для выбывшего незачем.
+        // The liveness check sits in BOTH halves, and that's not duplication: frames pass between
+        // the first slice and the tail, and the agent could very well cease to exist in between. In
+        // the heavy part it acts as an early exit — there's no point computing a view for someone
+        // who's already gone.
         var job = new Threading.SteppedJob<ToolResult>(what, PriorityOf(what),
             budget => !alive() || step(budget),
             () => !alive() ? ToolResult.Fail(ToolError.Dead, "агент больше не в игре") : finish());

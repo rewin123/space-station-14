@@ -1,18 +1,19 @@
 /**
- * Разбор замороженного блока памяти.
+ * Parsing of the frozen memory block.
  *
- * Живая и замороженная стороны НЕ сравниваются напрямую, хотя показываются рядом: живая — массив
- * строк, а замороженная — отрендеренный текст, который лёг в системный промпт. Формат задан
- * `MemoryStore.RenderBlock`: черта из 46 символов `═`, строка заголовка с процентом заполнения,
- * ещё черта, и записи через `\n§\n`. Разбирать это в шаблоне — верный способ обнаружить формат
- * поздно и не там.
+ * The live and frozen sides are NOT compared directly, even though they're shown side by side:
+ * the live side is an array of strings, while the frozen side is the rendered text that went
+ * into the system prompt. The format is set by `MemoryStore.RenderBlock`: a rule of 46 `═`
+ * characters, a header line with the fill percentage, another rule, and entries joined by
+ * `\n§\n`. Parsing this in the template is a sure way to discover a format change late and in
+ * the wrong place.
  */
 
-/** Разделитель записей. Ровно он, а не одинокая `§`: запись может содержать её сама. */
+/** Entry separator. Exactly this one, not a lone `§`: an entry may contain it itself. */
 const DELIMITER = '\n§\n'
 
 export interface FrozenBlock {
-  /** Строка заголовка вида «ПАМЯТЬ (…) [5% — 210/4000 символов]», или пусто. */
+  /** Header line like "ПАМЯТЬ (…) [5% — 210/4000 символов]", or empty. */
   header: string
   entries: string[]
 }
@@ -23,8 +24,9 @@ export function parseFrozen(text: string): FrozenBlock {
 
   const lines = text.split('\n')
 
-  // Шапка — это ровно три строки: черта, заголовок, черта. Ищем вторую черту, а не считаем до
-  // трёх: если формат однажды поменяется, лучше отдать текст целиком, чем срезать пол-записи.
+  // The header is exactly three lines: rule, header, rule. We look for the second rule rather
+  // than counting to three: if the format ever changes, better to return the whole text than to
+  // cut an entry in half.
   let bodyStart = 0
   let header = ''
   let bars = 0
@@ -52,16 +54,16 @@ export function parseFrozen(text: string): FrozenBlock {
   }
 }
 
-/** Сколько символов занимают записи — той же меркой, какой считает сервер. */
+/** How many characters the entries occupy — by the same measure the server uses. */
 export function usedChars(entries: string[]): number {
   return entries.join(DELIMITER).length
 }
 
 /**
- * Записи, которые есть живьём, но которых модель ещё не видит.
+ * Entries that exist live but that the model doesn't see yet.
  *
- * Это и есть весь смысл экрана: правка ложится на диск сразу, а в системный промпт попадает
- * только со следующей перестройкой префикса.
+ * This is the whole point of the screen: an edit lands on disk immediately, but only reaches the
+ * system prompt on the next prefix rebuild.
  */
 export function pendingEntries(live: string[], frozen: string[]): Set<string> {
   const seen = new Set(frozen)

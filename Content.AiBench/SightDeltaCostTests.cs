@@ -8,13 +8,13 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Во что обходится разность поля зрения робота — та самая, что считается КАЖДЫЙ ход.
+/// What a borg's field-of-view delta costs — the very thing computed on EVERY turn.
 /// </summary>
 /// <remarks>
-/// В живом раунде 20.08.2026 'observation' стал первой статьёй перерасхода главного потока: 61
-/// предупреждение, худшее 42 мс при кадре 33 мс. Из всей сборки наблюдения тяжёлое там ровно
-/// одно — <c>BeforeObservation</c>, который у робота считает разность поля зрения; у ядра этого
-/// вызова нет вовсе.
+/// On a live round on 20.08.2026, 'observation' became the top offender for main-thread overrun: 61
+/// warnings, worst case 42ms against a 33ms frame. Of the whole observation build, exactly one part
+/// is heavy — <c>BeforeObservation</c>, which computes the borg's field-of-view delta; the core
+/// never makes this call at all.
 /// </remarks>
 [TestFixture]
 [Category("Scenario")]
@@ -40,7 +40,7 @@ public sealed class SightDeltaCostTests
         {
             var sys = w.Pair.Server.System<AiBorgSystem>();
 
-            // Первый прогон прогревает JIT и заполняет базу сравнения.
+            // The first run warms up the JIT and fills in the comparison baseline.
             sys.SightDeltaCostForTest(borg);
 
             var worst = 0d;

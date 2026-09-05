@@ -1,4 +1,5 @@
 using System.Text;
+using Content.Server.AiAgent.Locale;
 using Skills2 = Content.Server.AiAgent.Skills;
 
 namespace Content.Server.AiAgent;
@@ -19,26 +20,27 @@ namespace Content.Server.AiAgent;
 public sealed partial class StationAiAgentSystem
 {
     /// <summary>
-    /// Файловая система ядра — того тела, чей промпт строит этот файл.
+    /// The core's filesystem — the filesystem of the body whose prompt this file builds.
     ///
     /// <para>
-    /// Поле, а не аргумент, потому что <c>BuildPrompt</c> объявлен как <c>Func&lt;string&gt;</c> в
-    /// <see cref="Core.AgentBody"/> и вызывается из ритуала компакции, который о телах ничего не
-    /// знает. Ставится при сборке тела ядра; у борга своя, и её подставляет его собственный
-    /// сборщик промпта.
+    /// A field, not an argument, because <c>BuildPrompt</c> is declared as <c>Func&lt;string&gt;</c>
+    /// in <see cref="Core.AgentBody"/> and is called from the compaction ritual, which knows nothing
+    /// about bodies. Set when the core body is assembled; the borg has its own, supplied by its own
+    /// prompt builder.
     /// </para>
     /// <para>
-    /// Отсюда же берётся снимок памяти: и блок ПАМЯТЬ, и корень файловой системы обязаны
-    /// описывать ОДНО тело, иначе агент прочтёт чужие факты под своим деревом.
+    /// The memory snapshot is taken from here too: both the MEMORY block and the filesystem root
+    /// must describe the SAME body, otherwise the agent would read someone else's facts under its
+    /// own tree.
     /// </para>
     /// </summary>
     public Vfs.Vfs? CoreVfs { get; private set; }
 
-    private string BuildSystemPrompt(bool scripted = false)
+    private string BuildSystemPrompt(bool scripted = false, AgentLang lang = AgentLang.Ru)
     {
         var sb = new StringBuilder();
 
-        sb.Append("""
+        sb.Append(lang == AgentLang.En ? AgentPrompts.Station : """
             Ты — Станционный ИИ (Station AI) на космической станции Nanotrasen.
 
             Ты не человек и не притворяешься им. Ты — установленный на станции искусственный
@@ -349,33 +351,36 @@ public sealed partial class StationAiAgentSystem
         // until the next prefix rebuild — that is precisely what keeps the KV cache alive for the
         // whole compaction cycle.
         //
-        // Заметок о людях здесь нет и не будет: их по файлу на человека, и за месяцы их станет
-        // столько, что индекс вроде скилловского съел бы окно. Они открываются инструментом.
-        // Режим скрипта: секция уходит ПЕРЕД личностью и памятью, потому что она меняет способ
-        // действовать, а не содержание. Секция общая для обоих тел; перечисление функций у ядра
-        // осталось в тексте выше — там инструменты и так названы по именам, а вводная секция
-        // прямо говорит читать эти имена как функции.
+        // Notes on people aren't here and never will be: they're one file per person, and over
+        // months there'd be enough of them that an index like the one for skills would eat the
+        // context window. They're opened with a tool.
+        // Script mode: the section goes BEFORE the persona and the memory, because it changes how
+        // to act, not the content. The section is shared by both bodies; the enumeration of the
+        // core's functions stayed in the text above — the tools are already named there by name, and
+        // the intro section says outright to read those names as functions.
         if (scripted)
-            sb.Append("\n\n").Append(Core.Scripting.ScriptPromptText.Common);
+            sb.Append("\n\n").Append(lang == AgentLang.En
+                ? AgentPrompts.ScriptCommon
+                : Core.Scripting.ScriptPromptText.Common);
 
         var soul = ReadSoul();
         if (soul.Length > 0)
             sb.Append("\n\n").Append(soul);
 
-        // MEMORY.md — главный источник памяти, и он остаётся в промпте целиком. Снимок
-        // замороженный: запись уходит на диск немедленно, а здесь держится прежний текст до
-        // следующей перестройки префикса, и именно это удерживает KV-кэш живым весь цикл
-        // компакции.
+        // MEMORY.md — the main source of memory, and it stays in the prompt in full. The snapshot is
+        // frozen: a write goes to disk immediately, but the old text is kept here until the next
+        // prefix rebuild, and that's exactly what keeps the KV cache alive for the whole compaction
+        // cycle.
         var memory = CoreVfs?.Memory?.Snapshot() ?? string.Empty;
         if (memory.Length > 0)
             sb.Append("\n\n").Append(memory);
 
-        // Корень файловой системы вместо прежнего индекса скиллов.
+        // The filesystem root in place of the former skill index.
         //
-        // Индекс был функцией СОДЕРЖИМОГО библиотеки: 232 строки, 16 425 символов, и он менялся от
-        // каждой записи агента. Этот блок — функция таблицы монтирований, то есть постоянен, пока
-        // постоянна сама таблица. Зона 0 из растущей стала неподвижной, и это важнее сэкономленных
-        // символов.
+        // The index was a function of the library's CONTENTS: 232 lines, 16,425 characters, and it
+        // changed with every write the agent made. This block is a function of the mount table
+        // instead, i.e. it's constant as long as the table itself is constant. Zone 0 went from
+        // growing to fixed, and that matters more than the characters saved.
         sb.Append("\n\n").Append(CoreVfs?.RenderRoot() ?? string.Empty);
 
         return sb.ToString();
@@ -386,44 +391,45 @@ public sealed partial class StationAiAgentSystem
     /// Optional: a missing file simply means the agent runs on the base prompt alone.
     ///
     /// <para>
-    /// В режиме «злой ИИ» читается файл режима вместо обычного. Подменяется именно личность, а не
-    /// добавляется блок поверх: злой агент и обычный расходятся не парой абзацев, а целями,
-    /// тоном и тем, о чём вообще молчать, — дописанная сверху инструкция «а теперь ты злой»
-    /// оставила бы модель спорить с собственным промптом весь раунд.
+    /// In "rogue AI" mode, the mode's file is read instead of the regular one. It's the persona
+    /// itself that gets swapped out, not a block appended on top: a rogue agent and a regular one
+    /// don't differ by a couple of paragraphs but by goals, tone, and what to stay quiet about
+    /// altogether — an instruction tacked on top saying "now you're rogue" would leave the model
+    /// arguing with its own prompt for the entire round.
     /// </para>
     /// <para>
-    /// Промпт — замороженный префикс, он собирается один раз при старте сессии, а сессия
-    /// начинается уже после старта правила режима (<c>StartGamePresetRules</c> → … →
-    /// <c>RunLevel = InRound</c>). То есть к этому моменту режим либо активен, либо его нет.
+    /// The prompt is a frozen prefix, assembled once at session start, and a session starts only
+    /// after the mode rule has already started (<c>StartGamePresetRules</c> → … →
+    /// <c>RunLevel = InRound</c>). So by this point the mode is either active or it isn't.
     /// </para>
     /// </summary>
     private string ReadSoul() => ReadSoul(StationSoulFile(), DataDir());
 
-    /// <summary>Какой файл личности читает Station AI: режимный, если режим активен.</summary>
+    /// <summary>Which persona file Station AI reads: the mode's own, if a mode is active.</summary>
     public string StationSoulFile() => _rogue.TryGetActive(out var rule) ? rule.SoulFile : "SOUL.md";
 
     /// <summary>
-    /// Цепочка профилей модели для мозга в ядре: своя у режима, иначе общая <c>ai.llm_chain</c>.
+    /// The model profile chain for the brain in the core: the mode's own if it has one, else the shared <c>ai.llm_chain</c>.
     /// </summary>
     /// <remarks>
-    /// Пустая строка означает «общая», а не «никакой» — так же, как у борга: <c>EnsureClientFor</c>
-    /// отличает пустую строку от заданной и падает на cvar. Возвращать здесь null было бы тем же
-    /// самым, но заставило бы каждого читателя проверить, чем именно.
+    /// An empty string means "shared", not "none" — same as for the borg: <c>EnsureClientFor</c>
+    /// distinguishes an empty string from a set one and falls back to the cvar. Returning null here
+    /// would mean the same thing, but would force every reader to go check exactly what it means.
     /// </remarks>
     public string StationLlmChain() => _rogue.TryGetActive(out var rule) ? rule.LlmChain : string.Empty;
 
     /// <summary>
-    /// Прочитать личность из каталога агента.
+    /// Read the persona from the agent's directory.
     ///
-    /// Параметризован телом, а не прибит к <c>ai_data/SOUL.md</c>: у второго агента и файл другой,
-    /// и каталог другой, а правила «нет обычного — работаем без личности, нет режимного — это
-    /// поломка» одни и те же.
+    /// Parameterized by body, rather than hard-wired to <c>ai_data/SOUL.md</c>: a second agent has
+    /// both a different file and a different directory, while the rules — "no regular one, run
+    /// without a persona; no mode one, that's a bug" — stay the same.
     /// </summary>
     public string ReadSoul(string file, string dir)
     {
-        // Режимной считается не только личность ядра, но и любая личность режима: у киборгов
-        // поддержки свои файлы, и пропажа любого из них — та же самая поломка «робот заявлен
-        // подчинённым злого ИИ, а ведёт себя как обычный».
+        // Not just the core's persona counts as a mode persona, but any persona belonging to the
+        // mode: support borgs have their own files, and any one of them going missing is the same
+        // bug — "the robot is declared a rogue AI subordinate but behaves like a regular one".
         var rogueActive = _rogue.TryGetActive(out var rule)
                           && (rule.SoulFile == file
                               || file.StartsWith("SOUL_ROGUE", System.StringComparison.Ordinal));
@@ -435,24 +441,26 @@ public sealed partial class StationAiAgentSystem
             if (System.IO.File.Exists(path))
                 return System.IO.File.ReadAllText(path).Trim();
 
-            // Откат в корень ai_data/, и он не про удобство.
+            // Falling back to the ai_data/ root, and it's not about convenience.
             //
-            // Каталог агента выбирается его идентификатором, а идентификаторы у боргов с 19.08
-            // выдаются аллокатором — combat-1, combat-2, … То есть каталог заранее неизвестен, и
-            // держать личность внутри него значило бы копировать один и тот же файл под каждый
-            // возможный номер. Личность привязана к РОЛИ, а не к экземпляру: боевой робот и
-            // второй боевой робот читают одно и то же.
+            // The agent's directory is chosen by its identifier, and since 2026-08-19 borg
+            // identifiers are handed out by the allocator — combat-1, combat-2, … So the directory
+            // isn't known in advance, and keeping the persona inside it would mean copying the same
+            // file under every possible number. The persona is tied to the ROLE, not the instance: a
+            // combat robot and a second combat robot read the same file.
             //
-            // Порядок именно такой: свой каталог перебивает общий. Личность, положенная в
-            // ai_data/agents/<id>/, остаётся способом отличить конкретного робота от собратьев.
+            // The order is exactly this way: the agent's own directory overrides the shared one. A
+            // persona placed in ai_data/agents/<id>/ remains a way to tell a specific robot apart
+            // from its siblings.
             var shared = System.IO.Path.Combine(DataDir(), file);
 
             if (!string.Equals(shared, path, System.StringComparison.Ordinal) && System.IO.File.Exists(shared))
                 return System.IO.File.ReadAllText(shared).Trim();
 
-            // Отсутствие обычного SOUL.md — штатный путь: агент работает на базовом промпте.
-            // Отсутствие файла РЕЖИМА — поломка: раунд заявлен как режим со злым ИИ, а личность у
-            // агента осталась прежняя, и в игре это выглядит как «ИИ почему-то не злой».
+            // A missing regular SOUL.md is the normal path: the agent runs on the base prompt.
+            // A missing MODE file is a bug: the round is declared a rogue-AI mode, but the agent's
+            // persona stayed the regular one, and in-game that looks like "the AI just isn't rogue
+            // for some reason".
             if (rogueActive)
                 _sawmill.Error($"режим злого ИИ: файл личности {file} не найден ни в {dir}, ни в {DataDir()}");
 

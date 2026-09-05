@@ -15,45 +15,46 @@ using Robust.Shared.Player;
 namespace Content.AiBench;
 
 /// <summary>
-/// Стенд под петлю полных ресинков PVS.
+/// A bench for the full-PVS-resync loop.
 ///
 /// <para>
-/// <b>Что воспроизводим.</b> На боевом сервере клиент получает дельту сущности, которой у него нет,
-/// бросает <c>MissingMetadataException</c>, просит полное состояние — и через полсотни тиков всё
-/// повторяется на той же сущности. Замер по журналам: у одного игрока 1.1 ресинка на тысячу тиков
-/// в хорошем раунде и 17.4 в плохом, период повтора 40–56 тиков ОДИНАКОВЫЙ и для наших роботов, и
-/// для ванильных питомцев. Одинаковый период у несвязанных сущностей означает, что цикл системный,
-/// а не про конкретное тело.
+/// <b>What we reproduce.</b> On the production server the client receives a delta for an entity it
+/// does not have, throws <c>MissingMetadataException</c>, requests a full state — and roughly fifty
+/// ticks later it happens again for the same entity. Measured from logs: one player sees 1.1 resyncs
+/// per thousand ticks in a good round and 17.4 in a bad one, with a repeat period of 40-56 ticks that
+/// is IDENTICAL for both our borgs and vanilla critters. The same period on unrelated entities means
+/// the cycle is systemic, not about a specific body.
 /// </para>
 /// <para>
-/// <b>Почему стенд вообще возможен в одном процессе.</b> Внутрипроцессный <c>IntegrationNetManager</c>
-/// не Lidgren: он не знает MTU, ничего не теряет и не переупорядочивает. Казалось бы, ветку
-/// «состояние тяжелее порога — шлём надёжно и считаем доставленным» здесь не достать. Но
-/// <c>ServerSendMessage</c> честно зовёт <c>WriteToBuffer</c>, то есть <c>MsgState.MsgSize</c>
-/// выставлен к моменту проверки <c>ShouldSendReliably()</c>, и затирание подтверждения происходит
-/// как на бою. Не хватает только потери — её даёт <c>ClientGameStateManager.DropStates</c>.
+/// <b>Why the bench works at all in a single process.</b> The in-process <c>IntegrationNetManager</c>
+/// is not Lidgren: it knows nothing about MTU, drops nothing, and never reorders. You'd think the
+/// "state heavier than the threshold — send reliably and count it delivered" branch would be
+/// unreachable here. But <c>ServerSendMessage</c> genuinely calls <c>WriteToBuffer</c>, so
+/// <c>MsgState.MsgSize</c> is set by the time <c>ShouldSendReliably()</c> checks it, and the ack gets
+/// clobbered exactly as it does in production. The only missing piece is loss — which is what
+/// <c>ClientGameStateManager.DropStates</c> provides.
 /// </para>
 /// <para>
-/// <b>Что здесь НЕ проверяется.</b> Настоящие MTU, фрагментация, переупорядочивание надёжного и
-/// ненадёжного каналов. Для этого нужен второй ярус — два процесса и безголовый клиент; настройки
-/// <c>net.fakeloss</c> и соседи в этом стенде молча ничего не делают, их читает только настоящий
-/// <c>NetManager</c>.
+/// <b>What this does NOT cover.</b> Real MTU, fragmentation, reordering on the reliable and
+/// unreliable channels. That needs a second tier — two processes and a headless client; the
+/// <c>net.fakeloss</c> setting and its neighbors are silent no-ops in this bench, since only the
+/// real <c>NetManager</c> reads them.
 /// </para>
 /// </summary>
 [TestFixture]
-// Замер, а не регрессия: числа здесь — ресинки на 1000 тиков на игрока, и они зависят от машины,
-// от её загрузки и от того, что ещё на ней крутится. В CI такому месту не место — зелёная сборка
-// не может зависеть от соседнего процесса. Гонять руками на свободной машине.
+// A measurement, not a regression check: the numbers here are resyncs per 1000 ticks per player, and
+// they depend on the machine, its load, and whatever else is running on it. This has no place in CI —
+// a green build must not depend on a neighboring process. Run it by hand on an idle machine.
 [Category("Load")]
 public sealed class PvsResyncTests : GameTest
 {
     /// <summary>
-    /// Настоящая станция с настоящим подключённым клиентом.
+    /// A real station with a real connected client.
     /// </summary>
     /// <remarks>
-    /// Карта обязана быть настоящей. На пустой карте в зоне видимости десяток сущностей, и
-    /// бюджет входа — тот самый, вокруг которого весь разбор, — никогда не исчерпается. Стенд на
-    /// «Empty» был бы зелёным при любой поломке.
+    /// The map must be a real one. On an empty map there are only a dozen entities in view, and the
+    /// enter budget — the very thing this whole investigation is about — never gets exhausted. A bench
+    /// on "Empty" would stay green no matter how broken things are.
     /// </remarks>
     public override PoolSettings PoolSettings => new()
     {
@@ -64,67 +65,66 @@ public sealed class PvsResyncTests : GameTest
     };
 
     /// <summary>
-    /// Привести пару к боевым сетевым настройкам.
+    /// Bring the pair to production-like network settings.
     /// </summary>
     /// <remarks>
-    /// Пул тестов переопределяет и то, и другое: <c>net.pvs</c> он ставит в <c>false</c>
-    /// (<c>Robust.UnitTesting/Pool/PoolManager.cs</c>), а <c>net.buffer_size</c> в ноль. С
-    /// выключенным PVS сервер шлёт всё всем через <c>GetAllEntityStates</c> — ни бюджета, ни
-    /// чанков, ни входа в зону видимости, то есть ровно тех механизмов, которые мы и проверяем.
+    /// The test pool overrides both of these: it sets <c>net.pvs</c> to <c>false</c>
+    /// (<c>Robust.UnitTesting/Pool/PoolManager.cs</c>) and <c>net.buffer_size</c> to zero. With PVS
+    /// disabled the server sends everything to everyone via <c>GetAllEntityStates</c> — no budget, no
+    /// chunking, no entering-the-view-range, i.e. exactly the mechanisms we're here to check.
     /// </remarks>
     private async Task ProductionNetSettings(int newEntityBudget = 50)
     {
         await OverrideCVar(Side.Server, CVars.NetPVS, true);
-        // Бюджеты входа — на КЛИЕНТЕ, и это не придирка к стороне.
+        // The enter budgets live on the CLIENT, and that's not a nitpick about which side.
         //
-        // `net.pvs_budget` и `net.pvs_enter_budget` объявлены `CVar.REPLICATED | CVar.CLIENT`:
-        // авторитетно клиентское значение, оно уезжает на сервер, а серверное игнорируется.
-        // Первый прогон стенда я поставил их на сервере, получил «с бюджетом 50 и с бюджетом в
-        // миллион одинаково» и чуть не похоронил верную версию. Опыт был недействителен.
+        // `net.pvs_budget` and `net.pvs_enter_budget` are declared `CVar.REPLICATED | CVar.CLIENT`:
+        // the client's value is authoritative, it travels to the server, and the server's own value
+        // is ignored. On the bench's first run I set them on the server, got "budget 50 and budget a
+        // million behave identically", and nearly buried the correct fix. That result was invalid.
         await OverrideCVar(Side.Client, CVars.NetPVSEntityBudget, newEntityBudget);
         await OverrideCVar(Side.Client, CVars.NetPVSEntityEnterBudget, Math.Max(200, newEntityBudget));
         await OverrideCVar(Side.Server, CVars.NetPvsAsync, false);
         await OverrideCVar(Side.Server, CVars.ThreadParallelCount, 0);
 
-        // Ванильная дальность. Урезание до 17 было обходом петли ресинков и больше не нужно:
-        // стенд обязан ловить регрессию на том же поле зрения, что и апстримовый клиент.
+        // Vanilla range. Cutting it to 17 was a workaround for the resync loop and is no longer
+        // needed: the bench must catch the regression at the same field of view as the upstream client.
         await OverrideCVar(Side.Server, CVars.NetMaxUpdateRange, 25f);
 
-        // Ванильный порог принудительного подтверждения. 15 было обходом взрыва стоимости
-        // такта (PreviouslySent на 20 тиков не видел честный ack) и снова подтверждало
-        // авансом клиента с пингом ~20 тиков. Стенд проверяет, что 60 снова работает.
+        // Vanilla forced-ack threshold. 15 was a workaround for a tick-cost explosion (PreviouslySent
+        // couldn't find a genuine ack after 20 ticks of history) and it was again advance-acking the
+        // client at a ping of ~20 ticks. The bench checks that 60 works again.
         await OverrideCVar(Side.Server, CVars.NetForceAckThreshold, 60);
 
-        // Буфер состояний у клиента — как на бою. С нулём клиент применяет состояние в тот же
-        // тик, и «клиент отстаёт» перестаёт быть воспроизводимым вовсе.
+        // The client's state buffer — as in production. With zero the client applies the state on
+        // the very same tick, and "the client is lagging behind" stops being reproducible at all.
         await OverrideCVar(Side.Client, CVars.NetBufferSize, 2);
 
         await Pair.RunTicksSync(20);
     }
 
     /// <summary>
-    /// ГЛАВНЫЙ ТЕСТ: полное состояние обязано быть полным.
+    /// THE MAIN TEST: a full state must actually be full.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Разбор, который этот тест проверяет. В <c>PvsSystem.ToSendSet.cs</c> проверка бюджета входа
-    /// стоит РАНЬШЕ ветки <c>session.RequestedFull</c>. При полном состоянии <c>fromTick</c> равен
-    /// нулю, поэтому <c>IsEnteringPvsRange</c> считает входящей каждую сущность, а
-    /// <c>ForceFullState</c> перед этим обнулила <c>EntityLastAcked</c> у всех — значит каждая
-    /// попадает ещё и в счётчик «новых». Потолок, стало быть, не <c>net.pvs_enter_budget</c> (200),
-    /// а <c>net.pvs_budget</c> — пятьдесят сущностей на всё полное состояние.
+    /// The mechanism this test checks. In <c>PvsSystem.ToSendSet.cs</c> the enter-budget check sits
+    /// BEFORE the <c>session.RequestedFull</c> branch. For a full state <c>fromTick</c> is zero, so
+    /// <c>IsEnteringPvsRange</c> counts every entity as entering, and <c>ForceFullState</c> already
+    /// zeroed out everyone's <c>EntityLastAcked</c> beforehand — meaning every entity also falls into
+    /// the "new" counter. So the ceiling isn't <c>net.pvs_enter_budget</c> (200), it's
+    /// <c>net.pvs_budget</c> — fifty entities for the entire full state.
     /// </para>
     /// <para>
-    /// А на клиенте <c>ApplyGameState</c> при <c>FromSequence == 0</c> зовёт
-    /// <c>PartialStateReset(curState, true)</c>, которая УДАЛЯЕТ каждую сетевую сущность,
-    /// отсутствующую в этом состоянии. То есть каждое полное состояние стирает клиенту почти весь
-    /// мир, сервер досылает остаток по пятьдесят штук в такт, и каждое из этих состояний снова
-    /// тяжелее порога, то есть снова подтверждается авансом. Петля кормит сама себя, и ровный
-    /// период в журнале — это её оборот.
+    /// And on the client, <c>ApplyGameState</c> calls <c>PartialStateReset(curState, true)</c> when
+    /// <c>FromSequence == 0</c>, which DELETES every networked entity absent from that state. So each
+    /// full state wipes almost the entire world for the client, the server sends the rest back fifty
+    /// at a time per tick, and each of those states is again heavier than the threshold, i.e. again
+    /// gets advance-acked. The loop feeds itself, and the steady period in the log is its cycle.
     /// </para>
     /// <para>
-    /// Меряем минимум по тикам, а не значение в конце: через десяток тиков мир доедет обратно, и
-    /// замер «после» ничего не покажет. Проваливается именно провал.
+    /// We measure the minimum over ticks, not the final value: within a dozen ticks the world catches
+    /// back up, and the "after" measurement would show nothing. It's precisely the dip that fails.
     /// </para>
     /// </remarks>
     [Test]
@@ -137,13 +137,13 @@ public sealed class PvsResyncTests : GameTest
 
         await ProductionNetSettings(newEntityBudget);
 
-        // ПЕРВЫЙ полный сброс — не замер, а приведение клиента в чистое состояние.
+        // The FIRST full reset isn't a measurement, it's bringing the client to a clean state.
         //
-        // Пул тестов поднимает пару с выключенным PVS, поэтому к началу теста у клиента лежит вся
-        // карта целиком — 38 тысяч сущностей. Замерять от этого числа бессмысленно: первый же
-        // честный полный слепок оставит только то, что в зоне видимости, и любая правка покажет
-        // «потеряно 99.9%». Стоило одного прогона, чтобы это понять: с бюджетом 50 и с бюджетом в
-        // миллион результат был одинаковым — 54 и 53 сущности.
+        // The test pool spins up the pair with PVS disabled, so at the start of the test the client
+        // already holds the entire map — 38 thousand entities. Measuring from that number is
+        // meaningless: the very first honest full snapshot will leave only what's in view, and any
+        // change would show "99.9% lost". It took one run to realize this: with budget 50 and budget
+        // a million the result was identical — 54 and 53 entities.
         await client.ExecuteCommand("fullstatereset");
         await pair.RunTicksSync(60);
 
@@ -155,8 +155,8 @@ public sealed class PvsResyncTests : GameTest
 
         await client.ExecuteCommand("fullstatereset");
 
-        // По одному тику, потому что нужен МИНИМУМ, а он живёт ровно один тик — тот, в котором
-        // применилось полное состояние.
+        // One tick at a time, because we need the MINIMUM, and it lives on exactly one tick — the
+        // one where the full state got applied.
         var worst = before;
         var worstAt = -1;
 
@@ -183,31 +183,31 @@ public sealed class PvsResyncTests : GameTest
     }
 
     /// <summary>
-    /// Клиент не должен терять сущность навсегда из-за потерянных состояний.
+    /// A client must not lose an entity forever because of dropped states.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Здесь воспроизводится вторая половина беды: сервер объявляет состояние доставленным в момент
-    /// отправки, если оно тяжелее порога (<c>PvsSystem.Send.cs</c>,
-    /// <c>data.LastReceivedAck = CurTick</c> внутри <c>ShouldSendReliably()</c>). Настоящее
-    /// подтверждение клиента после этого отбрасывается как устаревшее, и всё, что было в
-    /// неприменённом состоянии, сервер считает у клиента имеющимся — навсегда.
+    /// This reproduces the second half of the trouble: the server declares a state delivered at the
+    /// moment it's sent, if the state is heavier than the threshold (<c>PvsSystem.Send.cs</c>,
+    /// <c>data.LastReceivedAck = CurTick</c> inside <c>ShouldSendReliably()</c>). The client's real
+    /// ack that arrives afterward is discarded as stale, and everything that was in the unapplied
+    /// state is treated by the server as something the client already has — forever.
     /// </para>
     /// <para>
-    /// Порог, к слову, вовсе не 1388 байт, как написано в комментариях к боевому конфигу:
-    /// <c>MsgState.ReliableThreshold = kDefaultMTU - 20</c>, а вендоренный Lidgren в этом дереве
-    /// объявляет <c>kDefaultMTU = 508</c>. То есть <b>488 байт</b> — почти каждое состояние
-    /// населённой станции.
+    /// The threshold, incidentally, isn't 1388 bytes as the production config's comments claim:
+    /// <c>MsgState.ReliableThreshold = kDefaultMTU - 20</c>, and the vendored Lidgren in this tree
+    /// declares <c>kDefaultMTU = 508</c>. That is, <b>488 bytes</b> — almost every state of a
+    /// populated station.
     /// </para>
     /// <para>
-    /// Метрика — минимальное окно потери, после которого клиент не восстанавливается. Она сравнима
-    /// между прогонами и не зависит от длины теста, в отличие от «сколько раз упало».
+    /// The metric is the minimum loss window after which the client fails to recover. It's comparable
+    /// across runs and doesn't depend on the test's length, unlike "how many times it failed".
     /// </para>
     /// <para>
-    /// Кейс 25 тиков больше старого <c>DirtyBufferSize</c> (20) и меньше
-    /// <c>force_ack_threshold</c> (60). На истории в 20 тиков настоящий ack уже не находил
-    /// sent-set, EntityLastAcked застывал, и каждое тело в зоне сериализовалось как входящее.
-    /// Если он зелёный — размер истории связан с порогом, а не с кольцом грязных сущностей.
+    /// The 25-tick case is bigger than the old <c>DirtyBufferSize</c> (20) and smaller than
+    /// <c>force_ack_threshold</c> (60). With a 20-tick history, the real ack could no longer find the
+    /// sent-set, EntityLastAcked would freeze, and every body in view would serialize as entering.
+    /// If this stays green, the history size is tied to the threshold, not to the dirty-entity ring.
     /// </para>
     /// </remarks>
     [Test]
@@ -225,12 +225,12 @@ public sealed class PvsResyncTests : GameTest
 
         await ProductionNetSettings();
 
-        // Сущность, за которой следим. Человек, а не наш робот: сначала надо убедиться, что
-        // ломается сам движок, и только потом мерить, насколько наши тела это усугубляют.
+        // The entity we're watching. A human, not one of our borgs: first we need to confirm that
+        // the engine itself is broken, and only then measure how much our bodies make it worse.
         //
-        // Ставится ВОЗЛЕ ИГРОКА, и это обязательное условие, а не удобство: при включённом PVS
-        // сущность, заспавненная где придётся, в зону видимости клиента не попадает вовсе, и тест
-        // измеряет не потерю состояний, а собственную небрежность.
+        // Placed RIGHT NEXT TO THE PLAYER, and this is a hard requirement, not a convenience: with
+        // PVS enabled, an entity spawned just anywhere never even enters the client's view range, and
+        // the test would end up measuring its own carelessness instead of state loss.
         EntityUid watched = default;
 
         await server.WaitPost(() =>
@@ -251,13 +251,13 @@ public sealed class PvsResyncTests : GameTest
         var before = client.EntMan.EntityCount;
         var stateMan = (ClientGameStateManager) client.ResolveDependency<IClientGameStateManager>();
 
-        // Окно потери. Сервер продолжает слать и продолжает считать отправленное доставленным.
+        // The loss window. The server keeps sending and keeps treating what it sent as delivered.
         await client.WaitPost(() => stateMan.DropStates = true);
         await pair.RunTicksSync(dropTicks);
         await client.WaitPost(() => stateMan.DropStates = false);
 
-        // Даём вдесятеро больше времени на восстановление, чем длилась потеря: если за это время
-        // клиент не догнал, он не догонит уже никогда.
+        // We give ten times as long to recover as the loss lasted: if the client hasn't caught up
+        // by then, it never will.
         await pair.RunTicksSync(Math.Max(60, dropTicks * 10));
 
         var after = client.EntMan.EntityCount;
@@ -277,20 +277,20 @@ public sealed class PvsResyncTests : GameTest
     }
 
     /// <summary>
-    /// Петля раунда 205: ходячая сущность + один ресинк не должны давать ВТОРОЙ ресинк.
+    /// Round 205's loop: a walking entity plus one resync must not produce a SECOND resync.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Что воспроизводим.</b> Боевой раунд 205 (24.08.2026): клиент из локальной сети — то есть
-    /// БЕЗ большого пинга и без потерь — вошёл в петлю «запрос полного состояния каждые 11–31
-    /// тиков» на шесть минут, и каждый запрос называл одну и ту же сущность: шагающего киборга.
-    /// Сервер при этом считал, что сущность у клиента есть (EntityLastAcked свежий,
-    /// LastLeftView=0), и слал голые дельты. Внутрипроцессная пара — тот же случай: доставка
-    /// мгновенная, потерь нет. Если петля системная, она обязана воспроизвестись здесь.
+    /// <b>What we reproduce.</b> Production round 205 (24.08.2026): a client on a local network —
+    /// that is, WITHOUT a large ping and WITHOUT packet loss — got stuck in a "request a full state
+    /// every 11-31 ticks" loop for six minutes, and every request named the same entity: a walking
+    /// borg. The server, meanwhile, believed the client already had the entity (EntityLastAcked
+    /// fresh, LastLeftView=0) and kept sending bare deltas. The in-process pair is the same case:
+    /// delivery is instant, there's no loss. If the loop is systemic, it must reproduce here.
     /// </para>
     /// <para>
-    /// Ходьба — SetLocalPosition каждый тик: сущность грязная каждый тик и регулярно пересекает
-    /// границы чанков (ChunkSize = 8), как киборг на маршруте. Двое ходоков, как в раунде.
+    /// Walking means SetLocalPosition every tick: the entity is dirty every tick and regularly
+    /// crosses chunk boundaries (ChunkSize = 8), like a borg on its route. Two walkers, as in the round.
     /// </para>
     /// </remarks>
     [Test]
@@ -304,8 +304,8 @@ public sealed class PvsResyncTests : GameTest
 
         await ProductionNetSettings();
 
-        // Боевой сервер работает с net.pvs_async = true (умолчание движка); стенд по своим
-        // причинам ставит false. Петля может жить в гонке асинхронного расчёта — проверяем оба.
+        // The production server runs with net.pvs_async = true (the engine's default); the bench
+        // sets false for its own reasons. The loop could live in an async-computation race — check both.
         await OverrideCVar(Side.Server, CVars.NetPvsAsync, asyncPvs);
 
         var xformSys = server.System<SharedTransformSystem>();
@@ -338,10 +338,11 @@ public sealed class PvsResyncTests : GameTest
 
         if (massEntry)
         {
-            // Прилёт: раунд 205 вошёл в петлю в момент стыковки шаттла прибытия, когда в поле
-            // зрения клиента разом вошла станция и вход растянулся бюджетом на десятки тиков.
-            // Здесь тот же профиль дешевле: игрока уносит в пустоту за пределы дальности PVS,
-            // мир у клиента пустеет, возврат — массовый вход, и ресинк бьёт ровно в его середину.
+            // Mass entry: round 205 got stuck in the loop right as the arrivals shuttle docked, when
+            // the station entered the client's field of view all at once and the enter budget
+            // stretched that entry over dozens of ticks. Here we reproduce the same profile more
+            // cheaply: the player is teleported into the void beyond PVS range, the client's world
+            // empties out, coming back is a mass entry, and the resync lands right in the middle of it.
             var player = ServerSession!.AttachedEntity!.Value;
             Vector2 home = default;
             await server.WaitPost(() =>
@@ -351,14 +352,14 @@ public sealed class PvsResyncTests : GameTest
             });
             await pair.RunTicksSync(30);
             await server.WaitPost(() => xformSys.SetLocalPosition(player, home));
-            await pair.RunTicksSync(3); // вход начался, бюджет 200/50 ещё далеко не выбран
+            await pair.RunTicksSync(3); // entry has started, the 200/50 budget is nowhere near used up
         }
 
-        // Один ресинк — как MissingMetadataException на бою: клиент просит полный мир.
+        // A single resync — like a MissingMetadataException in production: the client asks for the full world.
         await client.ExecuteCommand("fullstatereset");
 
-        // Ходьба: туда-обратно на ±10 тайлов, 0.25 тайла за тик. Пересечение границы чанка
-        // каждые ~32 тика — период, с которым в раунде 205 и шли запросы.
+        // Walking: back and forth over ±10 tiles, 0.25 tile per tick. Crosses a chunk boundary every
+        // ~32 ticks — the same period the requests came in at during round 205.
         var lossesA = new List<int>();
         var lossesB = new List<int>();
         var presentA = true;
@@ -397,8 +398,8 @@ public sealed class PvsResyncTests : GameTest
 
         Assert.Multiple(() =>
         {
-            // Первая потеря — сам ресинк (PartialStateReset может на тик снести, пока полное в
-            // пути). Всё, что после первых 60 тиков, — та самая петля.
+            // The first loss is the resync itself (PartialStateReset can wipe it for a tick while the
+            // full state is in flight). Anything after the first 60 ticks is the loop itself.
             Assert.That(lossesA.FindAll(x => x > 60), Is.Empty,
                 "ходок A потерян клиентом ПОСЛЕ восстановления от ресинка — петля раунда 205");
             Assert.That(lossesB.FindAll(x => x > 60), Is.Empty,
@@ -408,29 +409,30 @@ public sealed class PvsResyncTests : GameTest
     }
 
     /// <summary>
-    /// Возврат в зону видимости без ack не должен копить полные состояния всей станции в одном пакете.
+    /// Re-entering view range without an ack must not pile the whole station's full states into one packet.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Журнал 26.08.2026: ресинков ноль, сервер 33 мс/такт, клиент из локальной сети замерзал.
-    /// <c>IsEnteringPvsRange</c> держал <c>entering=true</c> для каждой сущности с
-    /// <c>EntityLastAcked &lt; fromTick</c>, даже если её слали прошлый такт, и бюджет на это не
-    /// брался. Полное состояние копилось: 200 → 2098 сущностей за три секунды.
+    /// Log from 26.08.2026: zero resyncs, server at 33 ms/tick, a client on a local network froze.
+    /// <c>IsEnteringPvsRange</c> kept <c>entering=true</c> for every entity with
+    /// <c>EntityLastAcked &lt; fromTick</c>, even if it had been sent the previous tick, and no budget
+    /// was charged for it. The full state kept piling up: 200 → 2098 entities in three seconds.
     /// </para>
     /// <para>
-    /// Стенд: прогреть зону, увести игрока (сущности уходят, ack ещё живой), заморозить ack
-    /// через <c>DropStates</c>, вернуть игрока. Стены не грязные — в пакет они попадают только
-    /// веткой входа. С поломкой они остаются в каждом следующем пакете; с патчем №14 — только
-    /// в тике появления, дальше бюджет входа 200 за тик и без накопления.
+    /// The bench: warm up the view range, move the player away (entities leave, the ack is still
+    /// fresh), freeze the ack via <c>DropStates</c>, bring the player back. Walls aren't dirty — they
+    /// only land in a packet through the entering branch. With the bug they stay in every subsequent
+    /// packet; with patch #14 they appear only on the tick they show up, and after that the enter
+    /// budget is 200 per tick with no accumulation.
     /// </para>
     /// </remarks>
     [Test]
     public async Task ReentryWithoutAck_DoesNotAccumulateFullStates()
     {
-// Тесту нужны сразу две вещи: ClientGameStateManager.DropStates (он есть только под DEBUG) и
-// серверная диагностика TryGetPvsSendDiag, которой в ванильном движке нет — она была нашим
-// дополнением и уехала вместе с откатом на v286.0.0. Тело сохранено, а не удалено: вернётся
-// диагностика — вернётся и тест, символ надо будет объявить в csproj.
+// This test needs two things at once: ClientGameStateManager.DropStates (only exists under DEBUG)
+// and the server-side TryGetPvsSendDiag diagnostic, which doesn't exist in the vanilla engine — it
+// was our own addition and went away with the rollback to v286.0.0. The body is kept, not deleted:
+// once the diagnostic comes back, the test comes back too — the symbol will need to be declared in csproj.
 #if !FORK_PVS_SEND_DIAG
         Assert.Ignore("нужны DropStates (только DEBUG) и TryGetPvsSendDiag, которого в ванильном движке нет");
 #else
@@ -483,8 +485,9 @@ public sealed class PvsResyncTests : GameTest
             $"за {reentryTicks} тиков возврата без ack: max в пакете {maxEntities}, " +
             $"max вошло {maxEntered}; зона была {settled}");
 
-        // С поломкой пакет за несколько тиков дорастает до всей зоны. С патчем №14 в каждом
-        // пакете не больше бюджета входа (200) плюс немного грязного — далеко от полной зоны.
+        // With the bug, the packet grows to the whole view range within a few ticks. With patch #14,
+        // every packet holds no more than the enter budget (200) plus a bit of dirty state — nowhere
+        // near the full view range.
         Assert.That(maxEntities, Is.LessThan(settled * 2 / 3),
             $"возврат без ack набрал {maxEntities} сущностей в одном пакете при зоне {settled}. " +
             "Полные состояния входящих копятся из тика в тик — патч №14 не сработал");
@@ -492,21 +495,23 @@ public sealed class PvsResyncTests : GameTest
     }
 
     /// <summary>
-    /// Грязная сущность, которую клиент никогда не подтверждал, не должна уходить дельтой без метадаты.
+    /// A dirty entity the client never acknowledged must not go out as a delta with no metadata.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Боевая подпись Клина: после полного слепка <c>LastSeen</c> свежий, <c>LastLeftView=0</c>,
-    /// <c>EntityLastAcked=0</c>, сущность грязная каждый тик, сервер шлёт дельту от
-    /// <c>fromTick</c> без MetaData. Клиент сущности не создавал — MissingMetadata — новое полное.
-    /// Внутрипроцессный ack мгновенный, поэтому <see cref="WalkingEntity_SingleResync_DoesNotLoop"/>
-    /// этот хвост не ловит: к моменту ходьбы клиент сущность уже имеет.
+    /// Klin's production signature: after a full snapshot, <c>LastSeen</c> is fresh,
+    /// <c>LastLeftView=0</c>, <c>EntityLastAcked=0</c>, the entity is dirty every tick, and the server
+    /// sends a delta from <c>fromTick</c> with no MetaData. The client never created the entity —
+    /// MissingMetadata — a new full state. The in-process ack is instant, so
+    /// <see cref="WalkingEntity_SingleResync_DoesNotLoop"/> doesn't catch this particular tail: by the
+    /// time the walking starts, the client already has the entity.
     /// </para>
     /// <para>
-    /// Стенд: полный ресинк (EntityLastAcked обнулён, LastSeen проставлен), сразу после применения
-    /// полного слепка сущность у клиента стираем — как PartialStateReset / потеря фрагментов —
-    /// и грязним каждый тик. Без патча №21 CreateNewEntity бросает MissingMetadataException.
-    /// С патчем приезжает полное состояние сущности, клиент создаёт её снова, второго ресинка нет.
+    /// The bench: a full resync (EntityLastAcked zeroed, LastSeen set), then right after the full
+    /// snapshot is applied we erase the entity on the client — like PartialStateReset / a lost
+    /// fragment would — and dirty it every tick. Without patch #21, CreateNewEntity throws
+    /// MissingMetadataException. With the patch, the entity's full state arrives, the client recreates
+    /// it, and there's no second resync.
     /// </para>
     /// </remarks>
     [Test]
@@ -548,8 +553,9 @@ public sealed class PvsResyncTests : GameTest
 
         Assert.That(appeared, Is.True, "после полного слепка клиент так и не получил сущность");
 
-        // Клиент слепок применил, сервер EntityLastAcked ещё не сдвинул (аванс LastReceivedAck
-        // без PendingAcks, патч №13). Стираем сущность у клиента — дальше она для него «новая».
+        // The client applied the snapshot, but the server hasn't advanced EntityLastAcked yet (an
+        // advance LastReceivedAck without PendingAcks, patch #13). Erase the entity on the client —
+        // from here on it's "new" to it.
         await client.WaitPost(() =>
         {
             if (client.EntMan.TryGetEntity(netEnt, out var uid))

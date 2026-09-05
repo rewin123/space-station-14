@@ -2,13 +2,15 @@
 import { useAgent } from '../stores/agent'
 
 /**
- * Показывать нечего — и причин этому четыре разных, а не одна.
+ * Nothing to show — and there are four different reasons for that, not one.
  *
- * Между раундами тела никем не заняты; выбранный агент может быть ещё не загружен (истории всех
- * мозгов сразу не качаются намеренно); снимок может быть в полёте; агент мог уйти. Все четыре —
- * штатные состояния, и различать их надо: «не загружен» лечится кликом, «ушёл» — нет.
+ * Between rounds, bodies are unoccupied; the selected agent might not be loaded yet (histories
+ * for all brains aren't downloaded at once, deliberately); a snapshot might be in flight; the
+ * agent might have left. All four are normal states, and they need to be distinguished: "not
+ * loaded" is fixed by a click, "left" isn't.
  *
- * Память и скиллы при любом из них продолжают работать: они принадлежат процессу, а не агенту.
+ * In any of these cases, memory and skills keep working: they belong to the process, not to the
+ * agent.
  */
 const agent = useAgent()
 </script>

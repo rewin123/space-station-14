@@ -8,15 +8,15 @@ using Robust.Shared.Log;
 namespace Content.AiBench;
 
 /// <summary>
-/// Файловая система агента: маршрутизация, права, потолки и разделение библиотек.
+/// The agent filesystem (VFS): routing, permissions, output caps, and library separation.
 ///
 /// <para>
-/// Здесь стерегутся четыре вещи, каждая из которых ломается молча. Обход каталогов — единственное
-/// место, где строка от модели становится путём. Права на чтение — единственное, что удерживает
-/// агента от правки вычитанного справочника. Потолки вывода — единственное, что отделяет один
-/// <c>grep</c> от вынесенного окна контекста. И постоянство корня: строка, попадающая в зону 0,
-/// не должна зависеть от того, сколько файлов лежит в дереве, иначе каждая запись агента стоит
-/// полного prefill.
+/// Four things are guarded here, each of which breaks silently. Directory traversal is the one
+/// place where a string from the model becomes a path. Read permissions are the one thing keeping
+/// the agent from editing a reference article it just read. Output caps are the one thing that
+/// separates a single <c>grep</c> from blowing out the context window. And root stability: the
+/// string landing in zone 0 must not depend on how many files sit in the tree, otherwise every
+/// agent write costs a full prefill.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -41,7 +41,7 @@ public sealed class VfsTests
 
     private static ISawmill Sawmill => new LogManager().GetSawmill("test");
 
-    /// <summary>Справочник из двух разделов: один с оглавлением, другой без.</summary>
+    /// <summary>A reference library with two sections: one with an index, one without.</summary>
     private string SeedWiki()
     {
         var wiki = Path.Combine(_dir, "wiki_ru");
@@ -75,7 +75,7 @@ public sealed class VfsTests
 
     private Shell NewShell(VfsAccess wikiAccess = VfsAccess.Read) => new(Build(wikiAccess));
 
-    // ------------------------------------------------------------------- чтение
+    // ------------------------------------------------------------------- reading
 
     [Test]
     public void Ls_RootListsMountsInDeclarationOrder()
@@ -108,9 +108,9 @@ public sealed class VfsTests
     [Test]
     public void Cat_ReadsAnArticle_ExtensionOptional()
     {
-        // Путь обычный, как в настоящей файловой системе: буква в букву и с учётом регистра. Одна
-        // поблажка — расширение можно не писать, потому что «.md» это деталь хранения, а не часть
-        // имени статьи.
+        // A path behaves like it would on a real filesystem: letter for letter and case-sensitive.
+        // One concession — the extension can be left off, because ".md" is a storage detail, not
+        // part of the article's name.
         var shell = NewShell();
 
         var bare = shell.Run("cat /wiki_ru/атмосфера/насосы");
@@ -166,7 +166,7 @@ public sealed class VfsTests
         Assert.That(result.Text, Does.Contain("/wiki_ru/питание/апц"));
     }
 
-    // --------------------------------------------------------------------- права
+    // --------------------------------------------------------------------- permissions
 
     [Test]
     public void ReadOnlyMount_RefusesEveryMutation()
@@ -195,7 +195,7 @@ public sealed class VfsTests
         Assert.That(NewShell().Run("cat /wiki_ru/питание/апц").Ok, Is.True);
     }
 
-    // ------------------------------------------------------- безопасность путей
+    // ------------------------------------------------------- path safety
 
     [Test]
     public void Path_RefusesEscapes()
@@ -221,7 +221,8 @@ public sealed class VfsTests
     [Test]
     public void Path_EscapeDoesNotReachDiskEvenWhenTheFileExists()
     {
-        // Файл кладётся РЯДОМ с корнем справочника: если нормализация дырявая, «..» его достанет.
+        // The file is placed RIGHT NEXT TO the library root: if normalization is leaky, ".." will
+        // reach it.
         File.WriteAllText(Path.Combine(_dir, "secret.md"), "# secret\nкогда: нельзя\nтайна\n");
 
         var result = NewShell().Run("cat /wiki_ru/../secret");
@@ -230,7 +231,7 @@ public sealed class VfsTests
         Assert.That(result.Text, Does.Not.Contain("тайна"));
     }
 
-    // ------------------------------------------------------------------- запись
+    // ------------------------------------------------------------------- writing
 
     [Test]
     public void Write_ThenRead_RoundTrips()
@@ -370,7 +371,7 @@ public sealed class VfsTests
             "описание — единственная строка, которую видно в ls; всё за пределом не доехало бы до листинга");
     }
 
-    // ------------------------------------------------------------------ потолки
+    // ------------------------------------------------------------------ output caps
 
     [Test]
     public void Grep_TruncatesLoudly()
@@ -403,8 +404,9 @@ public sealed class VfsTests
         VfsPath.TryParse("/skills/длинный", out var path, out _);
         vfs.TryResolve(path, out var mount, out var relative, out _);
 
-        // Мимо DocTree: у него потолок тела 5000, а проверяется здесь потолок ВЫВОДА, который
-        // существует для справочника и вики игры, где статьи заведомо длиннее.
+        // Bypassing DocTree: its body cap is 5000, whereas what's being checked here is the OUTPUT
+        // cap, which exists for the reference library and the game wiki, where articles are known
+        // to run longer.
         var wiki = Path.Combine(_dir, "wiki_ru");
         File.WriteAllText(Path.Combine(wiki, "огромная.md"),
             "# огромная\nкогда: длинная статья\n" + string.Join('\n', Enumerable.Range(0, 4000).Select(i => $"строка {i}")));
@@ -422,7 +424,7 @@ public sealed class VfsTests
         });
     }
 
-    // ------------------------------------------------------------------ разбор
+    // ------------------------------------------------------------------ parsing
 
     [Test]
     public void UnknownCommand_NamesTheOnesThatExist()
@@ -450,7 +452,7 @@ public sealed class VfsTests
         Assert.That(argv, Is.EqualTo(new[] { "grep", "воздушная тревога", "/wiki_ru" }));
     }
 
-    // ------------------------------------------------------- сборка и раздельность
+    // ------------------------------------------------------- building and isolation
 
     [Test]
     public void Build_RefusesADuplicateMountPoint()
@@ -466,9 +468,10 @@ public sealed class VfsTests
     [Test]
     public void Build_ShoutsAboutAnEmptyReadOnlyMount_ButStillBuilds()
     {
-        // Молча пустая вика выглядит в игре как «агент разучился» и не даёт ни строчки в лог —
-        // поэтому громко. Но НЕ падением: исключение при сборке тела означает раунд вообще без
-        // агента, а это хуже, чем агент, не знающий справочника.
+        // A silently empty wiki looks in-game like "the agent forgot how" and doesn't produce a
+        // single line in the log — hence the loud complaint. But NOT a crash: an exception while
+        // building a body means a round with no agent at all, which is worse than an agent that
+        // doesn't know the reference library.
         var vfs = new VfsBuilder(Sawmill)
             .AddFolder(Path.Combine(_dir, "пусто"), "wiki_ru", VfsAccess.Read, "справочник")
             .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "своё")
@@ -517,9 +520,9 @@ public sealed class VfsTests
     [Test]
     public void Mount_WithAnExtension_IsReachableBothWays()
     {
-        // Разбор пути снимает «.md», чтобы «насосы» и «насосы.md» были одним файлом. Точка
-        // монтирования «memory.md» из-за этого приходила в таблицу как «memory» и не находилась
-        // вовсе. Поймано на живом сервере: в фикстуре не было точек монтирования с расширением.
+        // Path parsing strips ".md" so that "pumps" and "pumps.md" are the same file. Because of
+        // that, the "memory.md" mount point was arriving in the table as "memory" and wasn't being
+        // found at all. Caught on a live server: the fixture had no mount points with an extension.
         var vfs = new VfsBuilder(Sawmill)
             .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "своё")
             .AddMemory(_dir, "memory.md", VfsAccess.Write, "факты о станции")
@@ -537,24 +540,24 @@ public sealed class VfsTests
         });
     }
 
-    // ------------------------------------------------------ настоящий справочник
+    // ------------------------------------------------------ the real reference library
 
     /// <summary>
-    /// Настоящая библиотека из <c>ai_data/wiki_ru</c>, если она на месте.
+    /// The real library from <c>ai_data/wiki_ru</c>, if it's present.
     ///
     /// <para>
-    /// Проверяет ровно то, что не проверить фикстурой: что миграция уложила 226 статей так, как их
-    /// потом читает боевой код. Скрипт миграции написан на питоне и о разборщике на C# ничего не
-    /// знает — расхождение форматов было бы видно только в игре.
+    /// Checks exactly what a fixture can't: that the migration laid out 226 articles the way the
+    /// production parser then reads them. The migration script is written in Python and knows
+    /// nothing about the C# parser — a format mismatch would only show up in the game.
     /// </para>
     /// <para>
-    /// Каталога нет в git, поэтому на чистой копии тест пропускается, а не падает.
+    /// The directory isn't in git, so on a clean checkout the test is skipped rather than failed.
     /// </para>
     /// </summary>
     [Test]
     public void RealLibrary_ParsesAndIsNavigable()
     {
-        // Тесты запускаются из bin/Content.AiBench, то есть корень репозитория — двумя уровнями выше.
+        // Tests run from bin/Content.AiBench, so the repository root is two levels up.
         var root = Path.GetFullPath(Path.Combine(
             TestContext.CurrentContext.TestDirectory, "..", "..", "ai_data", "wiki_ru"));
 
@@ -583,14 +586,14 @@ public sealed class VfsTests
             Assert.That(found.Ok, Is.True);
             Assert.That(found.Text, Does.Contain("/wiki_ru/питание/"));
 
-            // Ни одной живой ссылки на снятые инструменты: справочник не должен учить агента
-            // звать то, чего больше нет.
+            // Not a single live reference to retired tools: the reference library must not teach the
+            // agent to call something that no longer exists.
             var stale = shell.Run("grep skill_view /wiki_ru");
             Assert.That(stale.Text, Does.Contain("не встречается"));
         });
     }
 
-    // -------------------------------------------------------------- сторож зоны 0
+    // -------------------------------------------------------------- zone-0 guard
 
     [Test]
     public void RenderRoot_DoesNotMoveWhenTheTreeChanges()
@@ -608,19 +611,19 @@ public sealed class VfsTests
     }
 
     /// <summary>
-    /// Корень зоны 0 обязан оставаться маленьким — ради этого всё и переделывалось.
+    /// The zone-0 root must stay small — that's the whole reason this was all rewritten.
     ///
     /// <para>
-    /// Прежний индекс скиллов занимал 16 425 символов замороженного префикса, рос от каждой записи
-    /// агента и повторялся целиком ещё раз внутри промпта разбора. Потолок здесь щедрый: он ловит
-    /// не лишний символ, а возвращение той же болезни — счётчик, список статей, «полезную»
-    /// выжимку из дерева.
+    /// The previous skills index took up 16,425 characters of frozen prefix, grew with every agent
+    /// write, and got repeated in full again inside the parsing prompt. The cap here is generous: it
+    /// isn't meant to catch one stray character, but the return of the same disease — a counter, a
+    /// list of articles, a "helpful" digest pulled from the tree.
     /// </para>
     /// </summary>
     [Test]
     public void RenderRoot_StaysSmall()
     {
-        // Ровно та таблица, что собирает StationAiAgentSystem.BuildVfs, включая длинные описания.
+        // Exactly the table StationAiAgentSystem.BuildVfs assembles, long descriptions included.
         var vfs = new VfsBuilder(Sawmill)
             .AddFolder(SeedWiki(), "wiki_ru", VfsAccess.Read, "справочник по игре: отделы, машины, процедуры")
             .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")

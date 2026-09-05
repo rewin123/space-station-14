@@ -9,7 +9,7 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// "Ии, а у меня есть доступ в инженерный?"
+/// "AI, do I have access to Engineering?"
 ///
 /// The most common request a Station AI gets is to open a door, and the honest answer is often
 /// "your own card already opens it". Guessing from the job title is not good enough: access is

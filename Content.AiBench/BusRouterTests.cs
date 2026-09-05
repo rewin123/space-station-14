@@ -32,9 +32,9 @@ public sealed class BusRouterTests
     private string _dir = "";
     private AgentEventBus _bus = null!;
     /// <summary>
-    /// Файловая система «ядра». Роутер получает её целиком, а не три стора по отдельности:
-    /// библиотеки стали своими у каждого тела, и «отдай память процесса» перестало быть вопросом
-    /// с ответом.
+    /// The "core"'s filesystem. The router gets it whole, not as three separate stores: libraries
+    /// have become each body's own, and "hand over the process memory" stopped being a question
+    /// with an answer.
     /// </summary>
     private Vfs _vfs = null!;
 
@@ -42,7 +42,7 @@ public sealed class BusRouterTests
     private DocTree _skills => _vfs.Skills!;
     private ConversationState _conv = null!;
     /// <summary>
-    /// Витрина агентов. Пустая означает «тело никто не занял», непустая — сколько угодно агентов.
+    /// The agent roster. Empty means "nobody has claimed the body"; non-empty means any number of agents.
     /// </summary>
     private AgentDirectory _agents = new();
 
@@ -74,7 +74,7 @@ public sealed class BusRouterTests
     /// <summary>Records what the router asked the system to do, so commands can be asserted.</summary>
     private readonly List<string> _sent = new();
 
-    /// <summary>Та же таблица монтирований, что у живого агента, но без справочника.</summary>
+    /// <summary>The same mount table as a live agent, but without the knowledge base.</summary>
     private Vfs NewVfs(int memoryLimit = 4000) => new VfsBuilder(Sawmill)
         .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")
         .AddNotes(_dir, "players", VfsAccess.Write, "заметки о людях", () => "[раунд 1 · 01.01]")
@@ -86,8 +86,8 @@ public sealed class BusRouterTests
         return new AgentDebugRouter(
             _bus,
             Token,
-            // Маршрутизатор никогда не ищет сессию сам — ему дают витрину. Пустая моделирует
-            // «тело никто не занял».
+            // The router never looks up a session itself — it is handed the roster. An empty one
+            // models "nobody has claimed the body".
             _agents,
             () => _vfs,
             () => 42,
@@ -109,12 +109,13 @@ public sealed class BusRouterTests
     }
 
     /// <summary>
-    /// Поставить на витрину игрушечного агента.
+    /// Put a toy agent on the roster.
     /// </summary>
     /// <remarks>
-    /// Настоящую <c>AgentSession</c> здесь собрать нельзя — она тянет за собой клиента модели,
-    /// петлю и мир, — и не нужно: маршрутизатор видит агента только через делегаты хендла. Это и
-    /// есть довод, по которому хендл несёт делегаты, а не ссылку на сессию.
+    /// A real <c>AgentSession</c> cannot be assembled here — it drags along a model client, a loop,
+    /// and a world — and it doesn't need to be: the router only ever sees an agent through the
+    /// handle's delegates. That is exactly the reason the handle carries delegates rather than a
+    /// reference to the session.
     /// </remarks>
     private AgentHandle Agent(string id, string name = "Агент", bool alive = true)
     {
@@ -347,12 +348,12 @@ public sealed class BusRouterTests
     }
 
     /// <summary>
-    /// Сообщение без адресата отклоняется, а не уходит «кому-нибудь».
+    /// A message with no addressee is rejected, rather than going to "whoever".
     /// </summary>
     /// <remarks>
-    /// Умолчание здесь было бы худшим из решений: текст оператора всплывает у агента в следующем
-    /// ходу, и отправленный не тому он выглядит как реплика, которую агент сам себе придумал.
-    /// Заметить подмену негде — в ленте она будет в обеих сессиях выглядеть законно.
+    /// A default here would be the worst possible choice: the operator's text surfaces for the agent
+    /// on the next turn, and sent to the wrong one it reads as a line the agent made up on its own.
+    /// There is nowhere to notice the mix-up — in the feed it will look legitimate in both sessions.
     /// </remarks>
     [Test]
     public async Task MessageWithoutAnAgentIs400()
@@ -387,15 +388,15 @@ public sealed class BusRouterTests
         });
     }
 
-    // ------------------------------------------------------- мультисессионность
+    // ------------------------------------------------------- multi-session support
 
     /// <summary>
-    /// Процессный снимок больше не несёт ни одной сессии.
+    /// The process-wide snapshot no longer carries a single session.
     /// </summary>
     /// <remarks>
-    /// Прямая защита от возврата к старому: сессия в общем снимке означала бы, что клиент качает
-    /// историю всех агентов, чтобы посмотреть на одного. У четырёх агентов с контекстом под сотню
-    /// тысяч токенов это мегабайты на каждый пересев.
+    /// A direct guard against regressing to the old behavior: a session in the shared snapshot would
+    /// mean the client downloads every agent's history just to look at one. With four agents whose
+    /// context runs close to a hundred thousand tokens, that is megabytes on every switch.
     /// </remarks>
     [Test]
     public async Task StateCarriesTheRosterAndNoSession()
@@ -422,7 +423,7 @@ public sealed class BusRouterTests
     }
 
     /// <summary>
-    /// Снимок агента несёт ровно того, кого попросили.
+    /// An agent's snapshot carries exactly the one that was asked for.
     /// </summary>
     [Test]
     public async Task SessionCarriesOnlyTheAskedAgent()
@@ -443,12 +444,12 @@ public sealed class BusRouterTests
     }
 
     /// <summary>
-    /// Неизвестный агент — 200 с пустым полем, и это НЕ придирка к семантике.
+    /// An unknown agent is 200 with a null field, and this is NOT nitpicking over semantics.
     /// </summary>
     /// <remarks>
-    /// Клиент считает 404 терминальным (<c>ApiError.terminal</c>) и после него навсегда
-    /// останавливает опрос. Агент, ушедший между кадром <c>session.started</c> и этим запросом, —
-    /// штатная гонка, и «правильный» код погасил бы из-за неё весь отладчик.
+    /// The client treats 404 as terminal (<c>ApiError.terminal</c>) and after it permanently stops
+    /// polling. An agent that left between the <c>session.started</c> event and this request is a
+    /// routine race, and the "correct" status code would kill the whole debugger over it.
     /// </remarks>
     [Test]
     public async Task SessionOfAnUnknownAgentIs200WithNull()
@@ -465,11 +466,11 @@ public sealed class BusRouterTests
     }
 
     /// <summary>
-    /// Снимок без параметра — 400, а не «первый попавшийся».
+    /// A snapshot request with no parameter is 400, not "whichever comes first".
     /// </summary>
     /// <remarks>
-    /// Молчаливый выбор умолчания вернул бы ровно ту ошибку, ради которой этот маршрут появился:
-    /// показать не того агента, ничем не выдав подмены.
+    /// A silent default choice would return exactly the error this route exists to prevent: showing
+    /// the wrong agent, with nothing to reveal the mix-up.
     /// </remarks>
     [Test]
     public async Task SessionWithoutTheAgentParamIs400()

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Подшить новые статьи в дерево справочника.
+"""File new articles into the reference library's tree.
 
-Статья вне дерева не потеряна — в индексе зоны 0 есть всё, — но открывается она на практике
-редко: модель ходит по справочнику ссылками, от корня к разделу и от раздела к статье. Поэтому
-недостаточно, чтобы новая статья ссылалась «наверх»: обход идёт в обратную сторону, и раздел
-обязан ссылаться на неё.
+An article outside the tree isn't lost — the zone-0 index has everything — but in practice it
+rarely gets opened: the model navigates the reference library by links, from the root to a
+section and from a section to an article. So it isn't enough for the new article to link
+"upward": traversal goes the other way, and the section must link to it.
 
-Правит хабы `справочник-*` в skill_start/. Это единственное, ради чего вычитанные вручную файлы
-здесь трогаются: хаб — оглавление, и оглавление без новых глав неверно.
+Edits `справочник-*` hubs in skill_start/. This is the one thing for which the manually
+proofread files here get touched: a hub is a table of contents, and a table of contents
+missing new chapters is wrong.
 
     python3 Tools/wiki/link.py [--dry]
 """
@@ -18,7 +19,7 @@ from pathlib import Path
 
 MAX_BODY = 4800
 
-# Префикс имени статьи → хаб, который обязан на неё ссылаться.
+# Article name prefix → the hub that must link to it.
 HUB = {
     "антаг": "справочник-антаг", "атмосфера": "справочник-атмосфера",
     "виды": "справочник-виды", "должности": "справочник-должности",
@@ -27,8 +28,9 @@ HUB = {
     "связь": "справочник-связь", "сервис": "справочник-сервис",
     "силикон": "справочник-силикон", "снабжение": "справочник-снабжение",
     "события": "справочник-события", "строй": "справочник-строй", "химия": "справочник-химия",
-    # Словарь терминов, выживание и управление — своего раздела не имеют и не заслуживают:
-    # это не отдел станции, а то, что читают до отделов. Вешаются прямо на корень.
+    # The glossary of terms, survival, and command — have no section of their own and don't
+    # deserve one: not a station department, but what gets read before the departments. They
+    # attach directly to the root.
     "словарь": "справочник",
 }
 
@@ -61,8 +63,8 @@ def main():
         target = Path(f"skill_start/{hub}.md")
         text = target.read_text(encoding="utf-8")
 
-        # Уже подшитые пропускаются: скрипт должен переживать повторный запуск, иначе после
-        # второго прогона в хабе окажется два одинаковых списка.
+        # Already-filed entries are skipped: the script must survive a repeated run, otherwise
+        # a second pass would leave two identical lists in the hub.
         listed = set(re.findall(r"\[\[([^\]]+)\]\]", text))
         add = [p for p in paths if p.stem not in listed]
         if not add:

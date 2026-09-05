@@ -7,7 +7,7 @@ const props = defineProps<{ pair: PairedCall }>()
 
 const open = ref(false)
 
-/** Результат инструмента — это JSON от ToolResult: ok/error/detail/retry/effect. */
+/** A tool result is JSON from ToolResult: ok/error/detail/retry/effect. */
 const outcome = computed(() => {
   const content = props.pair.result?.content
   if (!content) return null
@@ -31,7 +31,7 @@ const summary = computed(() => {
 const STATE_LABEL: Record<PairedCall['state'], string> = {
   paired: '',
   pending: 'ждём',
-  // Показывается всегда: тут парный вид может врать, и молчать об этом нельзя.
+  // Always shown: here the paired view can be lying, and staying silent about it isn't allowed.
   ambiguous: 'сопоставлено по порядку',
 }
 </script>

@@ -6,28 +6,28 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Автозахват берёт ядро НА СТАНЦИИ и никакое другое.
+/// Auto-claim takes the core ON THE STATION, and no other.
 ///
-/// Живая авария 14–15 августа. В мире каждый раунд два ядра: станционное и то, которым
-/// укомплектован сам Центком (<c>centcomm.yml</c>, <c>PlayerStationAiEmpty</c> в позиции
-/// -0.5,-2.5). Перебор шёл по нефильтрованному запросу и брал первое подходящее — два дня
-/// подряд доставалось центкомовское.
+/// A real incident on August 14-15. The world spawns two cores every round: the station's own and
+/// the one Central Command itself ships with (<c>centcomm.yml</c>, <c>PlayerStationAiEmpty</c> at
+/// position -0.5,-2.5). The scan ran over an unfiltered query and took the first match — for two
+/// days straight it landed on the Centcomm one.
 ///
-/// Само по себе это выглядело безобидно: агент жил, ходил, говорил в рацию, лог был чист.
-/// Но <c>RadioSystem.cs:150</c> выбрасывает получателя, чья карта не совпадает с картой
-/// говорящего, а Центком — отдельная карта. Значит агент не слышал ни одной реплики экипажа
-/// и ни одна его собственная передача не долетала. За 15 августа: 222 наблюдения, RADIO —
-/// ровно ноль, слышны только торговые автоматы, стоявшие рядом с ним на Центкоме.
+/// By itself this looked harmless: the agent was alive, moved, spoke on the radio, and the log was
+/// clean. But <c>RadioSystem.cs:150</c> drops any recipient whose map does not match the speaker's,
+/// and Centcomm is a separate map. So the agent heard none of the crew's radio traffic and none of
+/// its own transmissions ever landed. Over August 15: 222 observations, RADIO — exactly zero, the
+/// only things audible were the vending machines standing next to it on Centcomm.
 ///
-/// Тест держит именно инвариант «ядро принадлежит станции», а не «ядро не на Центкоме»:
-/// карт вне станции сколько угодно — сальваж, руины, планеты, — и ядро на любой из них
-/// ломает агента ровно так же.
+/// The test pins the invariant "the core belongs to the station", not "the core is not on
+/// Centcomm": there are as many off-station maps as you like — salvage, ruins, planets — and a core
+/// on any of them breaks the agent exactly the same way.
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
 public sealed class CoreClaimTests
 {
-    /// <summary>Снять агента и убрать ядро, с которым стенд поднимает мир.</summary>
+    /// <summary>Release the agent and remove the core the bench spawns the world with.</summary>
     private static async Task ClearTheWorldsCore(AiWorld w)
     {
         await w.Post(() =>
@@ -45,8 +45,8 @@ public sealed class CoreClaimTests
         await using var w = await AiWorld.Create();
         await ClearTheWorldsCore(w);
 
-        // Вторая карта без станции — ровно то, чем Центком и является: EmergencyShuttleSystem
-        // грузит его на собственную карту и в состав станции не включает.
+        // A second map with no station — exactly what Centcomm is: EmergencyShuttleSystem loads
+        // it onto its own map and never makes it part of the station.
         var elsewhere = await w.Pair.CreateTestMap();
 
         await w.Post(() => w.Ent.SpawnEntity("PlayerStationAiEmpty", elsewhere.GridCoords));
@@ -70,8 +70,9 @@ public sealed class CoreClaimTests
     [Test]
     public async Task StationCoreWinsOverAnEarlierOffStationOne()
     {
-        // Порядок важен: чужое ядро создаётся ПЕРВЫМ, то есть до исправления перебор дошёл бы
-        // до него раньше и остановился. Без этой расстановки тест был бы зелёным и на баге.
+        // Order matters: the foreign core is created FIRST, meaning that before the fix the scan
+        // would have reached it earlier and stopped there. Without this arrangement the test would
+        // pass even with the bug present.
         await using var w = await AiWorld.Create();
         await ClearTheWorldsCore(w);
 

@@ -11,13 +11,14 @@ using Robust.Shared.Log;
 namespace Content.AiBench;
 
 /// <summary>
-/// Переключатель канала и паритет закарденного.
+/// The channel switch and carded parity.
 ///
-/// Второе — не косметика: интелликарта существует ровно затем, чтобы отнять у ИИ станцию, и
-/// половина смысла карденья в том, что он больше не может вызвать СБ. Инструмент <c>radio</c>
-/// валидировал канал по статическому списку и на режим не смотрел вовсе, а <c>RadioSystem</c>
-/// не проверяет наличие передатчика у источника — только каналы получателей. Значит закарденный
-/// ИИ продолжал говорить в Security из кармана того, кто его унёс.
+/// The second half is not cosmetic: the intellicard exists specifically to take the station away
+/// from the AI, and half the point of carding is that it can no longer call Security. The
+/// <c>radio</c> tool validated the channel against a static list and did not look at the mode at
+/// all, and <c>RadioSystem</c> does not check whether the source has a transmitter — only the
+/// recipients' channels. So a carded AI kept talking into Security from the pocket of whoever
+/// carried it off.
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
@@ -28,7 +29,7 @@ public sealed class ChannelTests
     {
         await using var w = await AiWorld.Create();
 
-        // По умолчанию тумблер на Common.
+        // By default the switch is on Common.
         var first = await w.Invoke("radio", """{"text":"проверка связи"}""");
 
         Assert.Multiple(() =>
@@ -53,7 +54,8 @@ public sealed class ChannelTests
     [Test]
     public async Task ExplicitChannelDoesNotMoveTheSwitch()
     {
-        // Ровно как префикс у живого игрока: разовое обращение в другой канал не сбивает выбор.
+        // Exactly like a live player's prefix: a one-off message on another channel doesn't move
+        // the selection.
         await using var w = await AiWorld.Create();
 
         await w.Invoke("set_channel", """{"channel":"Security"}""");
@@ -68,8 +70,9 @@ public sealed class ChannelTests
     [Test]
     public async Task CurrentChannelIsVisibleInSelfLine()
     {
-        // Тумблер допустим только потому, что его положение видно КАЖДЫЙ ход. Иначе это скрытое
-        // состояние, и модель однажды отправит разговор о предателе в общий канал.
+        // The switch is acceptable only because its position is visible on EVERY turn. Otherwise
+        // it would be hidden state, and the model would sooner or later send a conversation about
+        // the traitor onto the general channel.
         await using var w = await AiWorld.Create();
 
         await w.Invoke("set_channel", """{"channel":"Medical"}""");
@@ -109,8 +112,9 @@ public sealed class ChannelTests
         await w.Invoke("set_channel", """{"channel":"Command"}""");
         await w.Post(() => w.System.GetSession(w.Brain)!.Mode = AgentMode.Carded);
 
-        // Речь без явного канала НЕ должна упасть только потому, что тумблер остался на Command:
-        // модель получила бы отказ про канал, которого не называла, и пошла бы искать в нём опечатку.
+        // Speech without an explicit channel must NOT fail just because the switch was left on
+        // Command: the model would get a refusal about a channel it never named, and would go
+        // looking for a typo in it.
         var after = await w.Invoke("radio", """{"text":"я в карте"}""");
 
         Assert.Multiple(() =>
@@ -139,15 +143,16 @@ public sealed class ChannelTests
 }
 
 /// <summary>
-/// Что переживает раунд.
+/// What survives the round.
 ///
-/// Раньше здесь проверялось, что CREW.md стирается на разборе смены, а MEMORY.md — нет. Второго
-/// файла больше нет: замысел был против метагейминга, а на живом сервере дал обратное — агент
-/// перестал писать в то, что всё равно сотрут, сложил людей в MEMORY.md и упёр его в лимит.
+/// This used to check that CREW.md gets wiped at the shift debrief while MEMORY.md does not. The
+/// second file no longer exists: the intent was to fight metagaming, and on a live server it
+/// produced the opposite — the agent stopped writing into something that would get erased anyway,
+/// piled people into MEMORY.md, and ran it up against the limit.
 ///
-/// Теперь переживает всё: память о станции остаётся памятью о станции, а люди живут по файлу на
-/// человека в PlayerNoteStore, со штампом раунда у каждой записи. Здесь пинается новый инвариант —
-/// память НИЧЕМ не стирается и целиком доезжает до диска.
+/// Now everything survives: memory about the station stays memory about the station, and people
+/// live in one file per person in PlayerNoteStore, with a round stamp on every entry. What's
+/// pinned here is the new invariant — memory is wiped by NOTHING and makes it to disk in full.
 /// </summary>
 [TestFixture]
 [Category("AiContext")]

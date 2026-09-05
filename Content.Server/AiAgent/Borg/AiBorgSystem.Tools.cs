@@ -13,19 +13,19 @@ using Robust.Shared.Utility;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Набор инструментов борга.
+/// The borg's tool set.
 ///
 /// <para>
-/// Общие инструменты (законы, <c>noop</c>, таймеры, память, навыки, заметки) берутся у хоста
-/// <see cref="StationAiAgentSystem.RegisterCommonTools"/> — двенадцать штук, ни одного дубля.
-/// Здесь только то, чего у неподвижного глаза нет и быть не может: ноги, глаза тела и руки.
+/// Common tools (laws, <c>noop</c>, timers, memory, skills, notes) come from the host
+/// <see cref="StationAiAgentSystem.RegisterCommonTools"/> — twelve of them, no duplicates.
+/// This only has what a stationary eye doesn't have and can't have: legs, a body's eyes, and hands.
 /// </para>
 /// <para>
-/// Чего у борга <b>нет</b> намеренно: <c>announce</c>, <c>device_action</c>, <c>device_ui</c>,
-/// <c>move_camera</c>, <c>jump_to_core</c>, <c>crew_status</c>, <c>station_status</c>. Все семь
-/// опираются либо на встроенные консоли тела Station AI, либо на вайтлист «ИИ может управлять
-/// этим устройством». У борга ни того, ни другого: он не «управляет» дверью удалённо, он до неё
-/// доходит и открывает её рукой.
+/// What the borg deliberately does <b>not</b> have: <c>announce</c>, <c>device_action</c>,
+/// <c>device_ui</c>, <c>move_camera</c>, <c>jump_to_core</c>, <c>crew_status</c>,
+/// <c>station_status</c>. All seven rely either on the Station AI body's built-in consoles or on the
+/// "AI is allowed to control this device" whitelist. The borg has neither: it doesn't "control" a
+/// door remotely, it walks up to it and opens it by hand.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -33,16 +33,22 @@ public sealed partial class AiBorgSystem
     private void RegisterBorgTools(AgentSession s, AiToolRegistry r, AiBorgComponent comp)
     {
         var channelEnum = string.Join(",", comp.Channels.Select(c => $"\"{c}\""));
+        var L = s.Locale;
 
-        // ------------------------------------------------------------------ ноги
+        // ------------------------------------------------------------------ legs
 
         r.Register(new AiTool
         {
             Name = "goto",
-            Description = "Пойти к цели: к объекту по хендлу, к названию отсека (как на указателях " +
-                          "станции) или к координатам. Ты НЕ стоишь и не ждёшь — инструмент " +
-                          "отвечает сразу, а о прибытии придёт строка ARRIVED. Если дороги нет, " +
-                          "придёт NOPATH. Чтобы остановиться на полпути, вызови с stop.",
+            Description = L.T(
+                "Пойти к цели: к объекту по хендлу, к названию отсека (как на указателях " +
+                "станции) или к координатам. Ты НЕ стоишь и не ждёшь — инструмент " +
+                "отвечает сразу, а о прибытии придёт строка ARRIVED. Если дороги нет, " +
+                "придёт NOPATH. Чтобы остановиться на полпути, вызови с stop.",
+                "Walk to a target: an object by handle, a compartment name (as on station " +
+                "signs), or coordinates. You do NOT stand still and wait — the tool replies " +
+                "at once, and arrival comes as an ARRIVED line. If there is no path, you get " +
+                "NOPATH. To stop halfway, call it with stop."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
@@ -55,10 +61,15 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "find_charger",
-            Description = "Где зарядиться: ищет по ВСЕЙ станции станции для киборгов, в которые " +
-                          "влезаешь именно ты, и отдаёт их координатами от ближней к дальней, " +
-                          "с пометкой, запитана или обесточена. Глазами их не найти — стоят они " +
-                          "в робототехнике, а садишься ты там, где работал.",
+            Description = L.T(
+                "Где зарядиться: ищет по ВСЕЙ станции станции для киборгов, в которые " +
+                "влезаешь именно ты, и отдаёт их координатами от ближней к дальней, " +
+                "с пометкой, запитана или обесточена. Глазами их не найти — стоят они " +
+                "в робототехнике, а садишься ты там, где работал.",
+                "Where to recharge: searches the WHOLE station for cyborg stations you " +
+                "actually fit into, and returns them by coordinates nearest to farthest, " +
+                "marked powered or unpowered. You will not find them by eye — they sit in " +
+                "robotics, and you dock wherever you were working."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
                 """,
@@ -68,11 +79,17 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "ame_plan",
-            Description = "Раскладка экранирования АМЭ: находит пульт и отдаёт девять клеток " +
-                          "квадрата в том порядке, в каком их занимать, плюс клетку выхода и " +
-                          "клетку подхода к пульту. Проверено заранее: пульт остаётся снаружи, " +
-                          "к нему есть подход, а укладка отступает наружу и не запирает тебя " +
-                          "внутри. Считай геометрию этим инструментом, а не в уме.",
+            Description = L.T(
+                "Раскладка экранирования АМЭ: находит пульт и отдаёт девять клеток " +
+                "квадрата в том порядке, в каком их занимать, плюс клетку выхода и " +
+                "клетку подхода к пульту. Проверено заранее: пульт остаётся снаружи, " +
+                "к нему есть подход, а укладка отступает наружу и не запирает тебя " +
+                "внутри. Считай геометрию этим инструментом, а не в уме.",
+                "AME shielding layout: finds the controller and returns the nine cells of " +
+                "the square in the order to occupy them, plus the exit cell and the cell " +
+                "for approaching the controller. Checked in advance: the controller stays " +
+                "outside, it has an approach path, and the packing steps outward so you are " +
+                "not locked inside. Count the geometry with this tool, not in your head."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
                 """,
@@ -82,28 +99,38 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "step",
-            Description = "Сделать несколько шагов в одну сторону. Для точной доводки в комнате, " +
-                          "когда идти через полстанции не нужно. На дальние расстояния — goto.",
+            Description = L.T(
+                "Сделать несколько шагов в одну сторону. Для точной доводки в комнате, " +
+                "когда идти через полстанции не нужно. На дальние расстояния — goto.",
+                "Take several steps in one direction. For fine positioning in a room when " +
+                "you do not need to cross half the station. For long distances — goto."),
             GameAction = true,
-            SchemaJson = """
-                {"type":"object","required":["dir"],"additionalProperties":false,"properties":{
-                "dir":{"type":"string","enum":["север","юг","запад","восток"],"description":"Куда шагать."},
-                "count":{"type":"integer","minimum":1,"maximum":10,"default":1,"description":"Сколько тайлов."}}}
-                """,
+            SchemaJson =
+                "{\"type\":\"object\",\"required\":[\"dir\"],\"additionalProperties\":false,\"properties\":{" +
+                "\"dir\":{\"type\":\"string\",\"enum\":" + s.Locale.DirEnumJson +
+                ",\"description\":\"" + s.Locale.T("Куда шагать.", "Which way to step.") + "\"}," +
+                "\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10,\"default\":1,\"description\":\"" +
+                s.Locale.T("Сколько тайлов.", "How many tiles.") + "\"}}}",
             Handler = (a, ct) => StepAsync(s, a, ct),
         });
 
-        // ----------------------------------------------------------------- глаза
+        // ----------------------------------------------------------------- eyes
 
         r.Register(new AiTool
         {
             Name = "look",
-            Description = "Осмотреться вокруг СЕБЯ. Видишь то, что видел бы человек на твоём " +
-                          "месте: рядом и не за стеной. Возвращает список с хендлами — ими потом " +
-                          "адресуются остальные инструменты. У каждой строки две пары чисел: " +
-                          "Δ(dx,dy) — смещение от тебя на момент вызова, и следом абсолютные " +
-                          "координаты сетки. В goto подставляй ВТОРУЮ пару как есть, складывать " +
-                          "ничего не надо.",
+            Description = L.T(
+                "Осмотреться вокруг СЕБЯ. Видишь то, что видел бы человек на твоём " +
+                "месте: рядом и не за стеной. Возвращает список с хендлами — ими потом " +
+                "адресуются остальные инструменты. У каждой строки две пары чисел: " +
+                "Δ(dx,dy) — смещение от тебя на момент вызова, и следом абсолютные " +
+                "координаты сетки. В goto подставляй ВТОРУЮ пару как есть, складывать " +
+                "ничего не надо.",
+                "Look around YOURSELF. You see what a human in your place would see: nearby " +
+                "and not behind a wall. Returns a list with handles — the other tools address " +
+                "those. Each line has two number pairs: Δ(dx,dy) is the offset from you at " +
+                "call time, then absolute grid coordinates. For goto, plug in the SECOND pair " +
+                "as-is; do not add anything."),
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{
                 "kind":{"type":"string","enum":["door","crew","apc","camera","airalarm","power","canister","computer","locker","device","obj"],"description":"Показать только объекты этого вида."}}}
@@ -114,9 +141,13 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "examine",
-            Description = "Рассмотреть одну вещь вблизи и прочитать её описание — то же, что видит " +
-                          "игрок, когда осматривает предмет. Так узнают, сварен ли болт, заряжена " +
-                          "ли батарея и что вообще перед тобой.",
+            Description = L.T(
+                "Рассмотреть одну вещь вблизи и прочитать её описание — то же, что видит " +
+                "игрок, когда осматривает предмет. Так узнают, сварен ли болт, заряжена " +
+                "ли батарея и что вообще перед тобой.",
+                "Examine one thing up close and read its description — the same as a player " +
+                "sees when examining an item. That is how you learn whether a bolt is welded, " +
+                "whether a battery is charged, and what is in front of you."),
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
                 "target":{"type":"string","description":"Хендл из look."}}}
@@ -124,16 +155,21 @@ public sealed partial class AiBorgSystem
             Handler = (a, ct) => ExamineAsync(s, a, ct),
         });
 
-        // ------------------------------------------------------------------ руки
+        // ------------------------------------------------------------------ hands
 
         r.Register(new AiTool
         {
             Name = "use",
-            Description = "Нажать на цель: открыть дверь, включить машину, нажать кнопку. Надо " +
-                          "стоять рядом — сначала goto, потом use. Чтобы ПРИМЕНИТЬ инструмент " +
-                          "(отжать, сварить, вскрыть, прозвонить), назови его в 'tool' — робот сам " +
-                          "возьмёт его в руку. Инструменты у тебя из выбранного модуля; какие есть, " +
-                          "видно в строке SELF.",
+            Description = L.T(
+                "Нажать на цель: открыть дверь, включить машину, нажать кнопку. Надо " +
+                "стоять рядом — сначала goto, потом use. Чтобы ПРИМЕНИТЬ инструмент " +
+                "(отжать, сварить, вскрыть, прозвонить), назови его в 'tool' — робот сам " +
+                "возьмёт его в руку. Инструменты у тебя из выбранного модуля; какие есть, " +
+                "видно в строке SELF.",
+                "Press the target: open a door, turn on a machine, press a button. You must " +
+                "stand next to it — goto first, then use. To APPLY a tool (pry, weld, hack, " +
+                "probe), name it in 'tool' — the borg will put it in hand itself. Your tools " +
+                "come from the selected module; what you have is visible in the SELF line."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -147,8 +183,11 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "pickup",
-            Description = "Взять предмет в свободную руку. Свободные руки зависят от выбранного " +
-                          "модуля — см. module.",
+            Description = L.T(
+                "Взять предмет в свободную руку. Свободные руки зависят от выбранного " +
+                "модуля — см. module.",
+                "Pick up an item into a free hand. Free hands depend on the selected " +
+                "module — see module."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -160,7 +199,9 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "drop",
-            Description = "Положить то, что держишь в активной руке, себе под ноги.",
+            Description = L.T(
+                "Положить то, что держишь в активной руке, себе под ноги.",
+                "Drop what you are holding in the active hand at your feet."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","additionalProperties":false,"properties":{}}
@@ -171,9 +212,13 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "hit",
-            Description = "Ударить цель тем, что в активной руке, а если оружия нет — корпусом. " +
-                          "Это применение силы: у него бывают последствия, и законы силикона на " +
-                          "тебя распространяются.",
+            Description = L.T(
+                "Ударить цель тем, что в активной руке, а если оружия нет — корпусом. " +
+                "Это применение силы: у него бывают последствия, и законы силикона на " +
+                "тебя распространяются.",
+                "Hit the target with what is in the active hand, or with the chassis if " +
+                "there is no weapon. This is use of force: it has consequences, and silicon " +
+                "laws apply to you."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -185,9 +230,13 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "shoot",
-            Description = "Выстрелить в цель из встроенного ствола или из оружия в руке. " +
-                          "Нужна прямая видимость: сквозь стену не попасть. Это применение " +
-                          "силы, и законы силикона на тебя распространяются.",
+            Description = L.T(
+                "Выстрелить в цель из встроенного ствола или из оружия в руке. " +
+                "Нужна прямая видимость: сквозь стену не попасть. Это применение " +
+                "силы, и законы силикона на тебя распространяются.",
+                "Shoot the target with the built-in gun or with a weapon in hand. " +
+                "You need line of sight: you cannot hit through a wall. This is use of " +
+                "force, and silicon laws apply to you."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -199,8 +248,11 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "module",
-            Description = "Сменить рабочий модуль — это меняет набор инструментов у тебя в руках. " +
-                          "Без нужного модуля соответствующая работа просто не делается.",
+            Description = L.T(
+                "Сменить рабочий модуль — это меняет набор инструментов у тебя в руках. " +
+                "Без нужного модуля соответствующая работа просто не делается.",
+                "Switch the working module — this changes the set of tools in your hands. " +
+                "Without the right module the matching job simply is not done."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["name"],"additionalProperties":false,"properties":{
@@ -212,10 +264,15 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "console",
-            Description = "Пульт машины: без 'action' показывает показания и список кнопок, с " +
-                          "'action' — нажимает кнопку. Так управляют реактором, шлюзовыми " +
-                          "контроллерами, консолями. Надо стоять рядом — до двух тайлов, считая " +
-                          "по диагонали, и без стены между вами.",
+            Description = L.T(
+                "Пульт машины: без 'action' показывает показания и список кнопок, с " +
+                "'action' — нажимает кнопку. Так управляют реактором, шлюзовыми " +
+                "контроллерами, консолями. Надо стоять рядом — до двух тайлов, считая " +
+                "по диагонали, и без стены между вами.",
+                "Machine panel: without 'action' it shows readings and the button list, " +
+                "with 'action' it presses a button. That is how you operate a reactor, " +
+                "airlock controllers, consoles. You must stand next to it — up to two tiles " +
+                "including diagonally, with no wall between you."),
             GameAction = true,
             SchemaJson = """
                 {"type":"object","required":["target"],"additionalProperties":false,"properties":{
@@ -223,9 +280,9 @@ public sealed partial class AiBorgSystem
                 "action":{"type":"string","description":"Имя кнопки. Без него — только показания и список."},
                 "args":{"type":"object","description":"Аргументы кнопки, если она их требует."}}}
                 """,
-            // Драйвер общий с ядром: он строится отражением по типам BUI-сообщений и про тело не
-            // знает ничего. Различаются только ворота — у ядра вайтлист и камеры, у борга
-            // «дотянулся рукой».
+            // The driver is shared with the core: it's built via reflection over BUI message types
+            // and knows nothing about the body. Only the gate differs — the core has a whitelist and
+            // cameras, the borg has "reached it by hand."
             Handler = (a, ct) => _host.DeviceUiAsync(s, a, ct, param: "target", gate: (sess, uid) =>
                 _interaction.InRangeUnobstructed(sess.Brain, uid, ConsoleReachTiles)
                     ? null
@@ -233,18 +290,21 @@ public sealed partial class AiBorgSystem
                         retry: "move_first")),
         });
 
-        // ------------------------------------------------------------------ речь
+        // ------------------------------------------------------------------ speech
         //
-        // Обработчики берутся у хоста, а схемы и описания пишутся здесь: у борга другой перечень
-        // каналов и другая слышимость («рядом с собой», а не «рядом со своим ядром»). Описание
-        // инструмента едет в замороженный префикс и для модели является единственным источником
-        // правды о её возможностях, так что общая формулировка была бы не экономией, а враньём.
+        // Handlers come from the host, but the schemas and descriptions are written here: the borg
+        // has a different channel list and different audibility ("near yourself" rather than "near
+        // your core"). The tool description rides in the frozen prefix and is the model's only
+        // source of truth about its own capabilities, so a shared wording would be a lie, not savings.
 
         r.Register(new AiTool
         {
             Name = "say",
-            Description = "Сказать вслух рядом с собой. Слышат те, кто стоит рядом с тобой. " +
-                          "Чтобы обратиться к экипажу по станции — radio.",
+            Description = L.T(
+                "Сказать вслух рядом с собой. Слышат те, кто стоит рядом с тобой. " +
+                "Чтобы обратиться к экипажу по станции — radio.",
+                "Speak aloud next to yourself. Those standing next to you hear it. " +
+                "To address the crew across the station — radio."),
             GameAction = true,
             Speech = true,
             SpokenText = AiTool.TextArgument,
@@ -258,14 +318,17 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "radio",
-            Description = "Передать по радиоканалу станции. Без 'channel' уходит в текущий канал " +
-                          "(он всегда написан в строке SELF).",
+            Description = L.T(
+                "Передать по радиоканалу станции. Без 'channel' уходит в текущий канал " +
+                "(он всегда написан в строке SELF).",
+                "Transmit on a station radio channel. Without 'channel' it goes to the " +
+                "current channel (always written in the SELF line)."),
             GameAction = true,
             Speech = true,
             SpokenText = AiTool.TextArgument,
-            // Собирается конкатенацией, а не интерполяцией: перечень каналов у каждого шасси свой,
-            // а JSON-схема кончается тремя подряд закрывающими скобками, которые в интерполируемом
-            // литерале пришлось бы экранировать до нечитаемости.
+            // Built by concatenation, not interpolation: the channel list is different for each
+            // chassis, and the JSON schema ends with three closing brackets in a row, which in an
+            // interpolated literal would have to be escaped into unreadability.
             SchemaJson = "{\"type\":\"object\",\"required\":[\"text\"],\"additionalProperties\":false,\"properties\":{"
                          + "\"channel\":{\"type\":\"string\",\"enum\":[" + channelEnum + "]},"
                          + "\"text\":{\"type\":\"string\",\"maxLength\":400}}}",
@@ -275,18 +338,21 @@ public sealed partial class AiBorgSystem
         r.Register(new AiTool
         {
             Name = "set_channel",
-            Description = "Переключить канал, в который уходит твоя речь по умолчанию. Текущий " +
-                          "канал всегда виден в строке SELF.",
+            Description = L.T(
+                "Переключить канал, в который уходит твоя речь по умолчанию. Текущий " +
+                "канал всегда виден в строке SELF.",
+                "Switch the channel your speech goes to by default. The current channel " +
+                "is always visible in the SELF line."),
             SchemaJson = "{\"type\":\"object\",\"required\":[\"channel\"],\"additionalProperties\":false,\"properties\":{"
                          + "\"channel\":{\"type\":\"string\",\"enum\":[" + channelEnum + "]}}}",
             Handler = (a, ct) => _host.SetChannelAsync(s, a, ct),
         });
 
-        // ------------------------------------------------------- общее для всех тел
+        // ------------------------------------------------------- common to all bodies
         _host.RegisterCommonTools(s, r);
 
-        // Ждущие версии ходьбы и применения. На проводе их нет — они существуют только для
-        // скрипта, где «дойти и продолжить» это одна строка, а не четыре хода.
+        // Waiting versions of walking and using. They aren't exposed over the wire — they exist only
+        // for the script, where "walk over and continue" is one line, not four turns.
         RegisterWaitingTools(s, r);
     }
 
@@ -333,8 +399,9 @@ public sealed partial class AiBorgSystem
             if (!TryResolveDestination(s, borg, to!, out var coords, out var what, out var why))
                 return ToolResult.Fail(ToolError.BadArgs, why, retry: "other_target");
 
-            // Через маршрут, а не напрямую: длинный переход не укладывается в лимит A*, и
-            // прямая цель через полстанции вернула бы «дороги нет» из совершенно проходимого места.
+            // Via the route system, not directly: a long trip doesn't fit within the A* limit, and a
+            // direct target halfway across the station would return "no path" from a perfectly
+            // traversable place.
             if (!TryStartRoute(borg, coords, what, out var routeWhy))
                 return ToolResult.Fail(ToolError.Refused, routeWhy, retry: "other_target");
 
@@ -359,11 +426,12 @@ public sealed partial class AiBorgSystem
             if (args.TryGetProperty("count", out var cEl) && cEl.ValueKind == JsonValueKind.Number)
                 count = Math.Clamp(cEl.GetInt32(), 1, 10);
 
-            // Английские названия приняты наравне с русскими.
+            // English names are accepted on equal footing with Russian ones.
             //
-            // Промпт и схема просят русские, но модель думает на смеси и регулярно пишет
-            // step{dir='north'}: поймано дважды на одном прогоне, каждый раз это стоило хода на
-            // отказ и хода на справку. Принимать оба написания дешевле, чем учить не ошибаться.
+            // The prompt and schema ask for Russian, but the model thinks in a mix and regularly
+            // writes step{dir='north'}: caught twice in one run, and each time it cost a turn on the
+            // failure and a turn on the correction. Accepting both spellings is cheaper than teaching
+            // it not to make the mistake.
             var delta = dir!.ToLowerInvariant() switch
             {
                 "север" or "north" => new Vector2(0, 1),
@@ -381,8 +449,8 @@ public sealed partial class AiBorgSystem
                 xform.ParentUid.IsValid() ? xform.ParentUid : borg,
                 xform.LocalPosition + delta * count);
 
-            // Через тот же маршрут, что и goto: свой код шага означал бы второй, тихо
-            // расходящийся способ передвижения.
+            // Through the same route system as goto: a separate stepping code path would mean a
+            // second way of moving, quietly diverging from the first.
             if (!TryStartRoute(borg, target, $"{count} шаг(ов) на {dir}", out var stepWhy))
                 return ToolResult.Fail(ToolError.Refused, stepWhy, retry: "other_target");
 
@@ -403,13 +471,14 @@ public sealed partial class AiBorgSystem
 
             var rows = new List<string>();
 
-            // Δ считается в координатах СЕТКИ, а не карты.
+            // Δ is computed in GRID coordinates, not map coordinates.
             //
-            // Расхождение систем координат ловится только на повёрнутой сетке — и ловится дорого.
-            // Модель читает своё положение из строки SELF (координаты сетки), прибавляет Δ из look
-            // и идёт по получившейся точке через goto, который тоже понимает сетку. Пока Δ считалась
-            // в координатах карты, эта арифметика молча давала чужой тайл: на боевом прогоне робот
-            // раз за разом уходил из АМЭ в соседний отсек с ТЭГ и не понимал, почему.
+            // A mismatch between coordinate systems only shows up on a rotated grid — and shows up
+            // expensively. The model reads its own position from the SELF line (grid coordinates),
+            // adds Δ from look, and walks to the resulting point via goto, which also works in grid
+            // coordinates. While Δ was computed in map coordinates, this arithmetic silently produced
+            // the wrong tile: on a live run the robot kept wandering out of the AME into the
+            // neighboring TEG compartment and couldn't figure out why.
             var grid = Transform(borg).GridUid;
             var toGrid = grid != null ? _xform.GetInvWorldMatrix(grid.Value) : Matrix3x2.Identity;
             var origin = Vector2.Transform(_xform.GetMapCoordinates(borg).Position, toGrid);
@@ -424,22 +493,23 @@ public sealed partial class AiBorgSystem
                 var there = Vector2.Transform(_xform.GetMapCoordinates(uid).Position, toGrid);
                 var d = there - origin;
 
-                // Две пары чисел, как в look у ядра: смещение и абсолютная точка.
+                // Two pairs of numbers, like in the core's look: the offset and the absolute point.
                 //
-                // Одной Δ мало, и это стоило раунда 133. Δ отсчитана от места, где робот стоял в
-                // МОМЕНТ вызова look, а он к следующему скрипту уже сдвинулся — и складывал
-                // старую Δ с новой позицией. Контроллер АМЭ у него по очереди оказывался в
-                // (29,-40), (28,-40) и (28,-39), квадрат экранирования вставал не туда, а сам он
-                // ходил вокруг и пробовал console с каждой стороны. Абсолютная пара сложения не
-                // требует: её подставляют в goto как есть.
+                // A single Δ isn't enough, and that cost round 133. Δ is measured from where the
+                // robot stood at the MOMENT look was called, but by the next script step it had
+                // already moved — and it kept adding the old Δ to its new position. Its AME
+                // controller ended up, in turn, at (29,-40), (28,-40), and (28,-39), the shielding
+                // square went up in the wrong place, and the robot itself walked around trying
+                // console from every side. The absolute pair needs no addition: it's plugged into
+                // goto as-is.
                 rows.Add($"{handle} | {Identity.Name(uid, EntityManager)} | {_host.ShortState(uid)} " +
                          $"| Δ({d.X:F0},{d.Y:F0}) ({there.X:F0},{there.Y:F0})");
             }
 
             return ToolResult.Success(new Dictionary<string, object?>
             {
-                ["видно"] = rows.Count,
-                ["объекты"] = rows,
+                [s.Locale.Visible] = rows.Count,
+                [s.Locale.Objects] = rows,
             });
         }, ct);
     }
@@ -457,7 +527,8 @@ public sealed partial class AiBorgSystem
                 return ToolResult.Fail(ToolError.NotVisible, "отсюда не видно — подойди ближе",
                     retry: "move_first");
 
-            // Та же строка, что читает игрок. FormattedMessage несёт разметку, модели она не нужна.
+            // The same string the player reads. FormattedMessage carries markup, and the model
+            // doesn't need it.
             var text = _examine.GetExamineText(target, borg).ToString();
 
             return ToolResult.Success(new Dictionary<string, object?>
@@ -469,12 +540,13 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Почему до машины не дотянуться — с расстоянием, а не «сначала подойди».
+    /// Why the machine can't be reached — with a distance, not just "go there first."
     ///
-    /// Отказ «сначала goto к этой машине» на боевом прогоне пришёл роботу ПОСЛЕ того, как он к ней
-    /// сходил: клетки вокруг были заняты ящиками, ближе он подойти не мог, и совет повторить то,
-    /// что уже сделано, отправил его на второй круг. Расстояние отличает «ты далеко» от «ты рядом,
-    /// но между вами что-то стоит», а это два разных следующих шага.
+    /// The failure "goto that machine first" reached a robot on a live run AFTER it had already gone
+    /// there: the cells around it were occupied by crates, it couldn't get any closer, and advice to
+    /// repeat what was already done sent it on a second lap. The distance tells "you're far away"
+    /// apart from "you're close, but something is standing between you," and those are two different
+    /// next steps.
     /// </summary>
     private string Unreachable(EntityUid borg, EntityUid target, float reach = ReachTiles)
     {
@@ -498,9 +570,9 @@ public sealed partial class AiBorgSystem
             var beforeSnap = Snapshot(target);
             var before = _host.ShortState(target);
 
-            // Номер следующего отложенного действия — так узнаём, что оно вообще началось.
-            // Приём взят у апстримового InteractWithOperator: у DoAfter нет события «я стартовал»,
-            // зато счётчик на компоненте увеличивается ровно на запуск.
+            // The id of the next deferred action — this is how we learn it even started.
+            // The trick is taken from the upstream InteractWithOperator: DoAfter has no "I started"
+            // event, but the counter on the component increments by exactly one per launch.
             var beforeDoAfter = TryComp<Content.Shared.DoAfter.DoAfterComponent>(borg, out var da)
                 ? da.NextId
                 : (ushort) 0;
@@ -509,12 +581,12 @@ public sealed partial class AiBorgSystem
                            && args.TryGetProperty("with_item", out var wi)
                            && wi.ValueKind == JsonValueKind.True;
 
-            // Назван инструмент — переложить его в рабочую руку.
+            // A tool was named — move it into the working hand.
             //
-            // Без этого набор инструментов модуля бесполезен наполовину: рабочая рука одна, а
-            // инструментов шесть, и «применить» уходило тем, что оказалось активным. На запуске
-            // реактора это стоило отладки — упаковка экранирования требует ПРОЗВОНКИ (мультитул),
-            // а в руке был лом, и вскрытие молча не срабатывало.
+            // Without this, the module's tool set is half useless: there's one working hand and six
+            // tools, and "use" went out with whatever happened to be active. During reactor startup
+            // this cost debugging time — a shielding flatpack requires ZAPPING with a multitool, and
+            // the crowbar was in hand instead, and the unpacking silently failed to trigger.
             string? toolUsed = null;
 
             if (StationAiAgentSystem.TryGetString(args, "tool", out var toolName)
@@ -537,12 +609,12 @@ public sealed partial class AiBorgSystem
                 {
                     var have = string.Join(", ", _hands.EnumerateHeld(borg).Select(h => Name(h)));
 
-                    // Не просто «нет», а КАКОЙ модуль его даёт.
+                    // Not just "no," but WHICH module provides it.
                     //
-                    // На боевом прогоне модель выбрала модуль prying — он даёт свойство, а не
-                    // руки, — осталась с пустыми руками и десять ходов перебирала названия
-                    // инструмента, потому что отказ «смени модуль» не говорил, на какой. Отказ
-                    // обязан указывать следующий шаг, иначе он просто съедает ход.
+                    // On a live run the model picked the prying module — it grants a property, not
+                    // hands — was left with empty hands, and spent ten turns cycling through tool
+                    // names because the failure "switch modules" didn't say to which one. A failure
+                    // must point to the next step, otherwise it just burns a turn.
                     var where = FindModuleWithTool(borg, toolName!);
 
                     var detail = where != null
@@ -559,18 +631,19 @@ public sealed partial class AiBorgSystem
 
             if (withItem)
             {
-                // Полный путь клика игрока: движок сам решит, пустая рука это или предмет в руке.
+                // The full player-click path: the engine itself decides whether the hand is empty or
+                // holding an item.
                 _interaction.UserInteraction(borg, Transform(target).Coordinates, target);
             }
             else
             {
-                // Нажатие, а НЕ клик, и это не мелочь.
+                // Activation, NOT a click, and that's not a minor detail.
                 //
-                // У борга в руке почти всегда несъёмный инструмент модуля, а клик с инструментом
-                // означает «применить инструмент»: лом по шлюзу — это отжатие с долгим DoAfter,
-                // а не «открой». На бою это выглядело так — робот стоит вплотную к двери, use
-                // отвечает «ok», дверь закрыта. Человек в этом случае жмёт E, что и делает
-                // InteractionActivate.
+                // The borg almost always has a module's unremovable tool in hand, and clicking with a
+                // tool means "apply the tool": a crowbar on an airlock is prying with a long DoAfter,
+                // not "open." On a live run this looked like this — the robot stands right next to
+                // the door, use responds with "ok," the door stays closed. A human in this case
+                // presses E, which is exactly what InteractionActivate does.
                 _interaction.InteractionActivate(borg, target);
             }
 
@@ -580,36 +653,36 @@ public sealed partial class AiBorgSystem
             var started = TryComp<Content.Shared.DoAfter.DoAfterComponent>(borg, out var da2)
                           && da2.NextId != beforeDoAfter;
 
-            // Запомнить начатое действие: ждущая версия use (её зовёт скрипт) досмотрит его до
-            // конца и посчитает разницу заново — уже по факту, а не по первому мгновению.
+            // Remember the started action: the waiting version of use (called by the script) will
+            // watch it through to completion and recompute the diff — based on the final result, not
+            // the first instant.
             if (started)
                 _pending[borg] = new PendingAction(beforeDoAfter, target, beforeSnap);
 
             var changes = Diff(beforeSnap, afterSnap);
 
-            // Три разных исхода под одной вывеской «ok» — это и был главный дефект инструмента.
-            // Теперь они называются по-разному: началось долгое действие; что-то изменилось (и
-            // ЧТО именно); ничего не вышло (и ПОЧЕМУ).
+            // Three different outcomes under one "ok" label — that was the tool's main defect.
+            // Now they're named differently: a long action started; something changed (and WHAT
+            // exactly); nothing worked (and WHY).
             var result = new Dictionary<string, object?>
             {
-                ["было"] = before,
-                ["стало"] = after,
+                [s.Locale.Was] = before,
+                [s.Locale.Became] = after,
             };
 
             if (started)
             {
-                result["итог"] = "действие НАЧАЛОСЬ и занимает время. СТОЙ НА МЕСТЕ и жди " +
-                                 "наблюдения: шаг в сторону отменяет его, и всё придётся начинать заново";
+                result[s.Locale.Outcome] = s.Locale.OutcomeStarted;
             }
             else if (changes.Count > 0)
             {
-                result["итог"] = "получилось";
-                result["изменилось"] = changes;
+                result[s.Locale.Outcome] = s.Locale.OutcomeOk;
+                result[s.Locale.Changed] = changes;
             }
             else
             {
-                result["итог"] = "НЕ ПОЛУЧИЛОСЬ";
-                result["почему"] = Explain(target, toolUsed, beforeSnap, afterSnap);
+                result[s.Locale.Outcome] = s.Locale.OutcomeFailed;
+                result[s.Locale.Why] = Explain(target, toolUsed, beforeSnap, afterSnap);
             }
 
             return ToolResult.Effected(Identity.Name(target, EntityManager), result);

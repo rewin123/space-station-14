@@ -1,9 +1,10 @@
-# Мост к подписке Grok. Установка:
+# Bridge to the Grok subscription. Installation:
 #   cp Tools/grokbridge/grok-bridge.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now grok-bridge
 #
-# Юнит пользовательский, как ss14-aksioma и llama-swap: root на этой машине из песочницы
-# недоступен, да и не нужен — мост слушает loopback и читает файлы из домашнего каталога.
+# A user unit, like ss14-aksioma and llama-swap: root is unreachable from the sandbox on this
+# machine, and unnecessary anyway — the bridge listens on loopback and reads files from the
+# home directory.
 
 [Unit]
 Description=Мост OpenAI-совместимого API к подписке Grok (для ss14-aksioma)
@@ -16,10 +17,10 @@ Type=simple
 ExecStart=/usr/bin/python3 /home/rewin/projects/ss14_ai/Tools/grokbridge/grokbridge.py
 WorkingDirectory=/home/rewin/projects/ss14_ai/Tools/grokbridge
 
-# Прокси НЕ наследуется намеренно. Пользовательский юнит и так не видит переменных из шелла,
-# но записать это стоит: auth.x.ai и cli-chat-proxy.grok.com отвечают напрямую, а лишний хоп —
-# это лишняя причина, по которой вход однажды повиснет без объяснений. Если выход через
-# Германию когда-нибудь понадобится, он включается одной строкой:
+# The proxy is deliberately NOT inherited. A user unit already doesn't see shell variables
+# anyway, but it's worth writing down: auth.x.ai and cli-chat-proxy.grok.com respond directly,
+# and an extra hop is just one more reason login could hang someday with no explanation. If a
+# route through Germany is ever needed, it's turned on with one line:
 #   Environment=GROK_BRIDGE_PROXY=http://127.0.0.1:10809
 Environment=GROK_BRIDGE_BIND=127.0.0.1:8318
 Environment=GROK_BRIDGE_SESSION=/home/rewin/projects/ss14_ai/ai_data/grok.session.json

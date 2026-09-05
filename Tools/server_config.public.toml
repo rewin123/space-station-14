@@ -215,7 +215,7 @@ station_name = "Аксиома"
 
 # ---- Где это всё живёт ----
 #
-# Сервер поднимает SS14.Watchdog как пользовательский systemd-юнит ss14-aksioma.service.
+# Сервер поднимает SS14.Watchdog (раньше пользовательский systemd-юнит ss14-aksioma.service).
 # Рабочий файл конфига теперь /home/rewin/ss14-watchdog/instances/aksioma/config.toml,
 # база (вайтлист, баны, преференции) — там же в data/. Подробности и команды управления:
 # /home/rewin/ss14-watchdog/README.md

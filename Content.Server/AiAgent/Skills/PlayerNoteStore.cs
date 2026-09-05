@@ -8,15 +8,15 @@ using Content.Server.AiAgent.Bus;
 
 namespace Content.Server.AiAgent.Skills;
 
-/// <summary>Одна заметка: слаг (он же имя файла), отображаемое имя и записи.</summary>
+/// <summary>One note: a slug (also the file name), a display name, and entries.</summary>
 public sealed class PlayerNote
 {
     public required string Slug { get; init; }
 
     /// <summary>
-    /// Имя в том виде, в каком оно впервые прозвучало. Живёт в заголовке файла, а не в его имени:
-    /// слаг лишён регистра, пробелов и всего, что нельзя пускать в путь, и показывать его модели
-    /// значило бы показывать «иван-петров» вместо «Иван Петров».
+    /// The name as it was first spoken. Lives in the file's header, not in its name: the slug is
+    /// stripped of case, spaces and everything that can't go into a path, and showing it to the
+    /// model would mean showing "ivan-petrov" instead of "Ivan Petrov".
     /// </summary>
     public required string Name { get; set; }
 
@@ -30,31 +30,32 @@ public sealed record NoteResult(
     string? Usage = null);
 
 /// <summary>
-/// Заметки о персонажах: один файл на человека, переживают смену.
+/// Notes about characters: one file per person, surviving the shift.
 ///
-/// <b>Зачем отдельно от <see cref="MemoryStore"/>.</b> Там рядом с памятью о станции жил второй
-/// файл, <c>CREW.md</c>, под людей своей смены, и он стирался на разборе раунда. На живом сервере
-/// это дало обратный задуманному результат: агент перестал писать в стираемый файл и сложил людей
-/// в <c>MEMORY.md</c>, который переживает раунды, — а тот упёрся в свой лимит и перестал принимать
-/// что-либо вообще. <c>CREW.md</c> больше нет; люди целиком живут здесь.
-/// Здесь лимит на ЗАМЕТКУ, а не на хранилище, поэтому переполненная заметка об одном человеке не
-/// запирает запись обо всех остальных.
+/// <b>Why separate from <see cref="MemoryStore"/>.</b> A second file used to live there alongside the
+/// station memory, <c>CREW.md</c>, for the people of the current shift, and it got wiped at the round
+/// review. On the live server this produced the opposite of the intended result: the agent stopped
+/// writing to the file that gets wiped and piled people into <c>MEMORY.md</c>, which survives
+/// rounds — and that one hit its limit and stopped accepting anything at all. <c>CREW.md</c> is gone;
+/// people live here entirely. The limit here is per NOTE, not per store, so one person's overflowing
+/// note doesn't lock out writing about everyone else.
 ///
-/// <b>Что скопировано у соседей по каталогу и почему.</b> Правка только фрагментом
-/// (<see cref="MemoryStore"/>: кто может переписать файл целиком, однажды вернёт укороченную
-/// версию и потеряет всё). Матчинг по короткой уникальной подстроке (модель помнит суть, а не
-/// байты). Сокращение разрешено всегда, даже сверх лимита, иначе переполненная заметка не чинится.
-/// Запись через tmp + rename с откатом правки в памяти при отказе диска, чтобы диск и память не
-/// разошлись. <see cref="LoadFromDisk"/> не опустошает библиотеку при ошибке чтения.
+/// <b>What was copied from its neighbours in the directory, and why.</b> Fragment-only edits
+/// (<see cref="MemoryStore"/>: whoever is allowed to rewrite the file wholesale will eventually
+/// return a shortened version and lose everything). Matching by a short unique substring (the model
+/// remembers the gist, not the bytes). Shrinking is always allowed, even past the limit, otherwise an
+/// overflowing note can never be repaired. Writing through tmp + rename with an in-memory rollback on
+/// disk failure, so disk and memory never diverge. <see cref="LoadFromDisk"/> does not empty the
+/// library on a read error.
 ///
-/// <b>Чего здесь намеренно НЕТ.</b> Индекса в системном промпте. У <see cref="SkillStore"/> он
-/// есть, и на 167 скиллах это уже около 20 КБ замороженного префикса; персонажей за месяцы станет
-/// больше, и такой индекс съел бы окно. Заметка открывается инструментом, а о её существовании
-/// напоминает строка NOTE в наблюдении.
+/// <b>What is deliberately NOT here.</b> An index in the system prompt. <see cref="SkillStore"/> has
+/// one, and at 167 skills that is already around 20 KB of frozen prefix; the number of characters
+/// will grow over months, and such an index would eat the window. A note is opened by a tool, and a
+/// NOTE line in the observation is what reminds the agent it exists.
 /// </summary>
 public sealed class PlayerNoteStore
 {
-    /// <summary>Тот же разделитель, что в <see cref="MemoryStore"/>: модель уже знает этот формат.</summary>
+    /// <summary>The same delimiter as <see cref="MemoryStore"/>: the model already knows this format.</summary>
     public const string Delimiter = MemoryStore.Delimiter;
 
     private readonly string _dir;
@@ -62,42 +63,43 @@ public sealed class PlayerNoteStore
     private readonly Dictionary<string, PlayerNote> _notes = new();
 
     /// <summary>
-    /// Стор читают с ДВУХ потоков. Инструменты заметок работают на потоке агента (они трогают
-    /// файлы, а не сущности, и потому намеренно не маршалятся), а <see cref="TryPeek"/> дёргается
-    /// с главного потока из обработчиков речи, когда надо решить, вешать ли подсказку. Реальной
-    /// конкуренции нет, но лок стоит ноль и снимает «Collection was modified», который иначе
-    /// вылезет ровно под нагрузкой.
+    /// The store is read from TWO threads. The note tools run on the agent thread (they touch files,
+    /// not entities, and so deliberately do not marshal), while <see cref="TryPeek"/> is called from
+    /// the main thread by speech handlers, when it needs to decide whether to attach a hint. There is
+    /// no real contention, but the lock costs nothing and removes a "Collection was modified" that
+    /// would otherwise surface exactly under load.
     /// </summary>
     private readonly object _sync = new();
 
     /// <summary>
-    /// Куда сообщать о правках, либо null, когда отладочная шина выключена.
+    /// Where to report edits, or null when the debug bus is off.
     ///
-    /// Через <see cref="AttachSink"/>, а не через конструктор, по той же причине, что у соседей:
-    /// <c>ReloadAgentFiles</c> пересоздаёт стор целиком, и сток, привязанный к первому экземпляру,
-    /// продолжал бы описывать хранилище, в которое больше никто не пишет.
+    /// Through <see cref="AttachSink"/> rather than the constructor, for the same reason as its
+    /// neighbours: <c>ReloadAgentFiles</c> rebuilds the store wholesale, and a sink attached to the
+    /// first instance would keep describing a store nobody writes to any more.
     /// </summary>
     private IAgentEventSink? _sink;
 
     /// <summary>
-    /// Лимит в СИМВОЛАХ, как у соседей: символы не зависят от модели, и агент может пересчитать их
-    /// сам, когда его просят сократить.
+    /// Limit in CHARACTERS, like its neighbours: characters are model-independent, and the agent can
+    /// count them itself when asked to shorten something.
     /// </summary>
     public int NoteLimit { get; init; } = 2000;
 
     /// <summary>
-    /// Потолок на число заметок. Упирается только создание новых — существующие правятся дальше,
-    /// иначе полное хранилище нельзя было бы разгрести.
+    /// Ceiling on the number of notes. Only blocks creating new ones — existing ones are still
+    /// editable, otherwise a full store could never be worked back down.
     /// </summary>
     public int MaxNotes { get; init; } = 2000;
 
     /// <summary>
-    /// Потолок на ОДНУ запись. Без него один пересказ смены занимает всю заметку и упирает её в
-    /// лимит с первого раза, а заметка о человеке — это несколько строк, а не досье.
+    /// Ceiling on a SINGLE entry. Without it, one retelling of a shift takes up the whole note and
+    /// hits its limit on the first try, and a note about a person should be a few lines, not a
+    /// dossier.
     /// </summary>
     public int MaxEntryLength { get; init; } = 400;
 
-    /// <summary>Слаг обрезается здесь. В UTF-8 кириллица по два байта, так что 64 символа — это до 128 байт.</summary>
+    /// <summary>Slug truncation point. Cyrillic is two bytes in UTF-8, so 64 characters is up to 128 bytes.</summary>
     private const int MaxSlugLength = 64;
 
     private const int MaxConsolidationFailuresPerTurn = 3;
@@ -109,7 +111,7 @@ public sealed class PlayerNoteStore
         _sawmill = sawmill;
     }
 
-    /// <summary>Начать сообщать о правках. Зовётся из <c>ReloadAgentFiles</c>, по разу на экземпляр.</summary>
+    /// <summary>Start reporting edits. Called from <c>ReloadAgentFiles</c>, once per instance.</summary>
     public void AttachSink(IAgentEventSink sink)
     {
         lock (_sync)
@@ -132,13 +134,13 @@ public sealed class PlayerNoteStore
     }
 
     /// <summary>
-    /// Всё хранилище КОПИЯМИ, в устойчивом порядке — для снимка состояния.
+    /// The whole store, as COPIES, in stable order — for a state snapshot.
     /// </summary>
     /// <remarks>
-    /// Копиями, а не живыми объектами, в отличие от <c>SkillStore.All</c>: скилл — неизменяемая
-    /// запись, а <see cref="PlayerNote"/> держит изменяемый <see cref="List{T}"/>, и HTTP-поток,
-    /// обходящий его, пока поток агента дописывает запись, получил бы «Collection was modified»
-    /// в отладчике, то есть ровно там, где чинят чужие поломки.
+    /// Copies, not live objects, unlike <c>SkillStore.All</c>: a skill is an immutable record, while
+    /// <see cref="PlayerNote"/> holds a mutable <see cref="List{T}"/>, and an HTTP thread enumerating
+    /// it while the agent thread appends an entry would get a "Collection was modified" in the
+    /// debugger — exactly the place where other people's breakages get fixed.
     /// </remarks>
     public IReadOnlyList<PlayerNote> All
     {
@@ -157,25 +159,26 @@ public sealed class PlayerNoteStore
         }
     }
 
-    // ------------------------------------------------------------------ имя → файл
+    // ------------------------------------------------------------------ name → file
 
     /// <summary>
-    /// Имя персонажа → безопасный ключ.
+    /// Character name → safe key.
     ///
-    /// Это единственное место во всей подсистеме, где строка из-под контроля игрока превращается в
-    /// путь на диске, и потому единственное, где санитизация обязательна.
-    /// <see cref="SkillStore.Normalise"/> её не делает — там имя придумывает модель, и худшее, что
-    /// бывает, это кривой заголовок. Здесь имя выбирает игрок в редакторе персонажа, а модель
-    /// подставляет его в аргумент инструмента; персонаж по имени «../../SOUL» без этой функции
-    /// писал бы мимо каталога.
+    /// This is the only place in the whole subsystem where a string outside the player's control
+    /// turns into a path on disk, and therefore the only one where sanitisation is mandatory.
+    /// <see cref="SkillStore.Normalise"/> doesn't do it — there the model makes up the name, and the
+    /// worst that happens is a crooked title. Here the player picks the name in the character editor
+    /// and the model substitutes it into a tool argument; a character named "../../SOUL" would write
+    /// outside the directory without this function.
     ///
-    /// Метод не фильтрует чёрный список опасных последовательностей, а оставляет белый список
-    /// разрешённых символов: буквы, цифры, дефис. После этого ни «..», ни слэш, ни двоеточие, ни
-    /// абсолютный путь невыразимы в принципе — их нечем записать, а не «их вычистили».
-    /// <c>char.IsLetterOrDigit</c> пропускает Unicode, поэтому кириллица работает, как и у скиллов.
+    /// The method doesn't filter a blacklist of dangerous sequences, it keeps a whitelist of allowed
+    /// characters: letters, digits, hyphen. After that, neither "..", nor a slash, nor a colon, nor
+    /// an absolute path is expressible at all — there's nothing to write them with, rather than "they
+    /// got cleaned out". <c>char.IsLetterOrDigit</c> passes Unicode through, so Cyrillic works, same
+    /// as for skills.
     ///
-    /// Пустая строка на выходе — законный результат для имени вроде «...», и вызывающий обязан
-    /// отказать, а не молча писать в файл с пустым именем.
+    /// An empty string as output is a legitimate result for a name like "...", and the caller must
+    /// refuse rather than silently write to a file with an empty name.
     /// </summary>
     public static string Slugify(string? name)
     {
@@ -192,7 +195,7 @@ public sealed class PlayerNoteStore
                 sb.Append('-');
         }
 
-        // Схлопнуть дефисы: «Иван   Петров» и «Иван-Петров» должны дать один ключ.
+        // Collapse hyphens: "Ivan   Petrov" and "Ivan-Petrov" should give one key.
         var slug = sb.ToString();
         while (slug.Contains("--", StringComparison.Ordinal))
             slug = slug.Replace("--", "-", StringComparison.Ordinal);
@@ -202,8 +205,8 @@ public sealed class PlayerNoteStore
         if (slug.Length > MaxSlugLength)
             slug = slug[..MaxSlugLength].Trim('-');
 
-        // Сервер на Linux, но два байта страховки: на Windows файл с таким именем не создать,
-        // и отладочная копия хранилища на ноутбуке падала бы на ровном месте.
+        // The server runs on Linux, but two bytes of insurance: on Windows a file with such a name
+        // cannot be created, and a debug copy of the store on a laptop would fail for no reason.
         return Reserved.Contains(slug) ? slug + "-" : slug;
     }
 
@@ -216,16 +219,16 @@ public sealed class PlayerNoteStore
 
     private string PathFor(string slug) => Path.Combine(_dir, $"{slug}.md");
 
-    // ---------------------------------------------------------------- формат файла
+    // ---------------------------------------------------------------- file format
 
     /// <summary>
-    /// Заголовок с отображаемым именем, затем записи через разделитель. Не YAML — по той же
-    /// причине, что и у скиллов: модель ломает YAML достаточно часто, чтобы это стоило учитывать.
+    /// A header with the display name, then entries joined by the delimiter. Not YAML — for the same
+    /// reason as skills: the model breaks YAML often enough that it's worth accounting for.
     /// </summary>
     public static string Render(PlayerNote note) =>
         $"# {note.Name}\n{string.Join(Delimiter, note.Entries)}\n";
 
-    /// <summary>Разобрать файл. <c>null</c> — файл не наш или испорчен; вызывающий его пропустит.</summary>
+    /// <summary>Parse a file. <c>null</c> means the file isn't ours or is corrupted; the caller will skip it.</summary>
     public static PlayerNote? Parse(string raw, string slug)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -245,7 +248,7 @@ public sealed class PlayerNoteStore
 
         var body = brk < 0 ? string.Empty : text[(brk + 1)..];
 
-        // Сплит по ПОЛНОМУ разделителю, никогда по голому §: запись может законно его содержать.
+        // Split on the FULL delimiter, never on a bare §: an entry may legitimately contain one.
         var entries = body.Split(Delimiter)
             .Select(e => e.Trim())
             .Where(e => e.Length > 0)
@@ -291,8 +294,8 @@ public sealed class PlayerNoteStore
         }
         catch (Exception e)
         {
-            // Ранний выход БЕЗ очистки: сбой чтения каталога транзиентен, а опустошить библиотеку
-            // из-за него значит потерять всё накопленное там, где надо было просто подождать.
+            // Early exit WITHOUT clearing: a directory read failure is transient, and emptying the
+            // library because of it means losing everything accumulated where waiting would do.
             _sawmill.Error($"каталог заметок не читается: {e.Message}");
             return;
         }
@@ -303,9 +306,9 @@ public sealed class PlayerNoteStore
             foreach (var (slug, note) in loaded)
                 _notes[slug] = note;
 
-            // Кадром на всё хранилище, а не по кадру на заметку. Перечитывание — единственный путь,
-            // которым заметка ИСЧЕЗАЕТ без собственного события: файл удалили руками или он перестал
-            // разбираться. Клиент, складывающий note.updated в карту, иначе держал бы призраков.
+            // One event for the whole store, not one per note. A reload is the only way a note
+            // DISAPPEARS without its own event: the file was deleted by hand, or it stopped parsing.
+            // A client folding note.updated into a map would otherwise keep ghosts around.
             _sink?.PlayerNotesReloaded(_notes.Values.ToList());
         }
 
@@ -313,11 +316,11 @@ public sealed class PlayerNoteStore
     }
 
     /// <summary>
-    /// Записать заметку на диск. Возвращает false и объясняет причину, а не проглатывает ошибку.
+    /// Write a note to disk. Returns false and explains why, rather than swallowing the error.
     ///
-    /// Проглотить — худший из доступных отказов: инструмент ответил бы «записано», куратор счёл бы
-    /// дело сделанным и не повторил, а урок исчез бы к следующей загрузке. Все вызывающие
-    /// откатывают правку в памяти, поэтому память и диск не расходятся.
+    /// Swallowing it is the worst available failure mode: the tool would answer "written", the
+    /// curator would consider the matter done and not retry, and the lesson would vanish by the next
+    /// load. Every caller rolls the in-memory edit back, so memory and disk never diverge.
     /// </summary>
     private bool TrySave(PlayerNote note, out string error)
     {
@@ -357,11 +360,11 @@ public sealed class PlayerNoteStore
         }
     }
 
-    // ----------------------------------------------------------------------- чтение
+    // ----------------------------------------------------------------------- reading
 
     /// <summary>
-    /// Есть ли заметка и сколько в ней записей. Дешёвая проверка для подсказки NOTE — её дёргают с
-    /// главного потока на каждую первую реплику, поэтому здесь только словарь и никакого диска.
+    /// Whether a note exists, and how many entries it has. A cheap check for the NOTE hint — it gets
+    /// called from the main thread on every first line spoken, so this is a dictionary lookup only, no disk.
     /// </summary>
     public bool TryPeek(string? name, out string display, out int entries)
     {
@@ -400,12 +403,13 @@ public sealed class PlayerNoteStore
     }
 
     /// <summary>
-    /// Поиск по неточному имени.
+    /// Search by an approximate name.
     ///
-    /// Сначала подстрока, потом Левенштейн — и, в отличие от <see cref="SkillStore.Nearest"/>, с
-    /// порогом и с устойчивым порядком. Без порога на мусорный запрос всё равно возвращались бы
-    /// три случайных имени, поданных модели как «похожие»; без tie-break порядок при равных
-    /// расстояниях определялся бы обходом словаря, то есть менялся бы между перезагрузками.
+    /// Substring first, then Levenshtein — and, unlike <see cref="SkillStore.Nearest"/>, with a
+    /// threshold and a stable order. Without the threshold, a garbage query would still return three
+    /// random names presented to the model as "similar"; without a tie-break, the order among equal
+    /// distances would be determined by dictionary enumeration order, i.e. it would change between
+    /// restarts.
     /// </summary>
     public IReadOnlyList<(string Name, int Entries, string Preview)> Search(string? approx)
     {
@@ -434,7 +438,7 @@ public sealed class PlayerNoteStore
                     var distance = Tools.AiToolRegistry.Distance(n.Slug, slug);
                     return (Note: n, Substring: substring, Distance: distance);
                 })
-                // Порог: опечатка в паре букв — это похоже, а совпадение «на треть» уже нет.
+                // Threshold: a typo in a couple of letters counts as similar, a "third of it matches" does not.
                 .Where(x => x.Substring || x.Distance <= Math.Max(2, slug.Length / 3))
                 .OrderByDescending(x => x.Substring)
                 .ThenBy(x => x.Distance)
@@ -449,14 +453,15 @@ public sealed class PlayerNoteStore
     private static (string Name, int Entries, string Preview) Row(PlayerNote n) =>
         (n.Name, n.Entries.Count, n.Entries.Count > 0 ? Preview(n.Entries[0], 60) : "(пусто)");
 
-    // ------------------------------------------------------------------------ запись
+    // ------------------------------------------------------------------------ writing
 
     /// <summary>
-    /// Добавить запись, создав заметку, если её ещё нет.
+    /// Add an entry, creating the note if it doesn't exist yet.
     ///
-    /// Штамп ставится ЗДЕСЬ, а не моделью: модель забудет, и через раунд заметка «взломал шкаф»
-    /// перестанет отличаться от сегодняшнего доклада. Приходит он параметром, а не берётся из
-    /// <c>DateTime.Now</c> внутри, чтобы тесты формата остались детерминированными.
+    /// The stamp is set HERE, not by the model: the model will forget, and after a round the note
+    /// "broke into a locker" will stop being distinguishable from today's report. It comes in as a
+    /// parameter rather than being taken from <c>DateTime.Now</c> internally, so format tests stay
+    /// deterministic.
     /// </summary>
     public NoteResult Add(string? name, string content, string stamp)
     {
@@ -515,7 +520,7 @@ public sealed class PlayerNoteStore
         }
     }
 
-    /// <summary>Заменить запись, содержащую <paramref name="oldText"/>.</summary>
+    /// <summary>Replace the entry containing <paramref name="oldText"/>.</summary>
     public NoteResult Replace(string? name, string oldText, string newContent)
     {
         var slug = Slugify(name);
@@ -554,7 +559,7 @@ public sealed class PlayerNoteStore
             var test = note.Entries.ToList();
             test[idx] = newContent;
 
-            // Сокращение разрешено всегда, даже сверх лимита, иначе переполненную заметку не починить.
+            // Shrinking is always allowed, even past the limit, otherwise an overflowing note can never be repaired.
             var grew = newContent.Length > note.Entries[idx].Length;
 
             if (newContent.Length > MaxEntryLength && grew)
@@ -580,8 +585,8 @@ public sealed class PlayerNoteStore
     }
 
     /// <summary>
-    /// Удалить запись. Если она была последней — удалить и файл: каталог, зарастающий пустыми
-    /// заметками, врёт поиску о том, кого агент знает.
+    /// Remove an entry. If it was the last one, remove the file too: a directory overgrown with empty
+    /// notes lies to search about who the agent knows.
     /// </summary>
     public NoteResult Remove(string? name, string oldText)
     {
@@ -624,9 +629,9 @@ public sealed class PlayerNoteStore
                 _notes.Remove(slug);
                 _consolidationFailures = 0;
 
-                // Надгробие: заметка ушла вместе с файлом, и записей в ней теперь ноль. Отдельного
-                // вида события на это нет намеренно — «новое целое значение ключа» здесь пусто,
-                // и клиент на пустом списке ключ удаляет.
+                // A tombstone: the note left along with the file, and it now has zero entries. There
+                // is deliberately no separate event kind for this — "the new whole value for the key"
+                // is empty here, and the client deletes the key on an empty list.
                 _sink?.PlayerNoteUpdated(note);
 
                 return new NoteResult(true, $"последняя запись удалена, заметка о «{note.Name}» закрыта");
@@ -642,19 +647,18 @@ public sealed class PlayerNoteStore
         }
     }
 
-    // ----------------------------------------------------------------------- хелперы
+    // ----------------------------------------------------------------------- helpers
 
     private static int Length(IEnumerable<string> entries) => string.Join(Delimiter, entries).Length;
 
     /// <summary>
-    /// Единственный успешный выход у всех трёх правок, и потому единственное место, где о них
-    /// сообщается.
+    /// The single successful exit of all three edits, and therefore the single place that reports
+    /// them.
     ///
-    /// Именно здесь, а не в <c>Add</c>/<c>Replace</c>/<c>Remove</c> по отдельности: сообщать надо
-    /// только после того, как <see cref="TrySave"/> подтвердил запись, а все они на отказе диска
-    /// откатывают правку в памяти и уходят через <see cref="NotWritten"/>. Событие, объявившее
-    /// запись, которой агент не увидит после перезагрузки, хуже отсутствия события — оно выглядит
-    /// достоверным.
+    /// Right here, not in <c>Add</c>/<c>Replace</c>/<c>Remove</c> separately: reporting must only
+    /// happen after <see cref="TrySave"/> has confirmed the write, and all three roll the in-memory
+    /// edit back on a disk failure and exit through <see cref="NotWritten"/>. An event announcing a
+    /// write the agent will not see after a reload is worse than no event at all — it looks credible.
     /// </summary>
     private NoteResult Success(PlayerNote note, string message)
     {
@@ -673,8 +677,8 @@ public sealed class PlayerNoteStore
     {
         _consolidationFailures++;
 
-        // Терминальный ответ после нескольких попыток: хрупкая запись не должна выесть ход целиком
-        // и проглотить реплику, которой ждёт экипаж.
+        // A terminal answer after a few attempts: a fragile write must not eat up the whole turn and
+        // swallow the reply the crew is waiting for.
         if (_consolidationFailures > MaxConsolidationFailuresPerTurn)
             return new NoteResult(false,
                 "запись пропущена — не трать на неё этот ход, ответь экипажу и попробуй позже",

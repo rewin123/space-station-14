@@ -8,27 +8,28 @@ using NUnit.Framework;
 namespace Content.AiBench;
 
 /// <summary>
-/// Режим скрипта против живого сервера: инструменты как функции Lua, фоновые процессы, управление.
+/// Script mode against a live server: tools as Lua functions, background processes, control.
 ///
 /// <para>
-/// Проверяется не «инструмент вернул ok», а мир и провод. Замер, ради которого режим написан:
-/// в боевом прогоне борга на 661 обращение к модели пришлось 680 вызовов инструментов — по одному
-/// кругу через LLM на каждое элементарное действие. Здесь доказывается, что один вызов
-/// <c>script</c> делает работу, которая раньше стоила бы десятка ходов, и что он при этом не
-/// получил ни одной дороги в мир мимо обычных ворот.
+/// What's checked isn't "the tool returned ok", but the world and the wire. The measurement the
+/// mode was written for: in a live borg run, 661 model calls came with 680 tool invocations — one
+/// round trip through the LLM per elementary action. This proves that a single <c>script</c> call
+/// does work that used to cost a dozen turns, and that it doesn't get a single road into the world
+/// that bypasses the usual gates.
 /// </para>
 /// </summary>
 [TestFixture]
 [Category("AiTools")]
 public sealed class ScriptToolTests
 {
-    // ------------------------------------------------------------------ или/или
+    // ------------------------------------------------------------------ either/or
 
     [Test]
     public async Task ScriptMode_ReplacesTheToolset_RatherThanExtendingIt()
     {
-        // Смешение дало бы модели два способа сделать одно и то же и заставило бы выбирать между
-        // ними на каждом ходу. Поэтому проверяются обе стороны: чего в проводе нет и чего в нём есть.
+        // Mixing the two would give the model two ways to do the same thing and force it to
+        // choose between them on every turn. Hence both sides are checked: what's absent from the
+        // wire and what's present on it.
         await using var w = await AiWorld.CreateScripted();
         var wire = await w.Wire();
 
@@ -57,7 +58,7 @@ public sealed class ScriptToolTests
         });
     }
 
-    // ------------------------------------------------------------------ работа
+    // ------------------------------------------------------------------ work
 
     [Test]
     public async Task Script_ActsOnTheWorld_ThroughTheSameTools()
@@ -79,7 +80,7 @@ public sealed class ScriptToolTests
     [Test]
     public async Task Script_LoopsWithoutAskingTheModelBetweenSteps()
     {
-        // Ровно то, ради чего всё затевалось: цикл по нескольким целям внутри ОДНОГО вызова.
+        // Exactly what all of this was built for: a loop over several targets inside ONE call.
         await using var w = await AiWorld.CreateScripted();
         var first = await w.Spawn("AirlockCommand");
         var second = await w.Spawn("AirlockCommand");
@@ -119,11 +120,11 @@ public sealed class ScriptToolTests
     [Test]
     public async Task Help_ComesFromTheToolSchemas_NotFromTheProse()
     {
-        // Дыра, которая стоила запуска реактора: в режиме скрипта схемы инструментов на провод не
-        // уходят, и всё, чего не пересказал промпт, для модели перестаёт существовать. Агент
-        // десять ходов не мог вставить банку в контроллер, потому что аргумент with_item жил
-        // только в схеме. Справка обязана читаться из реестра, иначе она разойдётся с ним на
-        // первой же правке инструмента.
+        // The hole that once cost a reactor startup: in script mode, tool schemas don't go out on
+        // the wire, and anything the prompt didn't restate stops existing for the model. The agent
+        // spent ten turns unable to insert a jar into the controller, because the with_item
+        // argument lived only in the schema. Help must be read from the registry, otherwise it
+        // will drift out of sync with it on the very next tool edit.
         await using var w = await AiWorld.CreateScripted();
 
         var listed = await w.Invoke("script", """{"code":"local r = help() for _, l in ipairs(r.effect['функции']) do print(l) end"}""");
@@ -139,13 +140,13 @@ public sealed class ScriptToolTests
         });
     }
 
-    // ------------------------------------------------------------------ ошибки
+    // ------------------------------------------------------------------ errors
 
     [Test]
     public async Task Script_WithAnUnknownFunction_IsRefusedBeforeAnythingHappens()
     {
-        // Плата за динамический язык, внесённая заранее: опечатка всплывает до первого действия,
-        // а не на середине, когда робот уже прошёл полстанции.
+        // The price of a dynamic language, paid up front: a typo surfaces before the first
+        // action, not halfway through, once the robot has already crossed half the station.
         await using var w = await AiWorld.CreateScripted();
         var door = await w.Spawn("AirlockCommand");
         var handle = await w.Handle(door);
@@ -186,8 +187,8 @@ public sealed class ScriptToolTests
     [Test]
     public async Task Script_CanSurviveARefusalWithPcall()
     {
-        // Конвенция режима целиком: отказ — исключение, терпимость — pcall. Без этого теста
-        // «отдельной обёртки must() нет» было бы утверждением без доказательства.
+        // The whole convention of the mode: a refusal is an exception, tolerating it is pcall.
+        // Without this test, "there's no separate must() wrapper" would be a claim with no proof.
         await using var w = await AiWorld.CreateScripted();
 
         var result = await w.Invoke("script",
@@ -201,13 +202,14 @@ public sealed class ScriptToolTests
         });
     }
 
-    // ------------------------------------------------------------------ фон
+    // ------------------------------------------------------------------ background
 
     /// <summary>
-    /// Остановить петлю, оставив сессию и её скрипты.
+    /// Stop the loop while keeping the session and its scripts.
     ///
-    /// Досылка итога живёт в тике, а не в петле, и без этого петля вычитала бы наблюдение раньше
-    /// проверки. Скриптов это не касается: их отмена связана с таблицей процессов, а не с петлёй.
+    /// Delivering the result lives in the tick, not in the loop, and without this the loop would
+    /// consume the observation before the check runs. This doesn't affect scripts: their
+    /// cancellation is tied to the process table, not to the loop.
     /// </summary>
     private static async Task Freeze(AiWorld w)
     {
@@ -218,10 +220,11 @@ public sealed class ScriptToolTests
     [Test]
     public async Task Script_LongerThanTheForeground_GoesToBackground_AndWakesTheAgentWhenDone()
     {
-        // Ход, висящий полминуты на длинном деле, — это агент, глухой всё это время. Поэтому
-        // длинный скрипт отпускают в фон, а итог приезжает наблюдением и будит петлю сам: без
-        // пробуждения модели пришлось бы опрашивать bp_get_output, а опрос стоит ровно того
-        // обращения к модели, ради экономии которого весь режим и написан.
+        // A turn stuck for half a minute on a long task means an agent deaf for that whole time.
+        // So a long script is released into the background, and the result arrives as an
+        // observation that wakes the loop by itself: without waking the model, it would have to
+        // poll bp_get_output, and polling costs exactly the model call that the whole mode was
+        // written to save.
         await using var w = await AiWorld.CreateScripted();
         await w.SetScriptForeground(100);
         await Freeze(w);
@@ -251,7 +254,8 @@ public sealed class ScriptToolTests
     [Test]
     public async Task BpGetOutput_ReturnsOnlyWhatIsNew()
     {
-        // Курсор здесь не удобство: без него каждый опрос заново вкладывал бы в диалог весь вывод.
+        // The cursor here isn't a convenience: without it, every poll would re-insert the whole
+        // output into the conversation.
         await using var w = await AiWorld.CreateScripted();
         await w.SetScriptForeground(50);
 
@@ -307,7 +311,8 @@ public sealed class ScriptToolTests
     [Test]
     public async Task SecondScript_IsRefusedWhileTheFirstIsWorking()
     {
-        // Тело одно, и два скрипта, оба двигающие его, — это не параллелизм, а драка за ноги.
+        // There's one body, and two scripts both moving it isn't parallelism, it's a fight over
+        // the legs.
         await using var w = await AiWorld.CreateScripted();
         await w.SetScriptForeground(50);
         await w.SetScriptProcesses(1);
@@ -326,7 +331,8 @@ public sealed class ScriptToolTests
     [Test]
     public async Task LosingTheAgent_KillsItsScripts()
     {
-        // Процесс переживает ход, но не сессию: иначе снятый агент продолжал бы двигать телом.
+        // A process outlives a turn, but not the session: otherwise a released agent would keep
+        // moving the body.
         await using var w = await AiWorld.CreateScripted();
         await w.SetScriptForeground(50);
 

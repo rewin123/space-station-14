@@ -280,11 +280,12 @@ public sealed class AgentEventBus
 
         public void PlayerNotesReloaded(IReadOnlyCollection<PlayerNote> notes)
         {
-            // Кадр несёт хранилище целиком, как и у скиллов. Это осознанный предел: одна заметка
-            // ограничена 2000 символами, но самих заметок может накопиться до 2000, и тогда кадр
-            // вырастет до мегабайтов, а перечитывание случается на каждой компакции. Когда каталог
-            // перестанет быть десятками файлов, здесь надо оставить только индекс (слаг, имя, число
-            // записей) и добавить маршрут за одной заметкой — сейчас это была бы сложность впрок.
+            // The frame carries the whole store, same as skills. This is a deliberate limit: one
+            // note is capped at 2000 characters, but the notes themselves can accumulate up to 2000,
+            // at which point the frame would grow to megabytes, and a reload happens on every
+            // compaction. Once the catalog is no longer dozens of files, this should be cut down to
+            // just an index (slug, name, entry count) with a separate route added for one note —
+            // right now that would be complexity nobody needs yet.
             var all = new List<object>(notes.Count);
             foreach (var n in notes)
                 all.Add(new { slug = n.Slug, name = n.Name, entries = n.Entries });

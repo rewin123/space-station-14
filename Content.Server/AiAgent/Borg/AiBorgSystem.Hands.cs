@@ -6,20 +6,22 @@ using Content.Shared.Silicons.Borgs.Components;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Руки.
+/// Hands.
 ///
 /// <para>
-/// Ключевое решение файла — <b>один инструмент <c>use</c> вместо трёх</b>. Апстримовый
-/// <c>InteractionSystem.UserInteraction</c> — это полный путь левого клика игрока: он сам
-/// разбирает, пусты ли руки, что в активной руке и что за цель, и разводит вызов по
-/// <c>InteractHand</c>, <c>InteractUsing</c> или <c>InteractionActivate</c>. Один вызов закрывает
-/// «применить предмет к цели», «открыть дверь» и «нажать кнопку» — и закрывает их <em>той же</em>
-/// проверкой дальности, доступа и <c>ActionBlocker</c>, что у человека.
+/// The key decision in this file is <b>one <c>use</c> tool instead of three</b>. Upstream's
+/// <c>InteractionSystem.UserInteraction</c> is the full path of a player's left click: it figures
+/// out on its own whether the hands are empty, what's in the active hand and what the target is,
+/// and dispatches the call to <c>InteractHand</c>, <c>InteractUsing</c>, or
+/// <c>InteractionActivate</c>. One call covers "use an item on a target," "open a door," and
+/// "press a button" — and covers them with the <em>same</em> range, access, and
+/// <c>ActionBlocker</c> checks a human gets.
 /// </para>
 /// <para>
-/// Расписывать это тремя инструментами значило бы заставить модель заранее решать, какой из
-/// трёх путей выберет движок, — знание, которого у неё нет и которое ей незачем иметь. README
-/// модуля меряет цену широкого набора прямо: 46 команд топят эту модель, ~13 работают.
+/// Spelling this out as three tools would mean forcing the model to decide in advance which of the
+/// three paths the engine will pick — knowledge it doesn't have and has no reason to need. The
+/// module's README measures the cost of a wide toolset directly: 46 commands sink this model,
+/// ~13 work.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -28,12 +30,12 @@ public sealed partial class AiBorgSystem
     [Dependency] private SharedHandsSystem _hands = default!;
 
     /// <summary>
-    /// Взять предмет в руку.
+    /// Pick up an item into a hand.
     /// </summary>
     /// <remarks>
-    /// У борга руки появляются вместе с выбранным модулем (<c>SelectModule</c> → <c>ProvideItems</c>),
-    /// и часть из них занята несъёмным инструментом. Поэтому «нет свободной руки» — штатный отказ,
-    /// а не поломка: он значит «смени модуль».
+    /// A borg's hands appear together with the selected module (<c>SelectModule</c> →
+    /// <c>ProvideItems</c>), and some of them are occupied by a fixed tool. So "no free hand" is a
+    /// normal refusal, not a bug: it means "switch modules."
     /// </remarks>
     private bool TryPickUp(EntityUid borg, EntityUid item, out string why)
     {
@@ -49,12 +51,12 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// В каком установленном модуле лежит инструмент с таким названием.
+    /// Which installed module holds a tool with this name.
     /// </summary>
     /// <remarks>
-    /// Смотрит на прототипы предметов в руках модулей, а не на сами предметы: пока модуль не
-    /// выбран, предметы ещё не созданы — они существуют только как записи «в этой руке будет вот
-    /// это». Иначе подсказать было бы нечем ровно тогда, когда она нужна.
+    /// Looks at the item prototypes in the modules' hands, not at the items themselves: while a
+    /// module isn't selected, the items don't exist yet — they exist only as records saying "this
+    /// hand will hold this." Otherwise there would be nothing to suggest exactly when it's needed.
     /// </remarks>
     private string? FindModuleWithTool(EntityUid borg, string toolName)
     {
@@ -82,7 +84,7 @@ public sealed partial class AiBorgSystem
         return null;
     }
 
-    /// <summary>Выбрать модуль — то есть сменить набор инструментов в руках.</summary>
+    /// <summary>Select a module — i.e. switch the set of tools in the hands.</summary>
     private bool TrySelectModule(EntityUid borg, string name, out string why)
     {
         if (!TryComp<BorgChassisComponent>(borg, out var chassis))

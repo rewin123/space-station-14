@@ -6,20 +6,20 @@ using System.Text.RegularExpressions;
 namespace Content.Server.AiAgent.Core.Scripting;
 
 /// <summary>
-/// Проверка на опечатки до запуска: какие функции скрипт зовёт и все ли они существуют.
+/// A pre-run typo check: which functions the script calls, and whether all of them exist.
 ///
 /// <para>
-/// Это плата за динамический язык, внесённая заранее. У C#-скриптинга было одно настоящее
-/// преимущество — опечатка в имени инструмента не компилируется, и мир не успевает измениться.
-/// В Lua она превращается в «attempt to call a nil value» на середине работы, когда робот уже
-/// прошёл полстанции и что-то взял. Линтер возвращает эту гарантию для того единственного класса
-/// ошибок, ради которого её стоило бы хотеть.
+/// This is the price of a dynamic language, paid up front. C# scripting had one real advantage —
+/// a typo in a tool name doesn't compile, and the world doesn't get a chance to change. In Lua it
+/// turns into "attempt to call a nil value" in the middle of a run, after the robot has already
+/// crossed half the station and picked something up. The linter restores that guarantee for the
+/// one class of errors worth wanting it for.
 /// </para>
 /// <para>
-/// Правило одно: <b>сомневаешься — молчи</b>. Ложная тревога здесь дороже пропуска, потому что
-/// она отнимает у модели ход на спор с несуществующей проблемой. Поэтому всё, что хоть где-то
-/// объявлено в самом скрипте — локальная, функция, параметр, переменная цикла, — считается
-/// известным, даже если объявлено ниже по тексту.
+/// There is one rule: <b>when in doubt, stay quiet</b>. A false alarm here is more expensive than
+/// a miss, because it costs the model a turn arguing with a problem that doesn't exist. So anything
+/// declared anywhere in the script itself — a local, a function, a parameter, a loop variable — is
+/// treated as known, even if it's declared later in the text.
 /// </para>
 /// </summary>
 public static class ScriptLint
@@ -33,7 +33,7 @@ public static class ScriptLint
     private static readonly Regex ForNames = new(@"\bfor\s+([A-Za-z_][\w\s,]*?)\s*(?:=|\bin\b)");
     private static readonly Regex Assigned = new(@"(?<![\w.:=~<>])([A-Za-z_]\w*)\s*=(?!=)");
 
-    /// <summary>Ключевые слова Lua: они попадают в «вызовы» из-за <c>if x then f() end</c> и подобного.</summary>
+    /// <summary>Lua keywords: they end up looking like "calls" because of <c>if x then f() end</c> and the like.</summary>
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
     {
         "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
@@ -41,8 +41,8 @@ public static class ScriptLint
     };
 
     /// <summary>
-    /// Имена, которые скрипт зовёт, но которых нет ни среди глобалов, ни среди его собственных
-    /// объявлений. Пустой список — можно запускать.
+    /// Names the script calls that are neither among the globals nor among its own declarations.
+    /// An empty list means it's safe to run.
     /// </summary>
     public static IReadOnlyList<string> Unknown(string code, IEnumerable<string> globals)
     {
@@ -90,7 +90,7 @@ public static class ScriptLint
         }
     }
 
-    /// <summary>Из <c>обj.метод</c> нужна голова: объявлять метод — значит объявлять и таблицу.</summary>
+    /// <summary>From <c>obj.method</c> we need the head: declaring the method means declaring the table too.</summary>
     private static string Head(string name)
     {
         var cut = name.IndexOfAny(new[] { '.', ':' });

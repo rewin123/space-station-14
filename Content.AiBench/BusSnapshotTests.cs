@@ -31,10 +31,10 @@ public sealed class BusSnapshotTests
 
     private string _dir = "";
 
-    /// <summary>Пустое хранилище заметок: снимок обязан собираться и когда агент ещё никого не знает.</summary>
+    /// <summary>An empty note store: a snapshot must still build even when the agent knows nobody yet.</summary>
     /// <summary>
-    /// Файловая система одного агента. Снимок теперь берут с неё целиком, а не с трёх сторов
-    /// по отдельности: библиотеки стали своими у каждого тела.
+    /// One agent's filesystem. The snapshot is now taken from it as a whole, rather than from three
+    /// separate stores: libraries have become each body's own.
     /// </summary>
     private Vfs NewVfs() => new VfsBuilder(Sawmill)
         .AddFolder(Path.Combine(_dir, "skills"), "skills", VfsAccess.Write, "что ты понял сам")

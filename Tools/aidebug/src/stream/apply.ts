@@ -24,24 +24,24 @@ import type {
 import { type StatsSeries, emptySeries, pushSample, resetSeries } from '../lib/series'
 
 /**
- * Состояние отладчика — обычный объект, без единого импорта из Vue.
+ * The debugger's state — a plain object, without a single import from Vue.
  *
- * Это ограничение и делает самую рискованную часть тестируемой: `apply` можно прогнать по
- * записанному потоку кадров и сверить итог со снимком, тем же приёмом, каким сервер доказывает
- * себя в `BusReplayTests`. Ровно тот же аргумент, которым `AgentDebugRouter` оправдывает своё
- * существование на сервере.
+ * This constraint is exactly what makes the riskiest part testable: `apply` can be run against
+ * a recorded stream of frames and its outcome checked against a snapshot, the same technique
+ * the server uses to prove itself in `BusReplayTests`. It's exactly the same argument that
+ * justifies `AgentDebugRouter`'s existence on the server.
  */
 export interface GlobalViewState {
   memory: AgentMemory | null
   skills: AgentSkill[]
   notes: AgentPlayerNote[]
-  /** Потолок одной заметки. Приходит только со снимком, как и memory_limit. */
+  /** Ceiling for one note. Arrives only with a snapshot, same as memory_limit. */
   noteLimit: number
   round: number
   roster: AgentRosterEntry[]
 }
 
-/** Один мозг. Всё, что здесь есть, принадлежит ему одному. */
+/** One brain. Everything here belongs to it alone. */
 export interface AgentViewState {
   id: string
   brain: number
@@ -57,11 +57,11 @@ export interface AgentViewState {
 
   series: StatsSeries
 
-  /** Сессия завершилась: разговор показываем, приходящие следом кадры не применяем. */
+  /** The session has ended: we keep showing the conversation, but stop applying following frames. */
   ended: boolean
 }
 
-/** Что `apply` просит сделать снаружи: сам он ничего не качает. */
+/** What `apply` asks the outside world to do: it never fetches anything itself. */
 export type ApplyOutcome = 'ok' | 'resync'
 
 export function emptyGlobals(): GlobalViewState {
@@ -93,13 +93,14 @@ export function emptyAgent(id: string): AgentViewState {
   }
 }
 
-/** Посадить процессный снимок. */
+/** Seeds the process-level snapshot. */
 export function seedGlobals(globals: GlobalViewState, snapshot: AgentStateSnapshot): void {
   globals.memory = snapshot.memory
   globals.skills = [...snapshot.skills]
-  // С запасом на рассинхрон версий: страница и сервер выкатываются РАЗНЫМИ шагами, и между ними
-  // всегда есть окно, когда свежий клиент говорит со старым сервером. Отладчик, падающий в этом
-  // окне на `[...undefined]`, отнимает ровно тот инструмент, которым разбираются, что случилось.
+  // With margin for version skew: the page and the server roll out in DIFFERENT steps, and
+  // there's always a window between them where a fresh client talks to an old server. A
+  // debugger that crashes on `[...undefined]` in that window takes away exactly the tool used
+  // to figure out what happened.
   globals.notes = [...(snapshot.notes ?? [])]
   globals.noteLimit = snapshot.note_limit ?? 0
   globals.round = snapshot.round ?? 0
@@ -107,11 +108,11 @@ export function seedGlobals(globals: GlobalViewState, snapshot: AgentStateSnapsh
 }
 
 /**
- * Посадить снимок одного агента.
+ * Seeds one agent's snapshot.
  *
- * Ряд графиков сбрасывается, когда агент сменился: сервер истории не хранит, ряд копится клиентом
- * из потока, и продолжать старый после переклейма значит рисовать склейку двух разных жизней
- * одной линией.
+ * The chart series is reset when the agent has changed: the server doesn't keep history, the
+ * series is accumulated client-side from the stream, and continuing the old one after a respawn
+ * would mean drawing two different lives spliced together as one line.
  */
 export function seedAgent(view: AgentViewState, session: AgentSession): void {
   const changed = view.brain !== session.brain || view.bodyEpoch !== session.body_epoch
@@ -135,7 +136,7 @@ export function seedAgent(view: AgentViewState, session: AgentSession): void {
     pushSample(view.series, session.stats)
 }
 
-/** Виды кадров, которые относятся к процессным хранилищам, а не к агенту. */
+/** Frame kinds that belong to process-level stores, not to an agent. */
 export function isGlobalFrame(type: string): boolean {
   return (
     type === 'memory.updated' ||
@@ -147,10 +148,10 @@ export function isGlobalFrame(type: string): boolean {
 }
 
 /**
- * Применить кадр процессного хранилища.
+ * Applies a process-level store frame.
  *
- * Такие кадры приходят с пустым `session` и относятся ко ВСЕМ агентам сразу: память, навыки и
- * заметки одни на процесс. Выбранный агент на них не влияет никак.
+ * Such frames arrive with an empty `session` and apply to ALL agents at once: memory, skills,
+ * and notes are shared per process. The selected agent has no effect on them whatsoever.
  */
 export function applyGlobal(globals: GlobalViewState, frame: AgentEventFrame): ApplyOutcome {
   switch (frame.type) {
@@ -161,9 +162,10 @@ export function applyGlobal(globals: GlobalViewState, frame: AgentEventFrame): A
 
       globals.memory = { ...globals.memory, memory_live: [...p.entries] }
 
-      // Замороженный текст меняется ТОЛЬКО при перестройке префикса, и сервер шлёт этот же кадр,
-      // когда она случается. Отличить одно от другого по payload нельзя, поэтому живую колонку
-      // обновляем всегда, а замороженную догоняет пересев по prefix.replaced.
+      // The frozen text changes ONLY on a prefix rebuild, and the server sends this same frame
+      // when that happens. There's no way to tell the two apart from the payload, so we always
+      // update the live column, while the frozen one is caught up by the reseed on
+      // prefix.replaced.
       return 'ok'
     }
 
@@ -181,9 +183,9 @@ export function applyGlobal(globals: GlobalViewState, frame: AgentEventFrame): A
       const note = frame.payload as PlayerNoteUpdatedPayload
       const at = globals.notes.findIndex((n) => n.slug === note.slug)
 
-      // Пустой entries — надгробие: удаление последней записи сносит и файл. Не удалить ключ
-      // здесь значит рисовать человека, о котором уже ничего не известно, до самой перезагрузки
-      // хранилища.
+      // An empty entries is a tombstone: deleting the last entry removes the file too. Not
+      // removing the key here would mean drawing a person about whom nothing more is known,
+      // all the way until the store reloads.
       if (note.entries.length === 0)
         globals.notes = globals.notes.filter((n) => n.slug !== note.slug)
       else if (at >= 0)
@@ -195,15 +197,15 @@ export function applyGlobal(globals: GlobalViewState, frame: AgentEventFrame): A
     }
 
     case 'notes.reloaded': {
-      // Целиком, по тому же доводу, что и у скиллов: заметку могли удалить с диска руками.
+      // Wholesale, for the same reason as with skills: a note could have been deleted from disk by hand.
       const p = frame.payload as PlayerNotesReloadedPayload
       globals.notes = [...p.notes].sort((a, b) => (a.slug < b.slug ? -1 : 1))
       return 'ok'
     }
 
     case 'skills.reloaded': {
-      // Целиком, а не по одному: перечитывание — единственный способ для скилла ИСЧЕЗНУТЬ, и
-      // поштучные обновления о пропавших молчат.
+      // Wholesale, not one at a time: reloading is the only way for a skill to DISAPPEAR, and
+      // per-item updates say nothing about the ones that vanished.
       const p = frame.payload as SkillsReloadedPayload
       globals.skills = [...p.skills].sort((a, b) => (a.name < b.name ? -1 : 1))
       return 'ok'
@@ -214,18 +216,19 @@ export function applyGlobal(globals: GlobalViewState, frame: AgentEventFrame): A
 }
 
 /**
- * Применить кадр одного агента.
+ * Applies one agent's frame.
  *
- * Возвращает `'resync'`, когда кадр невозможно применить честно и единственный правильный ответ —
- * перечитать снимок ЭТОГО агента. Гадать нельзя: молча разъехавшаяся лента выглядит правдоподобно.
- * Важно, что пересев теперь поагентный: соседей и общий курсор он не трогает.
+ * Returns `'resync'` when a frame can't be honestly applied and the only correct response is
+ * to re-fetch THIS agent's snapshot. Guessing isn't allowed: a stream that has silently drifted
+ * apart still looks plausible. Importantly, the reseed is now per-agent: it doesn't touch
+ * neighbors or the shared cursor.
  */
 export function applyAgent(view: AgentViewState, frame: AgentEventFrame): ApplyOutcome {
   switch (frame.type) {
     case 'session.started': {
-      // Полный пересев, а не локальный сброс: payload несёт {brain, round, prefix_hash} и никакого
-      // состояния. Плюс порядок на проводе — prefix.replaced ДО session.started, а
-      // history.replaced ПОСЛЕ, — так что собрать сессию из одних кадров всё равно нельзя.
+      // A full reseed, not a local reset: the payload carries {brain, round, prefix_hash} and no
+      // state at all. Plus the wire ordering — prefix.replaced is BEFORE session.started, and
+      // history.replaced is AFTER — so the session can't be assembled from frames alone anyway.
       const p = frame.payload as SessionStartedPayload
       view.brain = p.brain
       view.round = p.round
@@ -238,17 +241,17 @@ export function applyAgent(view: AgentViewState, frame: AgentEventFrame): ApplyO
     case 'session.ended': {
       const p = frame.payload as SessionEndedPayload
       void p
-      // Помечаем, а не чистим: смотреть на разговор умершего агента полезно, а вот применять к
-      // нему приходящие следом кадры — нет.
+      // We mark it, not clear it: it's useful to look at a dead agent's conversation, but
+      // applying subsequent frames to it is not.
       view.ended = true
       return 'ok'
     }
   }
 
-  // Окно зомби. `Release` публикует session.ended, затем отменяет токен и уходит, не дожидаясь
-  // петли; её `finally` ещё допишет синтетические результаты турного бюджета и последний stats.
-  // Эти кадры приходят под тем же идентификатором агента, так что отличить их можно только по
-  // тому, что мы уже видели конец.
+  // The zombie window. `Release` publishes session.ended, then cancels the token and leaves
+  // without waiting for the loop; its `finally` still writes out synthetic turn-budget results
+  // and one last stats. These frames arrive under the same agent identifier, so the only way to
+  // tell them apart is that we've already seen the end.
   if (view.ended)
     return 'ok'
 
@@ -256,12 +259,13 @@ export function applyAgent(view: AgentViewState, frame: AgentEventFrame): ApplyO
     case 'message.appended': {
       const p = frame.payload as MessageAppendedPayload
 
-      // Единственная непроверяемая иначе вещь — и единственное неидемпотентное событие.
+      // The one thing that can't be verified any other way — and the one non-idempotent event.
       //
-      // Снимок на сервере снимается НЕ атомарно: seq читается первым, поэтому изменение,
-      // проехавшее посреди снятия, попадёт и в данные, и в поток. Для всех остальных видов повтор
-      // безвреден (каждый несёт новое значение целиком), а вот повторный append задвоил бы
-      // сообщение. Несовпадение индекса или эпохи ловит и это, и потерю, и вторую петлю.
+      // The server's snapshot is taken NON-atomically: seq is read first, so a change that
+      // slips in mid-capture ends up both in the data and in the stream. For every other kind,
+      // a repeat is harmless (each carries the whole new value), but a repeated append would
+      // duplicate the message. A mismatched index or epoch catches this case, as well as loss,
+      // and a second loop.
       if (p.body_epoch !== view.bodyEpoch || p.index !== view.messages.length)
         return 'resync'
 
@@ -282,13 +286,13 @@ export function applyAgent(view: AgentViewState, frame: AgentEventFrame): ApplyO
       view.systemPrompt = p.system_prompt
       view.toolsJson = p.tools_json
 
-      // Применяется НА МЕСТЕ, снимка не требует, и это изменение против прежнего поведения.
+      // Applied IN PLACE, requires no snapshot, and this is a change from the previous behavior.
       //
-      // Раньше перестройка префикса означала пересев всей ленты — на одном агенте терпимо. На
-      // четырёх компакции случаются вчетверо чаще, и прежнее правило означало бы отладчик,
-      // который непрерывно моргает. Payload несёт всё, что нужно: хеш, промпт и описание
-      // инструментов. Догоняющий замороженный текст памяти приезжает отдельным кадром
-      // memory.updated, который сервер шлёт при той же перестройке.
+      // The prefix rebuild used to mean reseeding the whole stream — tolerable with one agent.
+      // With four, compactions happen four times as often, and the old rule would have meant a
+      // debugger that constantly flickers. The payload carries everything needed: the hash, the
+      // prompt, and the tool descriptions. The catch-up for the frozen memory text arrives as a
+      // separate memory.updated frame, which the server sends on the same rebuild.
       return 'ok'
     }
 

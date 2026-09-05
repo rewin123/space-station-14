@@ -14,12 +14,12 @@ using Robust.Shared.Timing;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Ноги.
+/// Legs.
 ///
 /// <para>
-/// Маршрут строит <see cref="BorgPathfinder"/>, ведёт по нему <see cref="StepAlongTrail"/>, а вся
-/// физика — движение, столкновения, скорость, открывание дверей корпусом — остаётся апстримовой:
-/// мы кладём направление в то же поле, куда клиент живого игрока кладёт нажатые стрелки.
+/// <see cref="BorgPathfinder"/> builds the route, <see cref="StepAlongTrail"/> follows it, and all
+/// the physics — movement, collisions, speed, doors opening for the body — stays upstream: we put
+/// the direction into the same field where a live player's client puts pressed arrow keys.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
@@ -30,115 +30,123 @@ public sealed partial class AiBorgSystem
     [Dependency] private SharedDoorSystem _door = default!;
 
     /// <summary>
-    /// Дальность руки, тайлы. То же число, что и в <c>InRangeUnobstructed</c> у инструментов:
-    /// «дошёл» и «дотянулся» обязаны мерить одним, иначе робот получает два разных ответа об
-    /// одном и том же месте.
+    /// Hand reach, in tiles. The same number as <c>InRangeUnobstructed</c> uses for tools:
+    /// "arrived" and "can reach" must measure with the same ruler, otherwise the robot gets two
+    /// different answers about the same spot.
     /// </summary>
     private const float ReachTiles = 1.5f;
 
     /// <summary>
-    /// Дальность до ПУЛЬТА, тайлы. Больше, чем у руки, и это СОЗНАТЕЛЬНОЕ послабление, а не
-    /// починка.
+    /// Reach to a CONSOLE, in tiles. Longer than the hand's reach, and this is a DELIBERATE
+    /// allowance, not a fix.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Повод — контроллер АМЭ на карте ротации. Он стоит так, что все четыре клетки по сторонам
-    /// заняты кабелями и стеной, и подойти к нему можно только по диагонали. С диагонали
-    /// апстримовый <c>use</c> проходит, а <c>InRangeUnobstructed</c> на 1.5 тайла — нет: луч из
-    /// центра в центр цепляет угол. Робот собирал реактор целиком и не мог открыть его пульт,
-    /// сообщая <c>not_visible</c>, стоя вплотную.
+    /// The reason is the SMES controller on the rotation map. It sits so that all four adjacent
+    /// tiles are taken up by cables and a wall, and it can only be approached diagonally. From a
+    /// diagonal, upstream <c>use</c> succeeds, but <c>InRangeUnobstructed</c> at 1.5 tiles does
+    /// not: the center-to-center ray clips the corner. The robot built the entire reactor and
+    /// could not open its console, reporting <c>not_visible</c> while standing right next to it.
     /// </para>
     /// <para>
-    /// Двойка накрывает диагональ (1.41) с запасом на смещение внутри тайла, но остаётся
-    /// «протянутой рукой», а не дистанционным управлением: через стену луч всё равно не пройдёт,
-    /// проверка препятствий остаётся на месте. Отступление от паритета с живым игроком — он
-    /// работает с 1.5, — и оно здесь названо вслух, как и свободная рука у манипулятора.
+    /// Two tiles covers the diagonal (1.41) with margin for offset within a tile, while still
+    /// staying an "outstretched hand" rather than remote control: the ray still won't pass through
+    /// a wall, the obstruction check stays in place. It's a departure from parity with a live
+    /// player — who works with 1.5 — and it's called out here explicitly, same as the manipulator's
+    /// free hand.
     /// </para>
     /// </remarks>
     private const float ConsoleReachTiles = 2f;
 
     /// <summary>
-    /// Куда робот идёт, чтобы отчитаться о прибытии.
+    /// Where the robot is walking to, so it can report arrival.
     ///
     /// <para>
-    /// Инструмент ходьбы <b>не ждёт</b> прибытия: ход, висящий полминуты на переходе через
-    /// станцию, — это агент, глухой весь переход. <c>goto</c> отвечает «иду» немедленно, а факт
-    /// прибытия приезжает наблюдением, как и всё остальное в этом модуле.
+    /// The walk tool <b>does not wait</b> for arrival: a turn hanging for half a minute while
+    /// crossing the station is an agent deaf for the whole crossing. <c>goto</c> replies "walking"
+    /// immediately, and the arrival fact comes in as an observation, like everything else in this
+    /// module.
     /// </para>
     /// </summary>
     private readonly Dictionary<EntityUid, string> _walking = new();
 
     /// <summary>
-    /// Чем кончилась последняя ходьба: «пришёл» или «нет пути».
+    /// How the last walk ended: "arrived" or "no path".
     ///
-    /// Нужно скрипту, который ждёт прибытия. Наблюдение ARRIVED адресовано модели между ходами, а
-    /// скрипт исполняется, пока ход идёт, и очередь наблюдений в этот момент трогать не может —
-    /// её вычитывает петля. Поэтому исход дублируется сюда: одна строка на робота, живёт до
-    /// следующего маршрута.
+    /// Needed by the script that's waiting for arrival. The ARRIVED observation is addressed to
+    /// the model between turns, while the script runs while the turn is in progress, and cannot
+    /// touch the observation queue at that moment — the loop drains it. So the outcome is
+    /// duplicated here: one line per robot, valid until the next route.
     /// </summary>
     private readonly Dictionary<EntityUid, string> _lastWalk = new();
 
     /// <summary>
-    /// ТОЧКА ОТСЧЁТА затора: откуда робот не может уйти, и сколько кадров он этого не делает.
+    /// The stall REFERENCE POINT: where the robot cannot get away from, and for how many frames.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Слово «отсчёта» здесь несущее. Первая версия держала в этом поле позицию из ПРОШЛОГО кадра
-    /// и переписывала её каждый раз, в том числе внутри ветки «не сдвинулся». То есть счётчик
-    /// заторов на самом деле мерил сдвиг за один тик, а не застой, — и с порогом в 0.15 тайла это
-    /// была не мелкая неточность, а поломка ровно посередине рабочего диапазона: шасси идёт
-    /// спринтом 4.5 тайла в секунду, тикрейт 30, то есть ровно 0.15 тайла за тик. Замерено на
-    /// стенде: за 120 тиков ходьбы максимум сдвига 0.1500, и НИ ОДНОГО тика выше порога.
+    /// The word "reference" is load-bearing here. The first version kept the position from the
+    /// PREVIOUS frame in this field and overwrote it every time, including inside the "did not
+    /// move" branch. So the stall counter was actually measuring the displacement over a single
+    /// tick, not stagnation — and with a threshold of 0.15 tiles that was not a minor inaccuracy
+    /// but a break right in the middle of the working range: the chassis sprints at 4.5 tiles per
+    /// second, tickrate 30, which is exactly 0.15 tiles per tick. Measured on the bench: over 120
+    /// ticks of walking, the maximum displacement was 0.1500, and NOT A SINGLE tick above the
+    /// threshold.
     /// </para>
     /// <para>
-    /// Идущий на полной скорости робот считался стоящим каждый тик. Отсюда обе жалобы разом:
-    /// раз в 30 тиков он объявлял непроходимым тайл, по которому шёл, и перекладывал маршрут —
-    /// а перепланировка это полный A* по станции, который идёт прямо здесь, в <see cref="Update"/>,
-    /// мимо бюджета шины и мимо её профиля. Четыре робота на ходу давали около восьмидесяти
-    /// миллисекунд поиска в секунду и по тридцать запросов в broadphase — это и видно в игре как
-    /// «начал двигаться и fps лёг». Заодно каждая такая перепланировка травила собственный
-    /// коридор робота, путь удлинялся от попытки к попытке (64 → 54 → 43 тайла в одном раунде на
-    /// пути к Tools) и кончался «дороги нет» — это вторая жалоба, «не могу до тебя дойти».
+    /// A robot walking at full speed was considered stationary every tick. Hence both complaints
+    /// at once: once every 30 ticks it declared the tile it was walking on impassable and
+    /// replanned the route — and replanning is a full station-wide A* that runs right here, in
+    /// <see cref="Update"/>, past the bus budget and past its profile. Four robots walking at once
+    /// produced around eighty milliseconds of pathfinding per second and thirty broadphase
+    /// queries — which shows up in the game as "started moving and fps tanked". Each such replan
+    /// also poisoned the robot's own corridor, so the path got longer with every attempt (64 → 54
+    /// → 43 tiles in one round on the way to Tools) and ended in "no path" — the second complaint,
+    /// "I can't reach you".
     /// </para>
     /// <para>
-    /// Теперь точка отсчёта СТОИТ на месте, пока робот не уйдёт от неё на <see cref="ProgressTiles"/>.
-    /// Порог перестал зависеть от скорости шасси: он спрашивает «ушёл ли вообще», а не «успел ли
-    /// за один тик».
+    /// Now the reference point STAYS PUT until the robot moves away from it by
+    /// <see cref="ProgressTiles"/>. The threshold no longer depends on the chassis speed: it asks
+    /// "did it move at all", not "did it manage to in a single tick".
     /// </para>
     /// <para>
-    /// Цена поломки видна и в самой ходьбе, а не только в кадре: один и тот же проход за 150 тиков
-    /// давал 2.2 тайла со старым счётчиком и 14.3 с новым (<c>RouteCostTests</c>). Робот тратил
-    /// шесть седьмых дороги на то, чтобы объявлять непроходимым коридор, по которому шёл, и
-    /// перекладывать маршрут заново.
+    /// The cost of the bug shows in the walking itself too, not just in frame time: the same run
+    /// over 150 ticks covered 2.2 tiles with the old counter and 14.3 with the new one
+    /// (<c>RouteCostTests</c>). The robot was spending six sevenths of the trip declaring the
+    /// corridor it was walking through impassable and replanning the route all over again.
     /// </para>
     /// </remarks>
     private readonly Dictionary<EntityUid, (Vector2 Where, int Stalls)> _progress = new();
 
     /// <summary>
-    /// Насколько надо уйти от точки отсчёта, чтобы затор считался пройденным. Полтайла.
+    /// How far the robot must move away from the reference point for a stall to count as passed.
+    /// Half a tile.
     /// </summary>
     /// <remarks>
-    /// Половина клетки — это заведомо больше любого дрожания на месте (толкотня, отдача от двери,
-    /// поворот корпуса) и заведомо меньше одного шага по маршруту. Робот, который наматывает круги
-    /// вокруг одной точки, отсюда не уходит и правильно считается застрявшим.
+    /// Half a cell is deliberately larger than any jitter in place (jostling, door recoil, body
+    /// turning) and deliberately smaller than a single step along the route. A robot circling
+    /// around one spot does not get away from this and is correctly considered stuck.
     /// </remarks>
     private const float ProgressTiles = 0.5f;
 
-    /// <summary>Столько кадров без ухода с места — и пробуем нажать на дверь. Полсекунды.</summary>
+    /// <summary>This many frames without leaving the spot — and we try pressing a door. Half a second.</summary>
     /// <remarks>
-    /// Счёт в кадрах, смысл в секундах: <see cref="PollWalking"/> зовётся каждый тик, тикрейт 30.
-    /// Прежние четыре кадра означали семь с половиной запросов в broadphase в секунду на каждого
-    /// идущего робота — и это при том, что «идущий» и «стоящий» тогда не различались вовсе.
+    /// Counted in frames, meaningful in seconds: <see cref="PollWalking"/> is called every tick,
+    /// tickrate 30. The previous four frames meant seven and a half broadphase queries per second
+    /// per walking robot — and that was back when "walking" and "standing" weren't distinguished
+    /// at all.
     /// </remarks>
     private const int StallsBeforeDoor = 15;
 
     /// <summary>
-    /// Столько — и признаём, что здесь не пройти, и перекладываем маршрут. Три секунды.
+    /// This many — and we admit there's no way through here, and replan the route. Three seconds.
     /// </summary>
     /// <remarks>
-    /// Дорого именно это: перепланировка строит полный путь по станции и при неудаче разворачивает
-    /// весь достижимый пол. Три секунды неподвижности — это уже не «человек в дверях», а настоящее
-    /// препятствие, и цену поиска в такой ситуации не жалко.
+    /// This is the expensive part: replanning builds a full path across the station and, on
+    /// failure, unfolds the entire reachable floor. Three seconds of standing still is no longer
+    /// "a person in the doorway" but a genuine obstacle, and the search cost isn't a concern in
+    /// that situation.
     /// </remarks>
     private const int StallsBeforeReplan = 90;
 
@@ -179,10 +187,10 @@ public sealed partial class AiBorgSystem
         ClearTrail(borg);
     }
 
-    /// <summary>Идёт ли робот прямо сейчас — этим глушится дельта зрения на ходу.</summary>
+    /// <summary>Is the robot walking right now — this is what mutes the sight delta while walking.</summary>
     private bool IsWalking(EntityUid borg) => _walking.ContainsKey(borg);
 
-    /// <summary>Состояние ходьбы одной строкой — это читает скрипт через walk_status.</summary>
+    /// <summary>Walking state as one line — this is what the script reads via walk_status.</summary>
     private string WalkStatus(EntityUid borg)
     {
         if (_walking.TryGetValue(borg, out var what))
@@ -191,7 +199,7 @@ public sealed partial class AiBorgSystem
         return _lastWalk.TryGetValue(borg, out var last) ? last : "стоит";
     }
 
-    /// <summary>Вести всех идущих: шаг по пути, разбор заторов, доклад о прибытии.</summary>
+    /// <summary>Drive everyone who's walking: step along the path, handle stalls, report arrival.</summary>
     private void PollWalking()
     {
         if (_walking.Count == 0)
@@ -205,8 +213,8 @@ public sealed partial class AiBorgSystem
                 continue;
             }
 
-            // Догнать ушедшую цель — ДО шага: иначе кадр уходит на движение по маршруту, который
-            // уже признан устаревшим.
+            // Catch up with a moved goal — BEFORE stepping: otherwise the frame is spent moving
+            // along a route that's already been declared stale.
             TryFollowMovingGoal(borg);
 
             if (StepAlongTrail(borg))
@@ -221,8 +229,8 @@ public sealed partial class AiBorgSystem
                 continue;
             }
 
-            // Тайлы кончились — дошли. Насколько дошли, спрашиваем ДО очистки маршрута:
-            // заказанная цель живёт в _goals, а ClearRoute её забывает.
+            // Ran out of tiles — arrived. We ask how close BEFORE clearing the route: the ordered
+            // goal lives in _goals, and ClearRoute forgets it.
             var missed = MissedBy(borg);
 
             _walking.Remove(borg);
@@ -238,8 +246,8 @@ public sealed partial class AiBorgSystem
 
             PushToBorg(borg, Observation.Event(arrived, _host.RoundTime()));
 
-            // В лог тоже: «робот не идёт» и «робот идёт медленно» в игре выглядят одинаково, а
-            // различаются только этой строкой.
+            // Into the log too: "the robot isn't walking" and "the robot is walking slowly" look
+            // the same in-game, and are distinguished only by this line.
             _sawmill.Info($"{ToPrettyString(borg)} дошёл: {what}"
                           + (missed is { } far ? $" (не дошёл {far:F1} тайла: подходы заняты)" : ""));
             TraceBorgMove(borg, "stop", $"goal={what.Replace(' ', '_')} missed={(missed is { } g ? g.ToString("F1") : "0")}");
@@ -247,16 +255,18 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// На сколько тайлов робот НЕ дошёл до заказанной цели, или <c>null</c>, если стоит вплотную.
+    /// How many tiles short of the ordered goal the robot fell, or <c>null</c> if it's right up
+    /// against it.
     /// </summary>
     /// <remarks>
-    /// Маршрут ведёт к ближайшему проходимому тайлу, и для двери, ящика или консоли это верно:
-    /// идти надо «к», а не «в». Но когда заняты ВСЕ клетки вокруг цели — например, робот сам
-    /// обложил пульт АМЭ экранированием, — ближайший проходимый оказывается в двух тайлах, а
-    /// строка ARRIVED сообщала простое «дошёл». Дальше модель честно берётся за работу руками и
-    /// получает отказ по дальности: инструмент сказал «дошёл», рука говорит «далеко», и причины
-    /// не видно ни в одной строке. Замерено на раунде 131: маршрут к контроллеру в (28,-40) вёл
-    /// в (26,-40), и робот двадцать минут ходил вокруг, пробуя console с каждой стороны.
+    /// The route leads to the nearest passable tile, and that's correct for a door, a crate, or a
+    /// console: you need to walk "to" it, not "into" it. But when ALL the cells around the goal
+    /// are occupied — for example, the robot itself boxed in the SMES console with shielding — the
+    /// nearest passable tile ends up two tiles away, while the ARRIVED line reported a plain
+    /// "arrived". The model then honestly starts working with its hands and gets a range refusal:
+    /// the tool said "arrived", the hand says "too far", and the reason isn't visible in any single
+    /// line. Measured on round 131: the route to the controller at (28,-40) led to (26,-40), and
+    /// the robot spent twenty minutes walking around it, trying console from every side.
     /// </remarks>
     private float? MissedBy(EntityUid borg)
     {
@@ -266,7 +276,8 @@ public sealed partial class AiBorgSystem
         var target = _xform.ToMapCoordinates(goal.Dest);
         var here = _xform.GetMapCoordinates(borg);
 
-        // Разные сетки — расстояние между ними ничего не значит; молчим, а не врём числом.
+        // Different grids — the distance between them means nothing; we stay silent rather than
+        // lie with a number.
         if (target.MapId != here.MapId)
             return null;
 
@@ -276,18 +287,18 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Робот упёрся — сначала открыть дверь, потом переложить маршрут, потом сдаться.
+    /// The robot is stuck — first try opening a door, then replan the route, then give up.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Порядок важен. Самая частая причина затора — закрытый шлюз: корпус открывает его тараном
-    /// (<c>DoorBumpOpener</c>), но не всегда с нужного угла, а прав у робота хватает, чтобы просто
-    /// нажать. Если и это не помогло — дело не в двери, и надо искать другую дорогу от текущего
-    /// места.
+    /// Order matters. The most common cause of a stall is a closed airlock: the body opens it by
+    /// bumping into it (<c>DoorBumpOpener</c>), but not always from the right angle, and the robot
+    /// has enough access rights to simply press it. If that doesn't help either, the door isn't the
+    /// problem, and it's time to look for another way from the current spot.
     /// </para>
     /// <para>
-    /// Порог перепланировки намеренно велик: перекладывать маршрут на каждой заминке значит
-    /// дёргать станцию впустую, пока робота просто обходит человек.
+    /// The replan threshold is deliberately high: replanning the route on every hiccup means
+    /// hammering the station for nothing while a person is simply walking around the robot.
     /// </para>
     /// </remarks>
     private void WatchForStall(EntityUid borg, string what)
@@ -304,20 +315,21 @@ public sealed partial class AiBorgSystem
         {
             _progress[borg] = (now, 0);
 
-            // Робот сдвинулся — значит затор был проходим, и потраченные попытки не в счёт.
-            // Без этого длинная дорога с тремя дверями исчерпывала бюджет перепланировок на
-            // полпути, хотя каждая дверь в итоге открывалась.
+            // The robot moved — so the stall was passable, and the spent attempts don't count.
+            // Without this, a long route with three doors exhausted the replan budget halfway
+            // through, even though every door eventually opened.
             ForgetReplans(borg);
             return;
         }
 
-        // Точка отсчёта остаётся ПРЕЖНЕЙ, и это главная строка функции: с ней счётчик считает
-        // застой, без неё — сдвиг за один тик, который у идущего шасси ровно равен порогу.
+        // The reference point stays UNCHANGED, and that's the key line of the function: with it,
+        // the counter measures stagnation; without it, the per-tick displacement, which for a
+        // walking chassis is exactly equal to the threshold.
         var stalls = last.Stalls + 1;
         _progress[borg] = (last.Where, stalls);
 
-        // Жмём периодически, а не однажды: шлюз закрывается сам, и одного нажатия на всю заминку
-        // хватает не всегда — особенно когда робот подошёл к нему под углом.
+        // Press periodically, not once: an airlock closes on its own, and a single press isn't
+        // always enough for the whole hiccup — especially when the robot approached it at an angle.
         if (stalls % StallsBeforeDoor == 0 && TryPressClosedDoor(borg, 1.6f))
         {
             _sawmill.Debug($"{ToPrettyString(borg)} упёрся и нажал на дверь");
@@ -330,12 +342,12 @@ public sealed partial class AiBorgSystem
 
         _progress[borg] = (now, 0);
 
-        // Дверь не поддалась — считаем её стеной и ищем обход.
+        // The door didn't budge — treat it as a wall and look for a way around.
         //
-        // Так честнее любого числа попыток: причина может быть какой угодно — нет доступа, дверь
-        // заварена, обесточена, — и робот всё равно должен либо найти другую дорогу, либо честно
-        // сказать, что её нет. Заодно это единственное, что спасает от вечного тыканья в одну и
-        // ту же створку.
+        // This is more honest than any number of attempts: the reason could be anything — no
+        // access, the door is welded shut, unpowered — and the robot must still either find
+        // another way or honestly say there isn't one. It's also the only thing that saves it
+        // from endlessly poking at the same door.
         if (NextTile(borg) is { } blocked)
         {
             BlockTile(borg, blocked);
@@ -360,13 +372,13 @@ public sealed partial class AiBorgSystem
     }
 
     /// <summary>
-    /// Нажать на ближайшую закрытую дверь. Возвращает true, если нашлась и нажали.
+    /// Press the nearest closed door. Returns true if one was found and pressed.
     /// </summary>
     /// <remarks>
-    /// Апстримовый путепоиск знает про двери два способа: «нажать» — для дверей без замка — и
-    /// «отжать ломом» — для дверей с замком, через долгий DoAfter, который на запитанном шлюзе ещё
-    /// и не факт что пройдёт. Варианта «у меня есть доступ по ID, просто открой» у него нет вовсе,
-    /// а у борга доступ есть: его включает появление разума.
+    /// Upstream pathfinding knows two ways to deal with doors: "press" — for doors without a lock
+    /// — and "pry with a crowbar" — for locked doors, via a long DoAfter that isn't even guaranteed
+    /// to succeed on a powered airlock. The option "I have ID access, just open" doesn't exist for
+    /// it at all, while the borg does have access: it's granted by a mind taking over.
     /// </remarks>
     private bool TryPressClosedDoor(EntityUid borg, float radius)
     {
@@ -377,11 +389,12 @@ public sealed partial class AiBorgSystem
         if (doors.Count == 0)
             return false;
 
-        // Жмём дверь ПО ХОДУ ДВИЖЕНИЯ, а не первую попавшуюся.
+        // Press the door ALONG THE DIRECTION OF TRAVEL, not just the first one found.
         //
-        // В тамбуре их бывает пять сразу — на бою робот вставал в развязке у входа в атмос,
-        // окружённый maintenance access, Engineering Lobby, Atmospherics и двумя шлюзами. «Первая
-        // попавшаяся» с равной вероятностью оказывалась той, из которой он только что вышел.
+        // In a vestibule there can be five of them at once — in combat the robot would end up in
+        // the junction by the atmos entrance, surrounded by maintenance access, Engineering Lobby,
+        // Atmospherics, and two airlocks. "The first one found" was just as likely to be the one
+        // it had just walked out of.
         var aim = NextTile(borg) is { } tile && Transform(borg).GridUid is { } grid
             ? _xform.ToMapCoordinates(new EntityCoordinates(grid, Center(tile))).Position
             : _xform.GetMapCoordinates(borg).Position;
@@ -409,42 +422,45 @@ public sealed partial class AiBorgSystem
         if (!TryComp<DoorComponent>(best, out var comp))
             return false;
 
-        // Сначала штатно, от лица робота: с доступом по ID створка открывается его правами.
+        // First, the normal way, on behalf of the robot: with ID access, the door opens by its
+        // own rights.
         if (_door.TryOpen(best, comp, user: borg))
             return true;
 
-        // Доступа может не быть — и тогда штатное нажатие ничего не делает. По решению владельца
-        // форка робот считает проходимым ЛЮБОЙ незаболченный шлюз, поэтому закрытую дверь он
-        // дожимает без пользователя: `HasAccess` с `user: null` пропускает проверку прав, а вот
-        // болты, сварка и обесточка остаются на месте — их отменяет `BeforeDoorOpenedEvent`, и
-        // заболченная дверь честно не откроется. Такая створка после нескольких попыток уедет в
-        // _blocked, и маршрут пойдёт в обход.
+        // Access may be missing — and then the normal press does nothing. By the fork owner's
+        // decision, the robot treats ANY unbolted airlock as passable, so it forces the closed
+        // door open with no user: `HasAccess` with `user: null` skips the rights check, while
+        // bolts, welding, and unpowered state stay in effect — they're what `BeforeDoorOpenedEvent`
+        // cancels on, and a bolted door honestly won't open. Such a door will migrate to _blocked
+        // after a few attempts, and the route will go around it.
         //
-        // Это СОЗНАТЕЛЬНОЕ послабление паритета, как манипулятор и гиперъячейка. Повод измеренный:
-        // дорога от инженерного крыла к АМЭ на карте ротации идёт через
-        // AirlockAtmosphericsGlassLocked, доступа к которому у шасси нет. Робот втыкался в эту
-        // створку, перекладывал маршрут, снова упирался — и за полчаса раунда 135 так и не
-        // вернулся к собранному им же реактору, намотав круг через Arrivals.
+        // This is a DELIBERATE relaxation of parity, same as the manipulator and the hypercell.
+        // The reason is a measured one: the route from the engineering wing to the SMES on the
+        // rotation map goes through AirlockAtmosphericsGlassLocked, which the chassis has no
+        // access to. The robot kept running into this door, replanning the route, running into it
+        // again — and over half an hour of round 135 never made it back to the reactor it had
+        // built itself, looping through Arrivals instead.
         //
-        // Проверять тут состояние двери нельзя, и это стоило прогона: отказ по правам переводит
-        // створку в Denying на несколько тиков, а условие «дверь всё ещё Closed» на Denying не
-        // срабатывает — дожим молча не выполнялся, хотя ветка выглядела рабочей.
+        // Checking the door's state here doesn't work, and that cost a test run: a rights refusal
+        // puts the door into Denying for a few ticks, and the condition "the door is still Closed"
+        // doesn't fire on Denying — the forced-open silently didn't happen, even though the branch
+        // looked like it worked.
         _door.TryOpen(best, comp, user: null);
 
         return true;
     }
 
     /// <summary>
-    /// Нажать на ближайшую закрытую дверь — вход для стенда.
+    /// Press the nearest closed door — bench entry point.
     /// </summary>
     /// <remarks>
-    /// На живом сервере это делает <see cref="WatchForStall"/>, когда робот перестал двигаться.
-    /// Воспроизводить затор в тесте пришлось бы через настоящую ходьбу и таймеры, а проверить надо
-    /// не затор, а решение о двери.
+    /// On a live server this is done by <see cref="WatchForStall"/> once the robot stops moving.
+    /// Reproducing a stall in a test would require real walking and timers, and what needs
+    /// checking isn't the stall but the door decision.
     /// </remarks>
     public bool PressDoorForTest(EntityUid borg) => TryPressClosedDoor(borg, 1.6f);
 
-    /// <summary>Положить наблюдение в очередь агента, который сидит в этом теле.</summary>
+    /// <summary>Push an observation into the queue of the agent sitting in this body.</summary>
     private void PushToBorg(EntityUid borg, Observation obs)
     {
         if (_host.Sessions.TryGetValue(borg, out var session))

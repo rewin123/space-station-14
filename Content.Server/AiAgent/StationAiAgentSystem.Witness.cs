@@ -21,77 +21,93 @@ using Robust.Shared.Physics;
 namespace Content.Server.AiAgent;
 
 /// <summary>
-/// Зрение агента как поток событий, а не как опрос.
+/// The agent's vision as a stream of events, not as polling.
 ///
 /// <para>
-/// До этого файла агент не видел НИЧЕГО. Он слышал рацию, речь у ядра и объявления, а происходящее в
-/// мире для него не существовало: инструмент <c>look</c> отвечает на «что стоит вокруг», но не на
-/// «что сейчас произошло», и опрашивать его ради этого нельзя — он стоит десятки миллисекунд
-/// главного потока.
+/// Before this file, the agent saw NOTHING. It heard the radio, speech at the core, and
+/// announcements, but whatever was happening in the world simply didn't exist for it: the
+/// <c>look</c> tool answers "what's standing around", but not "what just happened", and it can't be
+/// polled for that purpose — it costs tens of milliseconds of the main thread.
 /// </para>
 /// <para>
-/// Дырой это делает не пропущенная драка, а невыполнимая просьба. «Когда я вставлю плазму в
-/// генератор аномалий — запусти его» упиралась в то, что узнать о вставленной плазме агенту нечем;
-/// оставалось переспрашивать по рации, а это ровно то поведение, из-за которого с ним перестают
-/// разговаривать. Реактивность здесь — не украшение зрения, а условие того, чтобы отложенная
-/// просьба вообще могла быть выполнена.
+/// What makes this a hole is not a missed fight, but an impossible-to-fulfil request. "When I put
+/// plasma into the anomaly generator, start it" ran into the fact that the agent had no way to learn
+/// the plasma had been inserted; the only option left was to ask again over the radio, which is
+/// exactly the behaviour that gets people to stop talking to it. Reactivity here isn't a nicety for
+/// vision — it's the precondition for a deferred request being fulfillable at all.
 /// </para>
 /// <para>
-/// <b>Семантики в этом файле нет и быть не должно.</b> Мы не решаем, что «важно»: список важного
-/// заведомо не покроет просьбы экипажа, потому что они не ограничены дракой. Задача кода —
-/// доставить событие с участниками и координатами; понять, что оно значит, — работа модели.
-/// Поэтому ярлыки вроде «предметом» это подписи, а не классификация, и никакого разворота
-/// «на самом деле стрелял вот этот» здесь тоже нет: апстрим отдаёт в <c>Origin</c> хитскана ствол
-/// вместо человека — так и передаём, у модели есть <c>inspect</c>.
+/// <b>There is no semantics in this file, and there shouldn't be.</b> We don't decide what's
+/// "important": a list of important things is guaranteed not to cover the crew's requests, because
+/// those aren't limited to fighting. The code's job is to deliver the event with its participants
+/// and coordinates; making sense of what it means is the model's work. That's why labels like
+/// "предметом" (with an item) are captions, not classification, and there's no "actually it was
+/// this one who shot" resolution here either: upstream puts the gun, not the person, into a
+/// hitscan's <c>Origin</c> — so that's what we pass along, and the model has <c>inspect</c>.
 /// </para>
 /// </summary>
 public sealed partial class StationAiAgentSystem
 {
-    // ------------------------------------------------------------------ ярлыки
+    // ------------------------------------------------------------------ labels
 
     private const string LabelHand = "рукой";
+    private const string LabelHandEn = "hand";
     private const string LabelUsing = "предметом";
+    private const string LabelUsingEn = "item";
     private const string LabelRanged = "издали";
+    private const string LabelRangedEn = "ranged";
     private const string LabelActivate = "включил";
+    private const string LabelActivateEn = "activated";
     private const string LabelInserted = "вложил";
+    private const string LabelInsertedEn = "inserted";
     private const string LabelRemoved = "вынул";
+    private const string LabelRemovedEn = "removed";
     private const string LabelPullStart = "тащит";
+    private const string LabelPullStartEn = "pulling";
     private const string LabelPullStop = "отпустил";
+    private const string LabelPullStopEn = "released";
     private const string LabelEquipped = "надел";
+    private const string LabelEquippedEn = "equipped";
     private const string LabelUnequipped = "снял";
+    private const string LabelUnequippedEn = "unequipped";
     private const string LabelState = "состояние";
+    private const string LabelStateEn = "state";
     private const string LabelDamage = "урон";
+    private const string LabelDamageEn = "damage";
     private const string LabelShot = "выстрел";
+    private const string LabelShotEn = "shot";
     private const string LabelDoor = "дверь";
+    private const string LabelDoorEn = "door";
 
-    // ------------------------------------------------------------------ подписки
+    // ------------------------------------------------------------------ subscriptions
 
-    // ------------------------------------------------------- настройки, снятые с горячего пути
+    // ------------------------------------------------------- settings, taken off the hot path
 
-    // Все пять читались через _cfg.GetCVar на КАЖДОМ событии станции. Дорого это делало не чтение
-    // само по себе, а то, где оно стояло: `EntInsertedIntoContainerMessage` и
-    // `EntRemovedFromContainerMessage` — самый частый класс событий в игре (каждый подъём предмета,
-    // каждая смена руки, каждая деталь механизма), и на каждое из них воронка платила три обращения
-    // к IConfigurationManager ещё ДО первой проверки расстояния. `GetCVar<T>` — это
-    // `(T)GetCVar(name)`: захват ReaderWriterLockSlim, поиск в словаре и упаковка значения в object.
+    // All five used to be read via _cfg.GetCVar on EVERY station event. What made this expensive
+    // wasn't the read itself, but where it sat: `EntInsertedIntoContainerMessage` and
+    // `EntRemovedFromContainerMessage` are the most frequent event class in the game (every item
+    // pickup, every hand swap, every mechanism part), and for each one the funnel was paying three
+    // calls into IConfigurationManager BEFORE even the first distance check. `GetCVar<T>` is
+    // `(T)GetCVar(name)`: acquiring a ReaderWriterLockSlim, a dictionary lookup, and boxing the value
+    // into an object.
     //
-    // Ровный налог на всю станцию, пока агент жив, и в статистике диспетчера он не виден вовсе —
-    // это не маршалированный вызов. Отсюда и подозрение, что «виснем из-за ИИ» относится в первую
-    // очередь сюда, а не к всплескам look.
+    // A flat tax on the whole station for as long as the agent is alive, and it's invisible in the
+    // dispatcher's stats entirely — it isn't a marshalled call. Hence the suspicion that "we're
+    // stalling because of the AI" points here first, rather than at look spikes.
     //
-    // Значения остаются живыми: OnValueChanged держит их в актуальном состоянии, так что
-    // `cvar ai.observe false` из админ-консоли работает как работал.
+    // The values stay live: OnValueChanged keeps them up to date, so `cvar ai.observe false` from
+    // the admin console still works exactly as before.
     private bool _observe;
     private float _observeRange;
     private bool _observeOcclusion;
     private int _observeMaxChecks;
 
     /// <summary>
-    /// Разобранный <c>ai.observe_kinds</c>. Пустой набор — все ярлыки разрешены.
+    /// Parsed <c>ai.observe_kinds</c>. An empty set means every label is allowed.
     ///
-    /// Хранится разобранным, а не строкой: прежняя форма звала <c>string.Split</c> на каждое
-    /// событие, как только список переставал быть пустым. То есть попытка приглушить одну шумную
-    /// категорию делала горячий путь дороже, а не дешевле — ровно наоборот замыслу.
+    /// Stored parsed, not as a string: the previous form called <c>string.Split</c> on every event
+    /// as soon as the list stopped being empty. In other words, trying to mute one noisy category
+    /// made the hot path more expensive, not cheaper — the exact opposite of the intent.
     /// </summary>
     private readonly HashSet<string> _observeKinds = new(StringComparer.OrdinalIgnoreCase);
 
@@ -115,33 +131,34 @@ public sealed partial class StationAiAgentSystem
             _observeKinds.Add(part);
     }
 
-    // ------------------------------------------------------------------ подписки
+    // ------------------------------------------------------------------ subscriptions
 
     /// <summary>
-    /// Повесить прослушку мира. Вызывается один раз из <c>Initialize</c>.
+    /// Hook up the world listener. Called once from <c>Initialize</c>.
     /// </summary>
     /// <remarks>
-    /// Половина подписок широковещательные, половина направленные, и разница здесь не стилистическая.
-    /// <c>RaiseLocalEvent(uid, ev)</c> по умолчанию поднимает событие БЕЗ широковещания
-    /// (<c>EntityEventBus.Directed.cs</c>), поэтому на такое можно подписаться только через
-    /// конкретный компонент — а направленная пара «компонент + событие» в RobustToolbox глобально
-    /// уникальна: второй претендент получает <c>Duplicate Subscriptions</c> при старте сервера.
-    /// Отсюда <see cref="TryWitness{TComp,TEvent}"/> у направленных: занятая пара обязана стоить нам
-    /// одной категории наблюдений, а не поднятия сервера.
+    /// Half the subscriptions are broadcast, half are directed, and the difference here isn't
+    /// stylistic. <c>RaiseLocalEvent(uid, ev)</c> by default raises the event WITHOUT broadcasting
+    /// (<c>EntityEventBus.Directed.cs</c>), so such an event can only be subscribed to through a
+    /// specific component — and a directed "component + event" pair is globally unique in
+    /// RobustToolbox: a second claimant gets <c>Duplicate Subscriptions</c> at server startup. Hence
+    /// <see cref="TryWitness{TComp,TEvent}"/> for the directed ones: an already-taken pair must cost
+    /// us one category of observations, not the server failing to start.
     /// </remarks>
     private void SubscribeWitness()
     {
         CacheWitnessCVars();
 
-        // Широковещательные. Пару не занимают, отобрать их у нас нельзя.
+        // Broadcast. These don't occupy a pair; nobody can take them away from us.
         //
-        // Все до одного несут своих участников ВНУТРИ объекта события, и это не совпадение, а отбор:
-        // широковещательный обработчик получает только само событие и не знает, на какой сущности
-        // оно поднято. Поэтому UseInHandEvent, DroppedEvent и LockToggledEvent сюда не попали — они
-        // называют человека, но не называют предмет или замок, а строка «Иван что-то уронил» это
-        // половина наблюдения. Направленная подписка вернула бы им недостающую сущность, но каждая
-        // такая подписка занимает глобально уникальную пару, и тратить её на действие, которое и
-        // так видно кликом (InteractUsing по тому же предмету), не стоит.
+        // Every single one of them carries its participants INSIDE the event object, and that's not
+        // a coincidence — it's a selection criterion: a broadcast handler only gets the event itself
+        // and doesn't know which entity raised it. That's why UseInHandEvent, DroppedEvent and
+        // LockToggledEvent didn't make the cut — they name the person, but not the item or the lock,
+        // and a line like "Ivan dropped something" is only half an observation. A directed
+        // subscription would give them the missing entity, but each such subscription occupies a
+        // globally unique pair, and spending one on an action that's already visible from a click
+        // (InteractUsing on the same item) isn't worth it.
         SubscribeLocalEvent<InteractHandEvent>(OnWitnessHand);
         SubscribeLocalEvent<InteractUsingEvent>(OnWitnessUsing);
         SubscribeLocalEvent<RangedInteractEvent>(OnWitnessRanged);
@@ -154,24 +171,25 @@ public sealed partial class StationAiAgentSystem
         SubscribeLocalEvent<DidUnequipEvent>(OnWitnessUnequipped);
         SubscribeLocalEvent<MobStateChangedEvent>(OnWitnessMobState);
 
-        // Направленные. Каждая занимает пару, поэтому их всего три и каждая выбрана как единственная
-        // точка на целый класс происходящего.
+        // Directed. Each one occupies a pair, so there are only three, and each was chosen as the
+        // single point of entry for a whole class of things happening.
         //
-        // DamageChangedEvent — вся боль в игре разом. Через
-        // TryChangeDamage → ChangeDamage → DamageDealtEvent → InjurableComponent → OnEntityDamageChanged
-        // проходят и мили, и пули, и хитскан, и огонь; шесть подписок на оружие заменяются одной.
+        // DamageChangedEvent — all pain in the game in one place. Melee, bullets, hitscan, and fire
+        // all flow through
+        // TryChangeDamage → ChangeDamage → DamageDealtEvent → InjurableComponent → OnEntityDamageChanged;
+        // six subscriptions on weapons get replaced by one.
         TryWitness<MobStateComponent, DamageChangedEvent>(OnWitnessDamage);
         TryWitness<GunComponent, GunShotEvent>(OnWitnessShot);
         TryWitness<DoorComponent, DoorStateChangedEvent>(OnWitnessDoor);
     }
 
     /// <summary>
-    /// Подписаться на направленную пару, не убив сервер, если апстрим её уже занял.
+    /// Subscribe to a directed pair without killing the server if upstream already claimed it.
     ///
-    /// Отказ остаётся громким — он первой же строкой в журнале, — но публичный сервер поднимается и
-    /// работает без одной категории наблюдений вместо того, чтобы не подниматься вовсе. Пары
-    /// проверены на момент написания; проверка нужна на будущий ребейз, где чужая подписка появится
-    /// без нашего ведома.
+    /// The failure stays loud — it's the very first line in the log — but a live server comes up and
+    /// runs without one category of observations instead of not coming up at all. The pairs were
+    /// verified at the time of writing; the check is there for a future rebase where someone else's
+    /// subscription shows up without our knowledge.
     /// </summary>
     private void TryWitness<TComp, TEvent>(EntityEventRefHandler<TComp, TEvent> handler)
         where TComp : IComponent
@@ -205,78 +223,81 @@ public sealed partial class StationAiAgentSystem
         }
     }
 
-    // ------------------------------------------------------------------ обработчики
+    // ------------------------------------------------------------------ handlers
 
-    // Каждый — одна строка. Всё, что они делают, это называют ярлык, говорят, ГДЕ произошло, и
-    // перечисляют участников в порядке «кто, чем, над чем». Добавить новое событие — тоже одна
-    // строка; ничего больше в этом файле для этого трогать не нужно.
+    // Each one is a single line. All they do is name the label, say WHERE it happened, and list the
+    // participants in "who, with what, on what" order. Adding a new event is also one line; nothing
+    // else in this file needs touching for it.
 
     private void OnWitnessHand(InteractHandEvent args) =>
-        Witness(LabelHand, args.Target, args.User, args.Target);
+        Witness(LabelHand, LabelHandEn, args.Target, args.User, args.Target);
 
     private void OnWitnessUsing(InteractUsingEvent args) =>
-        Witness(LabelUsing, args.Target, args.User, args.Used, args.Target);
+        Witness(LabelUsing, LabelUsingEn, args.Target, args.User, args.Used, args.Target);
 
     private void OnWitnessRanged(RangedInteractEvent args) =>
-        Witness(LabelRanged, args.TargetUid, args.UserUid, args.UsedUid, args.TargetUid);
+        Witness(LabelRanged, LabelRangedEn, args.TargetUid, args.UserUid, args.UsedUid, args.TargetUid);
 
     private void OnWitnessActivate(ActivateInWorldEvent args) =>
-        Witness(LabelActivate, args.Target, args.User, args.Target);
+        Witness(LabelActivate, LabelActivateEn, args.Target, args.User, args.Target);
 
-    // Имя контейнера едет отдельным параметром, а не вклеивается в ярлык здесь: приклеить его
-    // строкой значило бы собирать строку на КАЖДОМ вложении на станции, включая те, что ворота
-    // отвергнут следующей же проверкой, — а вложений на станции больше, чем любых других событий.
-    // Само имя («left hand», «storagebase», «machine_parts») отдаётся как есть: положили в руку,
-    // в сумку или внутрь машины — это разные вещи, и различать их модели, а не нам.
+    // The container's name travels as a separate parameter rather than being glued into the label
+    // here: gluing it as a string would mean building a string on EVERY insertion on the station,
+    // including the ones the gate rejects on the very next check — and insertions outnumber every
+    // other kind of event on the station. The name itself ("left hand", "storagebase",
+    // "machine_parts") is passed through as-is: put into a hand, a bag, or inside a machine are
+    // different things, and telling them apart is the model's job, not ours.
     private void OnWitnessInserted(EntInsertedIntoContainerMessage args) =>
-        Witness(LabelInserted, args.Container.Owner, args.Entity, args.Container.Owner,
+        Witness(LabelInserted, LabelInsertedEn, args.Container.Owner, args.Entity, args.Container.Owner,
             detail: args.Container.ID);
 
     private void OnWitnessRemoved(EntRemovedFromContainerMessage args) =>
-        Witness(LabelRemoved, args.Container.Owner, args.Entity, args.Container.Owner,
+        Witness(LabelRemoved, LabelRemovedEn, args.Container.Owner, args.Entity, args.Container.Owner,
             detail: args.Container.ID);
 
     private void OnWitnessPullStarted(PullStartedMessage args) =>
-        Witness(LabelPullStart, args.PulledUid, args.PullerUid, args.PulledUid);
+        Witness(LabelPullStart, LabelPullStartEn, args.PulledUid, args.PullerUid, args.PulledUid);
 
     private void OnWitnessPullStopped(PullStoppedMessage args) =>
-        Witness(LabelPullStop, args.PulledUid, args.PullerUid, args.PulledUid);
+        Witness(LabelPullStop, LabelPullStopEn, args.PulledUid, args.PullerUid, args.PulledUid);
 
     private void OnWitnessEquipped(DidEquipEvent args) =>
-        Witness(LabelEquipped, args.EquipTarget, args.EquipTarget, args.Equipment);
+        Witness(LabelEquipped, LabelEquippedEn, args.EquipTarget, args.EquipTarget, args.Equipment);
 
     private void OnWitnessUnequipped(DidUnequipEvent args) =>
-        Witness(LabelUnequipped, args.EquipTarget, args.EquipTarget, args.Equipment);
+        Witness(LabelUnequipped, LabelUnequippedEn, args.EquipTarget, args.EquipTarget, args.Equipment);
 
     private void OnWitnessMobState(MobStateChangedEvent args) =>
-        Witness($"{LabelState}: {StateRu(args.OldMobState)}→{StateRu(args.NewMobState)}",
+        Witness(
+            $"{LabelState}: {StateRu(args.OldMobState)}→{StateRu(args.NewMobState)}",
+            $"{LabelStateEn}: {StateEn(args.OldMobState)}→{StateEn(args.NewMobState)}",
             args.Target, args.Origin ?? args.Target, args.Target);
 
     private void OnWitnessDamage(Entity<MobStateComponent> ent, ref DamageChangedEvent args)
     {
-        // Лечение — не событие «кому-то досталось», а его противоположность, и путать их в одной
-        // строке значит заставлять модель разбирать знак числа, которого в строке нет.
+        // Healing is not the event "someone got hit" — it's the opposite, and conflating the two in
+        // one line means making the model infer the sign of a number that isn't in the line at all.
         if (!args.DamageIncreased)
             return;
 
-        // Урон без источника: упал, обжёгся, задохнулся. Виновника нет, и придумывать его нельзя —
-        // строка «X ударил» с угаданным X хуже отсутствующей.
-        Witness(LabelDamage, ent.Owner, args.Origin ?? ent.Owner, ent.Owner);
+        // Damage with no source: fell, got burned, suffocated. There is no culprit, and one must not
+        // be invented — a line "X hit" with a guessed X is worse than no line at all.
+        Witness(LabelDamage, LabelDamageEn, ent.Owner, args.Origin ?? ent.Owner, ent.Owner);
     }
 
     private void OnWitnessShot(Entity<GunComponent> ent, ref GunShotEvent args) =>
-        Witness(LabelShot, ent.Owner, args.User, ent.Owner);
+        Witness(LabelShot, LabelShotEn, ent.Owner, args.User, ent.Owner);
 
-    // Ярлык двери берётся готовым, а не склеивается: двери на станции щёлкают десятками в секунду,
-    // и собирать строку на каждый щелчок ради события, которое почти всегда за пределами кадра, —
-    // это мусор в тике на ровном месте.
+    // The door's label is taken pre-made rather than assembled: doors on the station click dozens of
+    // times a second, and building a string on every click for an event that's almost always out of
+    // frame is wasted work in the tick for no reason.
     private void OnWitnessDoor(Entity<DoorComponent> ent, ref DoorStateChangedEvent args)
     {
-        var label = DoorLabel(args.State);
-        if (label == null)
+        var ru = DoorLabel(args.State, english: false);
+        if (ru == null)
             return;
 
-        Witness(label, ent.Owner, ent.Owner);
+        Witness(ru, DoorLabel(args.State, english: true)!, ent.Owner, ent.Owner);
     }
 
     private static string StateRu(MobState state) => state switch
@@ -287,74 +308,85 @@ public sealed partial class StationAiAgentSystem
         _ => "?",
     };
 
+    private static string StateEn(MobState state) => state switch
+    {
+        MobState.Alive => "alive",
+        MobState.Critical => "crit",
+        MobState.Dead => "dead",
+        _ => "?",
+    };
+
     /// <summary>
-    /// Готовый ярлык на каждое состояние двери — ни одной склейки строк в горячем пути.
-    /// <c>null</c> значит «не докладывать вовсе».
+    /// A ready-made label for every door state — no string building at all on the hot path.
+    /// <c>null</c> means "don't report this at all".
     ///
     /// <para>
-    /// <b>Промежуточные состояния молчат, и это починка, а не экономия.</b> Дверь проходит
-    /// <c>Closed → Opening → Open</c>, то есть <see cref="DoorStateChangedEvent"/> прилетает на
-    /// один проход дважды. Раньше <c>Opening</c> и <c>Open</c> давали ОДИН И ТОТ ЖЕ ярлык, и агент
-    /// получал две неотличимые строки подряд. В боевой сессии 16 августа это стоило семи ходов из
-    /// сорока двух: агент честно отвечал «повторное событие, уже учтено» — семь запросов к модели,
-    /// потраченных на пересказ самому себе.
+    /// <b>Intermediate states stay silent, and that's a fix, not an economy.</b> A door goes through
+    /// <c>Closed → Opening → Open</c>, meaning <see cref="DoorStateChangedEvent"/> fires twice for
+    /// one pass. Previously <c>Opening</c> and <c>Open</c> produced the SAME label, and the agent
+    /// got two indistinguishable lines in a row. In a live session on August 16 this cost seven turns
+    /// out of forty-two: the agent honestly replied "duplicate event, already noted" — seven calls to
+    /// the model spent retelling itself the same thing.
     /// </para>
     /// <para>
-    /// Оставлено конечное состояние, а не начальное, хотя начальное приходит на полсекунды раньше.
-    /// Причина: дверь можно перевести в <c>Open</c> без анимации — вскрытие, обесточивание,
-    /// принудительная установка состояния, — и тогда <c>Opening</c> не приходит вообще. Ставка на
-    /// промежуточное состояние теряла бы ровно те события, ради которых зрение и заводилось.
+    /// The final state is kept rather than the initial one, even though the initial one arrives half
+    /// a second earlier. Reason: a door can be switched to <c>Open</c> without an animation —
+    /// forced entry, depowering, a forced state set — in which case <c>Opening</c> never fires at
+    /// all. Betting on the intermediate state would lose exactly the events vision was set up for in
+    /// the first place.
     /// </para>
     /// </summary>
-    private static string? DoorLabel(DoorState state) => state switch
+    private static string? DoorLabel(DoorState state, bool english) => state switch
     {
-        DoorState.Open => LabelDoor + ": открылась",
-        DoorState.Closed => LabelDoor + ": закрылась",
-        DoorState.Denying => LabelDoor + ": отказ",
-        DoorState.Emagging => LabelDoor + ": взлом",
-        DoorState.Welded => LabelDoor + ": заварена",
+        DoorState.Open => english ? LabelDoorEn + ": opened" : LabelDoor + ": открылась",
+        DoorState.Closed => english ? LabelDoorEn + ": closed" : LabelDoor + ": закрылась",
+        DoorState.Denying => english ? LabelDoorEn + ": denied" : LabelDoor + ": отказ",
+        DoorState.Emagging => english ? LabelDoorEn + ": emagged" : LabelDoor + ": взлом",
+        DoorState.Welded => english ? LabelDoorEn + ": welded" : LabelDoor + ": заварена",
         _ => null,
     };
 
-    // ------------------------------------------------------------------ воронка
+    // ------------------------------------------------------------------ funnel
 
     /// <summary>
-    /// Всё увиденное сходится сюда: ворота, опознание, формат.
+    /// Everything seen converges here: the gate, identification, formatting.
     /// </summary>
-    /// <param name="label">Что произошло. Подпись для модели и ключ для <c>ai.observe_kinds</c>.</param>
+    /// <param name="label">What happened. A caption for the model and a key for <c>ai.observe_kinds</c>.</param>
     /// <param name="where">
-    /// По какой сущности мерить расстояние до глаза. Обычно это цель действия: событие происходит
-    /// там, где стоит она, а не там, где стоит инициатор — стрелявший из-за угла в кадр не попал,
-    /// а вот попадание попало.
+    /// Which entity to measure the distance to the eye from. Usually the action's target: the event
+    /// happens where the target stands, not where the initiator stands — someone shooting from
+    /// around a corner is out of frame, but the hit lands.
     /// </param>
-    /// <param name="first">Кто это сделал.</param>
-    /// <param name="second">Чем — или над чем, если инструмента не было.</param>
-    /// <param name="third">Над чем, если названы все трое.</param>
+    /// <param name="first">Who did it.</param>
+    /// <param name="second">With what — or on what, if there was no tool involved.</param>
+    /// <param name="third">On what, if all three are named.</param>
     /// <remarks>
-    /// Три отдельных параметра, а не <c>params EntityUid[]</c>, и это не придирка к стилю: массив
-    /// собирался бы на КАЖДОМ событии станции, включая те, что ворота отвергают следующей же
-    /// строкой. На потоке кликов это мусор в тике на ровном месте, а тик в этом проекте только что
-    /// вычищали от куда меньших поводов.
+    /// Three separate parameters, not <c>params EntityUid[]</c>, and that's not a style nitpick: an
+    /// array would be allocated on EVERY station event, including the ones the gate rejects on the
+    /// very next line. On a stream of clicks that's wasted work in the tick for no reason, and the
+    /// tick in this project just had far smaller offenders cleaned out of it.
     /// </remarks>
     /// <param name="detail">
-    /// Уточнение к ярлыку — приклеивается через двоеточие и только ПОСЛЕ ворот, чтобы событие,
-    /// которого глаз не видел, не стоило ни одной склейки строк.
+    /// A refinement of the label — glued on with a colon, and only AFTER the gate, so that an event
+    /// the eye didn't actually see doesn't cost even one string concatenation.
     /// </param>
-    private void Witness(string label, EntityUid where, EntityUid first, EntityUid second = default,
+    private void Witness(string labelRu, string labelEn, EntityUid where, EntityUid first, EntityUid second = default,
         EntityUid third = default, string? detail = null)
     {
-        // Первым делом — есть ли вообще кому смотреть. На станции без агента этот метод зовётся на
-        // каждый клик каждого игрока, и он обязан стоить одного сравнения.
+        // First thing: is there even anyone to watch for. On a station with no agent, this method
+        // gets called on every click of every player, and it must cost exactly one comparison.
         if (_sessions.Count == 0 || !_observe)
-            return;
-
-        if (!KindEnabled(label))
             return;
 
         var now = RoundTime();
 
         foreach (var session in _sessions.Values)
         {
+            var label = session.Locale.English ? labelEn : labelRu;
+
+            if (!KindEnabled(label))
+                continue;
+
             if (!NearTheEye(session, where, out var at, out var eyeAt))
                 continue;
 
@@ -370,12 +402,12 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Включён ли этот ярлык. Пустой список — все.
+    /// Is this label enabled. An empty list means all of them.
     /// </summary>
     /// <remarks>
-    /// Сравнение по префиксу до двоеточия: составные ярлыки вроде <c>состояние: жив→крит</c>
-    /// настраиваются одним словом <c>состояние</c>, иначе выключить категорию можно было бы только
-    /// перечислив все её значения.
+    /// Compared by the prefix up to the colon: compound labels like <c>состояние: жив→крит</c>
+    /// (state: alive→crit) are configured with a single word, <c>состояние</c>, otherwise turning off
+    /// a category would only be possible by listing every one of its values.
     /// </remarks>
     private bool KindEnabled(string label)
     {
@@ -385,26 +417,37 @@ public sealed partial class StationAiAgentSystem
         var colon = label.IndexOf(':');
         var head = colon < 0 ? label : label[..colon];
 
-        return _observeKinds.Contains(head);
+        foreach (var kind in _observeKinds)
+        {
+            if (kind.Equals(head, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (Locale.AgentLocale.KindAlias(kind)
+                .Equals(Locale.AgentLocale.KindAlias(head), StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
-    // ------------------------------------------------------------------ ворота
+    // ------------------------------------------------------------------ gate
 
     /// <summary>
-    /// Попало ли это место в поле зрения глаза.
+    /// Did this location fall within the eye's field of view.
     ///
     /// <para>
-    /// Две ступени вместо трёх, и это осознанный выбор, а не упрощение. Строгая проверка стен —
-    /// <c>StationAiVisionSystem.IsAccessible</c>, а она разворачивает три сотни тайлов и делает
-    /// broadphase-запрос на каждый. На редком вызове это незаметно; здесь вызовов поток, и полная
-    /// проверка вернула бы тик ровно к тому состоянию, из-за которого <c>look</c> держал его
-    /// секунду. Цена: в пределах <c>ai.observe_range</c> агент заметит происходящее за стеной,
-    /// тогда как человек на его месте увидел бы стену. Третья ступень включается
-    /// <c>ai.observe_occlusion</c>, см. <see cref="TileIsVisible"/>.
+    /// Two stages instead of three, and that's a deliberate choice, not a simplification. The
+    /// strict wall check is <c>StationAiVisionSystem.IsAccessible</c>, and it unrolls three hundred
+    /// tiles and makes a broadphase query for each. On a rare call that's unnoticeable; here calls
+    /// come in a stream, and a full check would return the tick to exactly the state that made
+    /// <c>look</c> hold it for a second. The cost: within <c>ai.observe_range</c>, the agent will
+    /// notice things happening behind a wall, whereas a person in its place would have seen the
+    /// wall. The third stage is enabled by <c>ai.observe_occlusion</c>, see
+    /// <see cref="TileIsVisible"/>.
     /// </para>
     /// <para>
-    /// Квадрат, а не круг (<c>max(|dx|,|dy|)</c>, а не длина): у человека на экране прямоугольный
-    /// вьюпорт, и круг обрезал бы углы, которые он видит.
+    /// A square, not a circle (<c>max(|dx|,|dy|)</c>, not the length): a person's screen has a
+    /// rectangular viewport, and a circle would clip the corners they can see.
     /// </para>
     /// </summary>
     private bool NearTheEye(AgentSession session, EntityUid what, out Vector2 at, out Vector2 eyeAt)
@@ -417,15 +460,16 @@ public sealed partial class StationAiAgentSystem
 
         var eye = core.Comp.RemoteEntity.Value;
 
-        // Без <TransformComponent>, и это не косметика. Негенерическая перегрузка ходит через
-        // готовый TransformQuery, а не через общий словарь компонентов; на пути, который
-        // срабатывает на каждое событие станции, разница считается. Аналитик RA0030 требует
-        // ровно этого и в конфигурации Release считает генерическую форму ошибкой сборки.
+        // Without <TransformComponent>, and that's not cosmetic. The non-generic overload goes
+        // through a ready-made TransformQuery rather than the general component dictionary; on a
+        // path that fires on every station event, the difference counts. The RA0030 analyzer demands
+        // exactly this and treats the generic form as a build error in the Release configuration.
         if (!TryComp(what, out TransformComponent? xform) || !TryComp(eye, out TransformComponent? eyeXform))
             return false;
 
-        // Разные сетки — разные места, даже если координаты близки. Шаттл, пролетающий мимо станции,
-        // не должен показываться агенту как происходящее в соседнем отсеке.
+        // Different grids mean different places, even if the coordinates are close. A shuttle
+        // flying past the station must not appear to the agent as happening in the neighbouring
+        // compartment.
         if (xform.GridUid == null || xform.GridUid != eyeXform.GridUid)
             return false;
 
@@ -442,15 +486,15 @@ public sealed partial class StationAiAgentSystem
     }
 
     /// <summary>
-    /// Третья ступень: не за стеной ли. Выключена по умолчанию, см. <c>ai.observe_occlusion</c>.
+    /// The third stage: is it behind a wall. Off by default, see <c>ai.observe_occlusion</c>.
     /// </summary>
     /// <remarks>
-    /// Две защиты, обе внутри тика. Мемо по тайлу живёт РОВНО тик и сбрасывается в <c>Update</c> —
-    /// это не кэш обзора: набор не переживает ни одного изменения мира, которое агент мог бы
-    /// пропустить, он лишь схлопывает драку на одном тайле в одну проверку вместо десяти. Потолок
-    /// проверок за тик — страховка от нагрузки, которую мемо не схлопывает; сверх него события
-    /// пропускаются, и число пропущенных уходит в журнал, потому что молча терять наблюдения хуже,
-    /// чем терять их громко.
+    /// Two safeguards, both within the tick. The per-tile memo lives for EXACTLY one tick and is
+    /// cleared in <c>Update</c> — it is not a vision cache: the set doesn't survive a single world
+    /// change the agent might have missed, it only collapses a fight on one tile into one check
+    /// instead of ten. The per-tick check cap is insurance against load the memo doesn't collapse;
+    /// beyond it, events are skipped, and the number skipped goes into the log, because losing
+    /// observations silently is worse than losing them loudly.
     /// </remarks>
     private bool TileIsVisible(EntityUid gridUid, TransformComponent xform)
     {
@@ -479,22 +523,23 @@ public sealed partial class StationAiAgentSystem
         return visible;
     }
 
-    // ------------------------------------------------------------------ опознание
+    // ------------------------------------------------------------------ identification
 
     /// <summary>
-    /// Собрать участников в строку: <c>crew-7 Иван Петров | obj-412 лист плазмы | Δ(2,-1) (12,-34)</c>.
+    /// Assemble the participants into a line: <c>crew-7 Ivan Petrov | obj-412 sheet of plasma | Δ(2,-1) (12,-34)</c>.
     ///
     /// <para>
-    /// Хендл — то, ради чего вся затея работает. Увидев <c>device-3 генератор аномалий</c>, агент
-    /// вызывает по нему инструмент немедленно, без промежуточного <c>look</c>; без хендла «запусти
-    /// его» стоило бы трёх ходов вместо одного. Реестр тот же самый, что у <c>look</c>
-    /// (<see cref="AgentSession.Handles"/>), и это требование, а не удобство: разойдись они — и одна
-    /// вещь стала бы для агента двумя.
+    /// The handle is the whole reason this exists. Seeing <c>device-3 anomaly generator</c>, the
+    /// agent calls a tool on it immediately, with no intermediate <c>look</c>; without a handle,
+    /// "start it" would cost three turns instead of one. It's the same registry as <c>look</c> uses
+    /// (<see cref="AgentSession.Handles"/>), and that's a requirement, not a convenience: if they
+    /// diverged, one thing would become two things for the agent.
     /// </para>
     /// <para>
-    /// Уговору «наблюдение не носит EntityUid» это не противоречит. Тот запрет — про голос по рации:
-    /// связать голос с сущностью человек в этой роли не может. Увиденное — ровно наоборот: игрок,
-    /// который смотрит, как в генератор кладут плазму, может по этому генератору кликнуть.
+    /// This doesn't contradict the rule that "an observation doesn't carry an EntityUid". That
+    /// prohibition is about a voice over the radio: a person in that role has no way to tie a voice
+    /// to an entity. Something seen is the exact opposite: a player watching someone load plasma
+    /// into a generator can click on that generator.
     /// </para>
     /// </summary>
     private string? Describe(AgentSession session, EntityUid first, EntityUid second, EntityUid third,
@@ -503,9 +548,9 @@ public sealed partial class StationAiAgentSystem
         var sb = new StringBuilder();
         var wrote = 0;
 
-        // Повторы отсеиваются сравнением с предыдущими, а не множеством: участников не больше трёх,
-        // и половина событий называет цель дважды — она же и «где». Печатать её два раза значит
-        // платить токенами за шум.
+        // Duplicates are filtered by comparing against the previous ones, not with a set: there are
+        // never more than three participants, and half the events name the target twice — it's also
+        // the "where". Printing it twice would mean paying tokens for noise.
         AppendPart(session, sb, first, ref wrote);
 
         if (second != first)
@@ -517,15 +562,16 @@ public sealed partial class StationAiAgentSystem
         if (wrote == 0)
             return null;
 
-        // Тот же формат, что у строк look: Δ отвечает «в какой стороне от меня», абсолютная пара
-        // скармливается move_camera. Δ отсчитана от глаза В МОМЕНТ СОБЫТИЯ — агент мог увести
-        // камеру до своего хода, и eye= в строке SELF будет уже о другом месте.
+        // Same format as look's lines: Δ answers "in which direction from me", the absolute pair
+        // is fed to move_camera. Δ is measured from the eye AT THE MOMENT OF THE EVENT — the agent
+        // may have moved the camera before its turn, and eye= in the SELF line will already be about
+        // a different location.
         sb.Append(" | ").Append(PositionFrom(eyeAt, at));
 
         return sb.ToString();
     }
 
-    /// <summary>Дописать одного участника как «хендл имя», если он вообще есть и как-то зовётся.</summary>
+    /// <summary>Append one participant as "handle name", if it still exists and has some kind of name.</summary>
     private void AppendPart(AgentSession session, StringBuilder sb, EntityUid uid, ref int wrote)
     {
         if (!uid.IsValid() || Deleted(uid))
@@ -535,9 +581,9 @@ public sealed partial class StationAiAgentSystem
         if (string.IsNullOrWhiteSpace(name))
             return;
 
-        // TryGetHandle ДО KindOf, а не GetOrCreate(uid, KindOf(uid)): аргумент вычисляется всегда,
-        // даже когда хендл уже есть, а KindOf — цепочка из тринадцати HasComp. Ровно эта ошибка
-        // стоила времени в look; здесь она сработала бы в десятки раз чаще.
+        // TryGetHandle BEFORE KindOf, not GetOrCreate(uid, KindOf(uid)): the argument is always
+        // evaluated, even when the handle already exists, and KindOf is a chain of thirteen HasComp
+        // calls. This exact mistake cost time in look; here it would fire tens of times more often.
         if (!session.Handles.TryGetHandle(uid, out var handle))
             handle = session.Handles.GetOrCreate(uid, KindOf(uid));
 
@@ -548,20 +594,20 @@ public sealed partial class StationAiAgentSystem
         wrote++;
     }
 
-    // ------------------------------------------------------------------ учёт
+    // ------------------------------------------------------------------ accounting
 
-    /// <summary>Мемо видимости тайла на один тик. Не кэш обзора: живёт до конца тика и умирает.</summary>
+    /// <summary>Per-tile visibility memo for a single tick. Not a vision cache: it lives until the end of the tick and dies.</summary>
     private readonly Dictionary<Vector2i, bool> _seenTiles = new();
 
     private int _visionChecks;
     private int _visionSkipped;
 
-    /// <summary>Сколько строк наблюдения выпущено за жизнь процесса. Только для тестов и журнала.</summary>
+    /// <summary>How many observation lines have been issued over the process's lifetime. For tests and the log only.</summary>
     private int _witnessed;
 
     private float _sinceWitnessReport;
 
-    /// <summary>Сбросить счётчики тика и, если что-то потерялось, сказать об этом вслух.</summary>
+    /// <summary>Reset the tick counters and, if something was lost, say so out loud.</summary>
     private void ResetWitnessTick(float frameTime)
     {
         _seenTiles.Clear();

@@ -132,20 +132,21 @@ namespace Content.Client.Entry
             _prototypeManager.RegisterIgnore("codewordGenerator");
             _prototypeManager.RegisterIgnore("codewordFaction");
 
-            // FORK PATCH К2 (docs/upstream-patches.md).
-            // Виды прототипов нашего форка, объявленные только на сервере (AiLlmProfilePrototype,
-            // AiBackupPowerPrototype). Без этих двух строк клиент из лаунчера теряет половину
-            // каталога _AiAgent, и вот почему.
+            // FORK PATCH K2 (docs/upstream-patches.md).
+            // Our fork's prototype kinds declared server-only (AiLlmProfilePrototype,
+            // AiBackupPowerPrototype). Without these two lines, the client launched from the
+            // launcher loses half of the _AiAgent catalog, and here's why.
             //
-            // Упаковщик склеивает все YAML одного каталога в один __merged.yml
-            // (AssetPassMergeTextDirectories), а разбор прототипов ловит ошибку на весь документ
-            // сразу: неизвестный вид посреди файла прерывает цикл, и всё, что стоит НИЖЕ, не
-            // грузится вовсе. В _AiAgent ниже backup_power.yml лежат законы ИИ, наборы законов и
-            // пресеты режима — на клиенте из лаунчера их просто нет.
+            // The packer merges all YAML in a directory into a single __merged.yml
+            // (AssetPassMergeTextDirectories), and prototype parsing throws an error for the
+            // whole document at once: an unknown kind partway through the file breaks the loop,
+            // and everything BELOW it never loads at all. In _AiAgent, below backup_power.yml
+            // there are AI laws, lawsets, and mode presets — on the launcher client they simply
+            // don't exist.
             //
-            // На клиенте из исходников этого не видно: там файлы лежат россыпью и падает только
-            // backup_power.yml сам по себе. Отсюда и расхождение «в разработке работает, в Steam
-            // нет», которое мы неделю искали в сети.
+            // This isn't visible on a client built from source: there the files sit loose and
+            // only backup_power.yml itself fails to load. Hence the "works in dev, not in
+            // Steam" discrepancy we spent a week chasing on the network.
             _prototypeManager.RegisterIgnore("aiLlmProfile");
             _prototypeManager.RegisterIgnore("aiBackupPower");
 
@@ -211,16 +212,17 @@ namespace Content.Client.Entry
         }
 
         /// <summary>
-        /// ФОРК, ДИАГНОСТИКА (снять, когда петля PVS закроется). Печатает, какие прототипы
-        /// _AiAgent клиент действительно собрал.
+        /// FORK, DIAGNOSTIC (remove once the PVS loop is closed). Prints which _AiAgent
+        /// prototypes the client actually loaded.
         /// </summary>
         /// <remarks>
-        /// Нужна потому, что клиент из лаунчера видит каталог прототипов иначе, чем клиент из
-        /// исходников: упаковщик склеивает YAML каталога в один файл, и одна плохая запись рубит
-        /// все, что ниже. Отсутствие шасси клиент обнаруживает не при загрузке, а посреди раунда —
-        /// сущность, которую нельзя создать, роняет применение состояния, клиент просит полное
-        /// состояние и уходит в петлю. По журналу это выглядит как сетевая проблема, хотя ломается
-        /// разбор прототипов при запуске.
+        /// Needed because a launcher client sees the prototype directory differently than a
+        /// client built from source: the packer merges the directory's YAML into a single file,
+        /// and one bad entry breaks everything below it. The client doesn't discover a missing
+        /// chassis at load time but mid-round — an entity that can't be created breaks applying
+        /// state, the client requests a full state and falls into a loop. In the log this looks
+        /// like a network problem, even though what's actually broken is prototype parsing at
+        /// startup.
         /// </remarks>
         private void ReportAiPrototypes()
         {

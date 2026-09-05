@@ -8,14 +8,14 @@ export interface StatsSample {
 }
 
 export interface StatsSeries {
-  /** Ключ — номер хода, а не время прихода. */
+  /** The key is the turn number, not the arrival time. */
   samples: Map<number, StatsSample>
-  /** Номера ходов, про которые точно известно, что они пропущены. */
+  /** Turn numbers we know for certain were skipped. */
   gaps: Set<number>
   lastTurn: number
 }
 
-/** Больше кольца событий на сервере не надо: дальше клиент всё равно получит resync. */
+/** No need for more than the server's event ring: beyond that the client gets a resync anyway. */
 const MAX_SAMPLES = 500
 
 export function emptySeries(): StatsSeries {
@@ -29,19 +29,22 @@ export function resetSeries(series: StatsSeries): void {
 }
 
 /**
- * Добавить точку.
+ * Adds a data point.
  *
- * Ключ — `stats.turns`, и это не косметика. Время прихода здесь бессмысленно: после resync пачка
- * накопившихся `stats` приезжает одним залпом, и по времени они лягут в одну секунду. Номер хода
- * же приходит внутри самого события — `AgentStatsDto.Turns` инкрементится ДО хода, а сэмпл
- * публикуется в `finally` после, так что каждый кадр несёт номер того хода, который описывает.
+ * The key is `stats.turns`, and that's not cosmetic. Arrival time is meaningless here: after a
+ * resync, the accumulated batch of `stats` arrives in a single burst, and by time they'd all
+ * land in the same second. The turn number, on the other hand, comes from inside the event
+ * itself — `AgentStatsDto.Turns` is incremented BEFORE the turn, while the sample is published
+ * in a `finally` afterward, so every frame carries the number of the turn it describes.
  *
- * Скачок больше единицы — это пропуск (кольцо перезаписало, вкладка спала), и он запоминается,
- * чтобы график нарисовал РАЗРЫВ. Прямая через пропуск читается как плавный тренд, которого не
- * было, — а вся ценность этих двух линий в том, чтобы заметить, когда кэш просел.
+ * A jump greater than one is a gap (the ring overwrote it, the tab was asleep), and it's
+ * remembered so the chart draws a BREAK. A straight line through a gap reads as a smooth trend
+ * that never existed — and the entire value of these two lines is noticing when the cache
+ * dropped.
  *
- * Ход меньше предыдущего — это либо новая сессия (счётчик начинается заново), либо последний
- * сэмпл умирающей сессии из окна зомби. И то и другое означает «ряд кончился».
+ * A turn smaller than the previous one means either a new session (the counter starts over) or
+ * the last sample of a dying session from the zombie window. Either way it means "the series is
+ * over".
  */
 export function pushSample(series: StatsSeries, stats: AgentStats): void {
   const turn = stats.turns
@@ -69,15 +72,15 @@ export function pushSample(series: StatsSeries, stats: AgentStats): void {
   }
 }
 
-/** Точки по возрастанию хода, готовые к отрисовке. */
+/** Points in ascending turn order, ready to be drawn. */
 export function ordered(series: StatsSeries): StatsSample[] {
   return [...series.samples.values()].sort((a, b) => a.turn - b.turn)
 }
 
 /**
- * Разбить ряд на непрерывные отрезки.
+ * Splits the series into contiguous segments.
  *
- * Каждый отрезок рисуется своей ломаной, поэтому пропуск виден как дыра, а не как прямая.
+ * Each segment is drawn as its own polyline, so a gap shows up as a hole, not as a straight line.
  */
 export function segments(series: StatsSeries): StatsSample[][] {
   const points = ordered(series)

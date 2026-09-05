@@ -8,30 +8,32 @@ using Content.Server.AiAgent.Tools;
 
 namespace Content.Server.AiAgent.Core.Scripting;
 
-/// <summary>Чем занят процесс. Ровно четыре состояния, и три из них конечные.</summary>
+/// <summary>What the process is doing. Exactly four states, three of them terminal.</summary>
 public enum ScriptStatus : byte
 {
     Running,
     Done,
     Failed,
 
-    /// <summary>Снят снаружи: <c>bp_stop</c>, конец сессии, смена тела.</summary>
+    /// <summary>Stopped from the outside: <c>bp_stop</c>, end of session, body change.</summary>
     Stopped,
 }
 
 /// <summary>
-/// Один запущенный скрипт агента.
+/// One running agent script.
 ///
 /// <para>
-/// Живёт на выделенном потоке, а не в пуле. Скрипт блокируется на каждом вызове инструмента —
-/// ждёт, пока шина мира доедет до главного потока, — и делает это десятки раз подряд; занять
-/// этим поток пула на минуты значило бы отобрать его у петли агента, которая на том же пуле и
-/// крутится. Процессов одновременно единицы, так что свой поток здесь дешевле любой хитрости.
+/// Lives on a dedicated thread, not in a pool. The script blocks on every tool call — waiting for
+/// the world bus to reach the main thread — and does this dozens of times in a row; tying up a pool
+/// thread for minutes would mean taking it away from the agent loop, which spins on that same pool.
+/// There are only a handful of processes at once, so a thread of its own is cheaper here than any
+/// cleverness.
 /// </para>
 /// <para>
-/// Время меряется секундомером, а не раундовыми часами. Раундовое время читается только на
-/// главном потоке (ради него <c>new_timer</c> и марширует туда), а процессу оно нужно лишь для
-/// отчёта «сколько работал» — и, в отличие от будильника, потолок обязан наступать даже на паузе.
+/// Time is measured with a stopwatch, not the round clock. Round time can only be read on the main
+/// thread (which is why <c>new_timer</c> marches over there for it), and the process only needs it
+/// to report "how long it ran" — and unlike an alarm, the ceiling must still arrive even while
+/// paused.
 /// </para>
 /// </summary>
 public sealed class ScriptProcess
@@ -58,7 +60,7 @@ public sealed class ScriptProcess
     public int Pid { get; }
     public string Code { get; }
 
-    /// <summary>Читается с потока агента и с главного; пишется только своим потоком.</summary>
+    /// <summary>Read from the agent thread and from the main one; written only by its own thread.</summary>
     public volatile ScriptStatus Status = ScriptStatus.Running;
 
     public string? Error { get; private set; }
@@ -70,10 +72,10 @@ public sealed class ScriptProcess
     public CancellationToken Token => _cts.Token;
     public bool IsRunning => Status == ScriptStatus.Running;
 
-    /// <summary>Сколько инструментов уже позвал; заодно предохранитель от зациклившегося скрипта.</summary>
+    /// <summary>How many tools it has called so far; also a safeguard against a looping script.</summary>
     public int CountCall() => Interlocked.Increment(ref _calls);
 
-    /// <summary>Вывод скрипта — то, что модель прочитает через <c>bp_get_output</c>.</summary>
+    /// <summary>The script's output — what the model reads via <c>bp_get_output</c>.</summary>
     public void Print(string line)
     {
         lock (_lock)
@@ -90,11 +92,11 @@ public sealed class ScriptProcess
     }
 
     /// <summary>
-    /// Только то, что появилось с прошлого чтения.
+    /// Only what has appeared since the last read.
     ///
-    /// Курсор здесь не удобство, а экономия контекста: без него каждый опрос длинного скрипта
-    /// заново вкладывал бы в диалог весь его вывод, и модель платила бы за одни и те же строки
-    /// столько раз, сколько раз спросила.
+    /// The cursor here is not a convenience but a context saving: without it, every poll of a long
+    /// script would re-insert its entire output into the dialogue, and the model would pay for the
+    /// same lines as many times as it asked.
     /// </summary>
     public string ReadNew()
     {
@@ -104,7 +106,7 @@ public sealed class ScriptProcess
 
             if (_dropped > 0)
             {
-                builder.Append($"[потеряно строк: {_dropped}]\n");
+                builder.Append($"[lines dropped: {_dropped}]\n");
                 _dropped = 0;
             }
 
@@ -115,7 +117,7 @@ public sealed class ScriptProcess
         }
     }
 
-    /// <summary>Хвост вывода, не двигая курсор — для итогового отчёта и строки о завершении.</summary>
+    /// <summary>The tail of the output, without moving the cursor — for the final report and the completion line.</summary>
     public string Tail(int lines)
     {
         lock (_lock)
@@ -133,7 +135,7 @@ public sealed class ScriptProcess
         thread.Start();
     }
 
-    /// <summary>Снять процесс. Возврата нет: скрипт узнает об этом отменой на ближайшем срезе.</summary>
+    /// <summary>Stop the process. No going back: the script learns of it via cancellation at the nearest slice.</summary>
     public void Stop()
     {
         try
@@ -142,7 +144,7 @@ public sealed class ScriptProcess
         }
         catch (ObjectDisposedException)
         {
-            // Сессию уже освободили — процесс и так мёртв.
+            // The session has already been released — the process is dead anyway.
         }
     }
 
@@ -170,9 +172,9 @@ public sealed class ScriptProcess
         }
         catch (Exception e)
         {
-            // Сюда попадает только сбой на нашей стороне: ошибки самого скрипта уже разобраны
-            // выше и пришли кодом. Наружу это уходит как internal, без стека — модель с ним всё
-            // равно ничего не сделает.
+            // Only a failure on our own side lands here: errors from the script itself are already
+            // handled above and arrive as a code. This surfaces as internal, without a stack trace —
+            // the model couldn't do anything with it anyway.
             Error = ToolError.Internal;
             Detail = $"сбой исполнителя ({e.GetType().Name})";
             Status = ScriptStatus.Failed;
@@ -184,12 +186,16 @@ public sealed class ScriptProcess
         }
     }
 
-    /// <summary>Как процесс называется в отчёте инструменту и в строке SELF.</summary>
-    public string StatusWord() => Status switch
+    /// <summary>What the process is called in the tool report and in the SELF line.</summary>
+    public string StatusWord(Locale.AgentLocale? loc = null)
     {
-        ScriptStatus.Running => "идёт",
-        ScriptStatus.Done => "готово",
-        ScriptStatus.Failed => "ошибка",
-        _ => "снят",
-    };
+        loc ??= Locale.AgentLocale.Ru;
+        return Status switch
+        {
+            ScriptStatus.Running => loc.ScriptRunning,
+            ScriptStatus.Done => loc.ScriptDone,
+            ScriptStatus.Failed => loc.ScriptFailed,
+            _ => loc.ScriptStopped,
+        };
+    }
 }

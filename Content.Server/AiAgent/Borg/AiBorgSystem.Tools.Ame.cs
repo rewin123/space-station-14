@@ -14,33 +14,39 @@ using Robust.Shared.Map.Components;
 namespace Content.Server.AiAgent.Borg;
 
 /// <summary>
-/// Раскладка экранирования АМЭ: девять клеток и порядок, в котором их занимать.
+/// AME shielding layout: nine cells and the order in which to occupy them.
 ///
 /// <para>
-/// Инструмент существует потому, что геометрия здесь — единственное, чего модель не может
-/// проверить наблюдением, а ошибка в ней стоит всей смены. Три живых прогона подряд кончились
-/// по-разному, и каждый раз причина была в раскладке:
+/// This tool exists because the geometry here is the one thing the model can't verify by
+/// observation, and a mistake in it costs the whole shift. Three live runs in a row ended
+/// differently, and each time the cause was the layout:
 /// </para>
 /// <list type="number">
-/// <item>кольцо по восьми соседям пульта — ядром становится клетка ПУЛЬТА, которая щитом не
-/// станет никогда, и <c>CoreCount</c> остаётся нулём;</item>
-/// <item>правильный квадрат, но подход к пульту застроен — реактор собран, а впрыск включить
-/// нечем, потому что до консоли не дойти;</item>
-/// <item>правильный квадрат с правильным подходом, но робот клал щиты, стоя ВНУТРИ, и девятым
-/// закрыл себе выход: «I'm trapped at (29,-40) surrounded by shields».</item>
+/// <item>a ring over the controller's eight neighbors — the core becomes the CONTROLLER's own
+/// cell, which will never become a shield, and <c>CoreCount</c> stays zero;</item>
+/// <item>a correct square, but the approach to the controller is built over — the reactor is
+/// assembled, but there's nothing to turn on the injection with, because the console can't be
+/// reached;</item>
+/// <item>a correct square with a correct approach, but the robot placed shields while standing
+/// INSIDE, and the ninth one sealed off its own exit: "I'm trapped at (29,-40) surrounded by
+/// shields."</item>
 /// </list>
 /// <para>
-/// Все три условия проверяемы заранее и не требуют ни одного хода модели, поэтому проверяются
-/// здесь. Модель получает готовый список и ведёт по нему цикл; думать ей остаётся о том, чего
-/// код не знает, — о людях, авариях и приоритетах.
+/// All three conditions can be checked in advance and require no move from the model, so they're
+/// checked here. The model gets a ready-made list and runs a loop over it; what's left for it to
+/// think about is what the code doesn't know — people, emergencies, and priorities.
 /// </para>
 /// </summary>
 public sealed partial class AiBorgSystem
 {
-    /// <summary>Сторона квадрата экранирования. Три на три — одно ядро, и это минимальный рабочий.</summary>
+    /// <summary>
+    /// Side of the shielding square. Three by three gives one core, and that's the minimal working setup.
+    /// </summary>
     private const int SquareSide = 3;
 
-    /// <summary>Насколько далеко от пульта имеет смысл искать место под квадрат, тайлы.</summary>
+    /// <summary>
+    /// How far from the controller it makes sense to search for a spot for the square, in tiles.
+    /// </summary>
     private const int SearchRadius = 4;
 
     private Task<ToolResult> AmePlanAsync(AgentSession s, JsonElement args, CancellationToken ct)
@@ -55,8 +61,9 @@ public sealed partial class AiBorgSystem
             var toGrid = _xform.GetInvWorldMatrix(grid);
             var here = ToTile(Vector2.Transform(_xform.GetMapCoordinates(borg).Position, toGrid));
 
-            // Пульт ищем сами: спрашивать хендл значит требовать, чтобы модель сначала сделала
-            // look и не перепутала АМЭ с ТЭГ — а это ровно тот шаг, на котором она путается.
+            // We find the controller ourselves: asking for a handle would mean requiring the model to
+            // do a look first and not mix up the AME with the TEG — and that's exactly the step
+            // where it gets confused.
             var ctrl = EntityUid.Invalid;
             var ctrlTile = Vector2i.Zero;
             var best = float.MaxValue;
@@ -107,21 +114,22 @@ public sealed partial class AiBorgSystem
                 for (var y = 0; y < SquareSide; y++)
                     cells.Add(corner + new Vector2i(x, y));
 
-                // Пульт внутри квадрата — та самая ошибка с кольцом: он щитом не станет.
+                // The controller inside the square — that's the same ring mistake: it won't become a shield.
                 if (cells.Contains(ctrlTile))
                     continue;
 
                 if (!cells.All(Free))
                     continue;
 
-                // Одной стороной квадрат обязан касаться пульта, иначе они не в одной узловой сети.
+                // The square must touch the controller with one side, otherwise they're not on the
+                // same node network.
                 if (!cells.Any(c => side.Any(d => c + d == ctrlTile)))
                     continue;
 
                 var inside = cells.ToHashSet();
 
-                // Подход к пульту: клетка рядом с ним, которой квадрат не займёт. Без неё реактор
-                // соберётся, а впрыск включить будет неоткуда.
+                // Approach to the controller: a cell next to it that the square won't occupy. Without
+                // it, the reactor would get assembled but there'd be nowhere to turn on the injection from.
                 var approaches = side
                     .Select(d => ctrlTile + d)
                     .Where(t => !inside.Contains(t) && Free(t))
@@ -130,8 +138,8 @@ public sealed partial class AiBorgSystem
                 if (approaches.Count == 0)
                     continue;
 
-                // Выход: клетка квадрата, из которой можно шагнуть наружу. По ней робот и будет
-                // отступать, укладывая щиты от дальнего края.
+                // Exit: a cell of the square from which you can step outside. The robot will retreat
+                // along it, laying shields starting from the far edge.
                 var exits = cells
                     .SelectMany(c => side.Select(d => (Cell: c, Out: c + d)))
                     .Where(p => !inside.Contains(p.Out) && p.Out != ctrlTile && Free(p.Out))
@@ -159,8 +167,8 @@ public sealed partial class AiBorgSystem
                     "остаётся и подход к нему, и выход наружу. Разбери, что мешает, или собирай квадрат дальше");
             }
 
-            // Порядок: дальние от выхода — первыми. Тогда на каждом шаге дорога к выходу ещё
-            // свободна, а последняя клетка та, с которой робот сразу шагает наружу.
+            // Order: farthest from the exit first. That way the path to the exit is still clear at
+            // every step, and the last cell is the one from which the robot steps straight outside.
             var order = chosen
                 .OrderByDescending(c => (c - exit).Length)
                 .ThenBy(c => (c - here).Length)

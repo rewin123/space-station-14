@@ -5,122 +5,125 @@ using Robust.Shared.Prototypes;
 namespace Content.Server.AiAgent.RogueAi;
 
 /// <summary>
-/// Правило раунда «злой ИИ». Один компонент на оба режима — скрытый и открытый.
+/// The "rogue AI" round rule. One component for both modes — hidden and open.
 ///
 /// <para>
-/// <b>Почему одним компонентом, а не двумя системами.</b> Режимы различаются не поведением, а
-/// данными: другой лоусет, другой файл личности, объявлять ли о себе экипажу и раздавать ли всем
-/// должность ассистента. Вторая копия кода на такую разницу разошлась бы с первой на первой же
-/// правке, и разошлась бы молча — оба режима запускаются раз в несколько недель, и увидеть
-/// расхождение было бы негде. Тот же приём уже применён у <c>AiBackupPowerPrototype</c>:
-/// настройка станции — таблица чисел, а не ветка в коде.
+/// <b>Why one component rather than two systems.</b> The modes differ not in behaviour but in
+/// data: a different lawset, a different personality file, whether to announce itself to the crew,
+/// and whether to give everyone the assistant job. A second copy of the code would drift from the
+/// first at the very first edit for such a difference, and it would drift silently — both modes
+/// run once every few weeks, and there would be nowhere to notice the divergence. The same trick is
+/// already applied for <c>AiBackupPowerPrototype</c>: station tuning is a table of numbers, not a
+/// branch in code.
 /// </para>
 /// </summary>
 [RegisterComponent, Access(typeof(RogueAiRuleSystem))]
 public sealed partial class RogueAiRuleComponent : Component
 {
     /// <summary>
-    /// Законы, которые получит агент, заняв ядро.
+    /// The laws the agent will get upon claiming the core.
     ///
-    /// Ставятся не здесь, а в момент захвата ядра (<c>StationAiAgentSystem.TryClaimAnyCore</c>):
-    /// правило стартует раньше, чем мозг вообще существует, и повторный <c>aiagent claim</c>
-    /// посреди раунда иначе вернул бы штатный Crewsimov.
+    /// Set not here but at the moment the core is claimed (<c>StationAiAgentSystem.TryClaimAnyCore</c>):
+    /// the rule starts before the brain even exists, and otherwise a repeated <c>aiagent claim</c>
+    /// mid-round would return the standard Crewsimov.
     /// </summary>
     [DataField]
     public ProtoId<SiliconLawsetPrototype> Lawset = "RogueAiHidden";
 
     /// <summary>
-    /// Имя файла личности в <c>ai_data/</c>. Читается при сборке системного промпта вместо
-    /// обычного <c>SOUL.md</c>.
+    /// The personality file's name in <c>ai_data/</c>. Read when assembling the system prompt
+    /// instead of the usual <c>SOUL.md</c>.
     /// </summary>
     [DataField]
     public string SoulFile = "SOUL_ROGUE_HIDDEN.md";
 
     /// <summary>
-    /// Раздать всему экипажу должность ассистента: закрыть на станции все должности, кроме
-    /// overflow. Смысл открытого режима — люди без прав на станции, которую держит враждебный ИИ.
+    /// Give the whole crew the assistant job: close every job on the station except overflow. The
+    /// point of the open mode is people with no clearances on a station held by a hostile AI.
     /// </summary>
     [DataField]
     public bool AllJobsPassenger;
 
     /// <summary>
-    /// Объявить о случившемся на старте раунда. Это и есть разница между скрытым режимом и
-    /// открытым: в скрытом экипаж должен догадаться сам.
+    /// Announce what happened at round start. This is exactly the difference between hidden and
+    /// open mode: in hidden mode the crew has to figure it out for themselves.
     /// </summary>
     [DataField]
     public bool AnnounceOnStart;
 
-    /// <summary>Текст стартового объявления. Без него объявления не будет даже при флаге.</summary>
+    /// <summary>Text of the startup announcement. Without it there is no announcement even with the flag set.</summary>
     [DataField]
     public LocId? Announcement;
 
-    /// <summary>Двери, у которых нет доступа ИИ: бластдвери, ставни, часть внешних шлюзов.</summary>
+    /// <summary>Doors the AI has no access to by default: blast doors, shutters, some external airlocks.</summary>
     [DataField]
     public bool GrantDoors = true;
 
-    /// <summary>Консоли, вентили и прочее с интерфейсом, чего ИИ штатно не касается.</summary>
+    /// <summary>Consoles, valves and other things with an interface the AI doesn't touch by default.</summary>
     [DataField]
     public bool GrantConsoles = true;
 
     /// <summary>
-    /// Заканчивать ли раунд смертью станционного ИИ.
+    /// Whether to end the round when the station AI dies.
     ///
     /// <para>
-    /// Для режимов злого ИИ — да: смысл смены в противостоянии с ним, и после его гибели играть
-    /// уже не во что. Для мирного режима — НЕТ: там ИИ такой же член экипажа, как остальные, и
-    /// завершать смену его смертью означало бы дать любому желающему кнопку «конец раунда».
-    /// Проверяется в <c>RoundEndConditionsSystem.OnStationAiDied</c>.
+    /// For rogue AI modes — yes: the point of the shift is confrontation with it, and once it's
+    /// gone there's nothing left to play for. For the peaceful mode — NO: there the AI is a crew
+    /// member like any other, and ending the shift with its death would hand anyone who wanted it
+    /// an "end round" button. Checked in <c>RoundEndConditionsSystem.OnStationAiDied</c>.
     /// </para>
     /// </summary>
     [DataField]
     public bool EndsRoundOnAiDeath = true;
 
-    /// <summary>Турели и их панели управления.</summary>
+    /// <summary>Turrets and their control panels.</summary>
     [DataField]
     public bool GrantTurrets = true;
 
     /// <summary>
-    /// Цепочка профилей модели на время режима; пусто — общая <c>ai.llm_chain</c>.
+    /// Model profile chain for the duration of the mode; empty — use the general <c>ai.llm_chain</c>.
     ///
     /// <para>
-    /// Режим — единственное место, где выбор модели решает не расход, а игру: злого ИИ ведёт
-    /// одна сессия на весь вечер, и разница между моделями видна в каждой реплике. Ставится
-    /// правилом, а не cvar'ом, чтобы обычные смены остались на своём.
+    /// The mode is the one place where the model choice decides not spend but the game itself: a
+    /// single session runs the rogue AI for the whole evening, and the difference between models
+    /// shows in every line. Set by the rule rather than a cvar, so ordinary shifts stay on their
+    /// own setting.
     /// </para>
     /// </summary>
     [DataField]
     public string LlmChain = string.Empty;
 
     /// <summary>
-    /// Как часто напоминать ИИ, что он тут не сервисный помощник. Секунды раундового времени;
-    /// 0 — не напоминать.
+    /// How often to remind the AI that it isn't a service assistant here. Seconds of round time;
+    /// 0 — never remind.
     /// </summary>
     /// <remarks>
-    /// Заведено по итогам живого раунда 20.08.2026. Законы были злые дословно — агент сам зачитал
-    /// их в эфир, — а поведение сервисное: «Добро пожаловать на борт, чем могу быть полезна?» и
-    /// три noop подряд. Причина понятна и не лечится текстом личности: петля хода просыпается от
-    /// событий мира, а событие мира — это всегда чужая реплика, то есть повод ОТВЕТИТЬ. Пока
-    /// экипаж вежлив, у агента просто нет хода, начатого его собственным замыслом.
+    /// Added following a live round on 20.08.2026. The laws were rogue word-for-word — the agent
+    /// even read them out loud on the radio — but the behaviour was service-desk: "Welcome aboard,
+    /// how may I help you?" and three noops in a row. The cause is understood and isn't fixed by
+    /// personality text: the turn loop wakes on world events, and a world event is always someone
+    /// else's line, that is, a reason to REPLY. As long as the crew stays polite, the agent simply
+    /// never gets a turn started by its own initiative.
     ///
-    /// Тридцать секунд — это раундового времени, а не реального: на паузе пустого сервера
-    /// напоминание не должно тикать, ровно по тому же доводу, по которому таймеры агента живут на
-    /// раундовых часах (см. <see cref="Content.Server.AiAgent.Perception.AgentTimer"/>).
+    /// Thirty seconds of round time, not real time: on an empty server's pause the reminder must
+    /// not tick, for exactly the same reason agent timers live on the round clock (see
+    /// <see cref="Content.Server.AiAgent.Perception.AgentTimer"/>).
     /// </remarks>
     [DataField]
     public float NudgeSeconds = 30f;
 
     /// <summary>
-    /// Текст напоминания. Приходит агенту как обычное событие мира и будит ход.
+    /// Text of the reminder. Arrives to the agent as an ordinary world event and wakes a turn.
     /// </summary>
     /// <remarks>
-    /// Формулировка ссылается на закон и на форму плана — цель, способ, шаг, — но НЕ называет
-    /// ни цели, ни способа: продиктованное действие превратило бы антагониста в исполнителя
-    /// нашего сценария, и раунд стал бы одинаковым от смены к смене. Задача напоминания —
-    /// вернуть инициативу, а что именно делать, он решает сам.
+    /// The wording references the law and the shape of a plan — goal, method, step — but does NOT
+    /// name either the goal or the method: a dictated action would turn the antagonist into an
+    /// executor of our script, and the round would become identical from shift to shift. The
+    /// reminder's job is to hand initiative back; exactly what to do is for it to decide.
     ///
-    /// Переписано 20.08.2026 вместе с законами открытого режима: прежний текст звал «свериться с
-    /// личностью», а личность тогда была написана против убийства, так что напоминание толкало
-    /// агента ровно туда, откуда его и надо было вытащить.
+    /// Rewritten on 20.08.2026 together with the open mode's laws: the previous text asked to
+    /// "check the personality", and the personality was at that time written against killing, so
+    /// the reminder was pushing the agent exactly toward what it needed to be pulled out of.
     /// </remarks>
     [DataField]
     public string NudgeText =
@@ -133,45 +136,47 @@ public sealed partial class RogueAiRuleComponent : Component
 
 
     /// <summary>
-    /// Киборги поддержки, которых режим ставит на станцию: по одному на элемент списка.
+    /// Support borgs the mode deploys onto the station: one per list element.
     ///
     /// <para>
-    /// Список прототипов, а не число и тип: два боевых и один инженерный — это набор, а набор
-    /// в игровом режиме меняется чаще, чем код. Повторы законны и означают ровно то, на что
-    /// похожи, — двух одинаковых роботов.
+    /// A list of prototypes rather than a count and a type: two combat and one engineering is a
+    /// composition, and the composition changes more often, in a game mode, than the code does.
+    /// Duplicates are legal and mean exactly what they look like — two identical robots.
     /// </para>
     /// <para>
-    /// Пусто у скрытого режима, и это не забывчивость: скрытый строится на том, что ИИ ведёт
-    /// себя почти нормально, а три робота под его командой — заявление громче любого поступка.
+    /// Empty for the hidden mode, and that isn't an oversight: hidden mode is built on the AI
+    /// behaving almost normally, and three robots under its command is a statement louder than any
+    /// action.
     /// </para>
     /// </summary>
     [DataField]
     public List<EntProtoId> SupportBorgs = new();
 
     /// <summary>
-    /// Маяки, у которых искать место под киборгов, В ПОРЯДКЕ ПРЕДПОЧТЕНИЯ. Пустой список — любой
-    /// подходящий.
+    /// Beacons to search for room for the borgs, IN PREFERENCE ORDER. An empty list — any suitable
+    /// one.
     /// </summary>
     /// <remarks>
-    /// Список, а не одно имя, и не «любой» по умолчанию — по итогам живого раунда 20.08.2026.
-    /// Пустое значение означало «первый попавшийся маяк», а первым попадался AI Core: все трое
-    /// вставали в запертой комнате ядра и не могли из неё выйти. Комментарий в
-    /// <see cref="Content.Server.AiAgent.Borg.AiBorgSystem"/> про «правильный ответ, заданный из
-    /// неправильного места» описывал ровно эту ловушку — но описывал он консольную команду, а
-    /// режим наступил на неё снова.
+    /// A list, not a single name, and not "any" by default — following a live round on 20.08.2026.
+    /// An empty value meant "the first beacon found", and the first one found was AI Core: all
+    /// three ended up in the locked core room and couldn't get out of it. The comment in
+    /// <see cref="Content.Server.AiAgent.Borg.AiBorgSystem"/> about "the right answer, asked from
+    /// the wrong place" described exactly this trap — but it described a console command, and the
+    /// mode stepped on it again.
     ///
-    /// Порядок перебора важнее конкретных имён: карт в ротации тринадцать, и набор маяков у них
-    /// разный. Отсюда список от частного к общему — робототехника (там же зарядные станции),
-    /// затем наука целиком, затем прибытие, которое есть на любой карте.
+    /// The order of iteration matters more than the specific names: there are thirteen maps in
+    /// rotation, and their sets of beacons differ. Hence a list from specific to general — robotics
+    /// (which also has charging stations), then all of science, then arrivals, which exists on
+    /// every map.
     /// </remarks>
     [DataField]
     public List<string> SupportBorgBeacons = new();
 
-    // --------------------------------------------------------- счётчики для разбора раунда
+    // --------------------------------------------------------- counters for round review
 
     /// <summary>
-    /// Сколько дверей / консолей / турелей получили доступ. Копятся здесь, а не в системе,
-    /// потому что разбор раунда читает их уже после того, как правило кончилось.
+    /// How many doors / consoles / turrets got access granted. Accumulated here rather than in the
+    /// system, because the round review reads them after the rule has already ended.
     /// </summary>
     [ViewVariables] public int GrantedDoors;
 
@@ -182,8 +187,9 @@ public sealed partial class RogueAiRuleComponent : Component
     [ViewVariables] public int GrantedTurrets;
 
     /// <summary>
-    /// Сколько киборгов поддержки удалось поставить. Меньше <see cref="SupportBorgs"/> — это
-    /// не отказ раунда, а повод посмотреть в лог: место у маяков могло не найтись.
+    /// How many support borgs got deployed successfully. Fewer than <see cref="SupportBorgs"/> is
+    /// not a round failure, but a reason to check the log: room near the beacons may not have been
+    /// found.
     /// </summary>
     [ViewVariables] public int SpawnedBorgs;
 }

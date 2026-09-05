@@ -13,18 +13,19 @@ using Robust.Shared.GameObjects;
 namespace Content.AiBench;
 
 /// <summary>
-/// Шестеро боевых на одну станцию: имена, свои-чужие и честный промах.
+/// Six combat borgs on one station: names, friend-or-foe, and an honest miss.
 ///
 /// <para>
-/// Все три проверки родились из одного живого раунда 305 (01.09.2026), и общее у них то, что
-/// каждая поломка молчала. Одно имя на шестерых выглядело как «роботы тупят», расстрел собрата —
-/// как «модель сошла с ума», промах мимо цели — как «киборги стоят». Ни одна не давала ни строки
-/// ошибки: инструменты честно отвечали «ок», а в игре ничего не происходило.
+/// All three checks came out of one live round 305 (2026-09-01), and what they have in common is
+/// that each breakage was silent. One name for six looked like "the robots are being dumb," shooting
+/// a squadmate looked like "the model went insane," missing the target looked like "the borgs are
+/// stuck." None of them produced a single error line: the tools honestly reported "ok," and nothing
+/// happened in the game.
 /// </para>
 /// <para>
-/// Стенд — настоящая станция (<see cref="AiStation"/>), потому что все три вопроса про мир:
-/// сколько корпусов встало у маяка, что видно в <c>look</c> и достаёт ли клинок до цели. На
-/// синтетическом гриде ни один из них не задать.
+/// The bench is a real station (<see cref="AiStation"/>), because all three questions are about the
+/// world: how many chassis spawned at the beacon, what's visible in <c>look</c>, and whether the
+/// blade reaches the target. None of them can be asked on a synthetic grid.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -34,19 +35,21 @@ public sealed class BorgSquadTests
     private const string CombatProto = "AiBorgCombatChassis";
 
     /// <summary>
-    /// Каждому боевому корпусу — своё имя, а не шесть «Клинов».
+    /// Every combat chassis gets its own name, not six copies of "Blade."
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Одно имя на всех ломает не косметику, а адресацию. Приказ «Клин, иди в бар» уходит в общий
-    /// эфир, и каждый из шести принимает его на свой счёт: роботы либо идут толпой на одну цель,
-    /// либо стоят, выясняя между собой, кого имели в виду. Номер Si тут не помогает — его выдаёт
-    /// движок при спавне, в приказах экипажа он не звучит и в промпте не закреплён.
+    /// One name for all of them breaks not cosmetics but addressing. The order "Blade, go to the
+    /// bar" goes out over shared comms, and each of the six takes it personally: the robots either
+    /// swarm one target or stand around sorting out among themselves who was meant. The Si number
+    /// doesn't help here — it's assigned by the engine at spawn, doesn't appear in crew orders, and
+    /// isn't fixed in the prompt.
     /// </para>
     /// <para>
-    /// Проверяется именно связь «номер каталога → имя», а не просто различность: имя обязано быть
-    /// функцией от <c>AgentId</c>, иначе робот, восстановивший после рестарта каталог
-    /// <c>combat-3</c>, отзовётся на чужое имя и заберёт себе чужие заметки.
+    /// What's checked is specifically the "catalog number → name" mapping, not mere distinctness:
+    /// the name must be a function of <c>AgentId</c>, otherwise a robot that recovers catalog entry
+    /// <c>combat-3</c> after a restart will answer to someone else's name and pick up someone else's
+    /// notes.
     /// </para>
     /// </remarks>
     [Test]
@@ -61,10 +64,10 @@ public sealed class BorgSquadTests
         {
             var system = w.Pair.Server.System<AiBorgSystem>();
 
-            // ТРИ, а не шесть: на стенде уже занято ядро, а общий потолок ai.max_agents по
-            // умолчанию равен четырём — четвёртый борг честно получает отказ в StartSession.
-            // Поднимать потолок ради теста незачем: связь «номер каталога → имя из пула»
-            // проверяется на трёх ровно так же, как на шести.
+            // THREE, not six: the bench already has the core occupying a slot, and the shared cap
+            // ai.max_agents defaults to four — a fourth borg would honestly get refused in
+            // StartSession. No need to raise the cap for the test: the "catalog number → name from
+            // pool" mapping is checked on three exactly the same way as on six.
             for (var i = 0; i < 3; i++)
             {
                 Assert.That(system.TrySpawnBorg(null, out var borg, out var placed, CombatProto), Is.True,
@@ -102,20 +105,20 @@ public sealed class BorgSquadTests
     }
 
     /// <summary>
-    /// В промпте каждого робота перечислены остальные — поимённо и без него самого.
+    /// Every robot's prompt lists the others — by name and without itself.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Без этого списка робот не может отличить своего от человека в принципе: в <c>look</c> и в
-    /// наблюдениях чужой корпус приходит строкой того же вида, что и человек — «crew-4 Имя (Si-…)
-    /// | Alive». В раунде 305 это стоило шестнадцати выстрелов Штыка по Клину и Шипу. Пока боевой
-    /// корпус был один, вопрос не возникал вовсе.
+    /// Without this list a robot can't tell a squadmate from a human in principle: in <c>look</c>
+    /// and in observations another chassis arrives as a line in the same shape as a human — "crew-4
+    /// Name (Si-…) | Alive." In round 305 this cost sixteen shots fired by Shtyk at Klin and Ship.
+    /// While there was only one combat chassis, the question never came up at all.
     /// </para>
     /// <para>
-    /// Тест проверяет и порядок: список собирается для ПЕРВОГО захваченного тела тоже. Наивная
-    /// реализация брала имена из живых сессий, а правило режима спавнит корпуса пачкой и занимает
-    /// их по одному — первый робот получал бы «кроме тебя никого нет», то есть ровно ту слепоту,
-    /// от которой блок и заведён.
+    /// The test also checks ordering: the list is built for the FIRST claimed body too. A naive
+    /// implementation pulled names from live sessions, but the gamemode's rule spawns chassis as a
+    /// batch and claims them one at a time — the first robot would get "there's no one but you," i.e.
+    /// exactly the blindness this block exists to prevent.
     /// </para>
     /// </remarks>
     [Test]
@@ -166,8 +169,8 @@ public sealed class BorgSquadTests
                     $"«{name}» не назван в блоке своих: по нему и будут стрелять");
             }
 
-            // Своё имя в списке своих не нужно и вредно: «не бей того, кем ты являешься» — это
-            // строка, на которой модель начинает рассуждать вместо того, чтобы работать.
+            // A robot's own name in the friendly list is unnecessary and harmful: "don't hit the one
+            // you are" is a line that makes the model start reasoning instead of working.
             var block = prompt[prompt.IndexOf("СВОИ", StringComparison.Ordinal)..];
             var line = block[..block.IndexOf('\n')];
 
@@ -177,20 +180,20 @@ public sealed class BorgSquadTests
     }
 
     /// <summary>
-    /// Удар мимо — это ОТКАЗ инструмента, а не «ударил».
+    /// A missed hit is a tool REFUSAL, not "hit."
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Самая дорогая из трёх поломок и самая незаметная. <c>AttemptLightAttack</c> возвращает
-    /// <c>true</c> на факт ЗАМАХА, а не на попадание: цель вне досягаемости — апстрим пишет в
-    /// админ-лог «melee attacked (light) … and missed» и на этом всё. Инструмент отвечал
-    /// «ударил», модель считала работу сделанной и била снова. В раунде 305 Обух сделал больше
-    /// тридцати замахов подряд по цели, до которой не доставал; со стороны это выглядело как
-    /// намертво замерший киборг.
+    /// The most expensive of the three breakages and the most inconspicuous. <c>AttemptLightAttack</c>
+    /// returns <c>true</c> for the fact of the SWING, not for a connect: when the target is out of
+    /// reach, upstream writes "melee attacked (light) … and missed" to the admin log and that's it.
+    /// The tool reported "hit," the model considered the job done and struck again. In round 305,
+    /// Obukh made more than thirty swings in a row at a target it couldn't reach; from the outside
+    /// it looked like a borg frozen solid.
     /// </para>
     /// <para>
-    /// Отказ обязан называть причину и звать подойти: «не прошло» отправило бы модель искать
-    /// другую цель вместо того, чтобы сделать два шага.
+    /// A refusal must name the reason and tell the model to close in: "it didn't go through" would
+    /// have sent the model looking for another target instead of taking two steps.
     /// </para>
     /// </remarks>
     [Test]
@@ -212,13 +215,13 @@ public sealed class BorgSquadTests
 
         await w.Pair.Server.WaitRunTicks(5);
 
-        // Мишень ставится НА ТУ ЖЕ КЛЕТКУ, а отодвигается уже после того, как робот её увидел.
+        // The target is placed ON THE SAME TILE and only moved away after the robot has seen it.
         //
-        // Первая версия спавнила её сразу в четырёх тайлах и была красной по двум причинам сразу:
-        // смещение считалось в мировых координатах и попадало не туда, куда ожидалось, а сама
-        // мишень к моменту удара успевала исчезнуть — инструмент отвечал «объекта больше нет», и
-        // тест проверял не то, что хотел. Клетка робота — единственное место, про которое на
-        // настоящей карте известно, что там пол; два моба на одной клетке законны.
+        // The first version spawned it four tiles away right away and was red for two reasons at
+        // once: the offset was computed in world coordinates and landed somewhere unexpected, and
+        // the target itself would disappear by the time of the hit — the tool would answer "object
+        // no longer exists," and the test was checking the wrong thing. The robot's own tile is the
+        // one place a real map guarantees has floor; two mobs on one tile is legal.
         var xform = w.Pair.Server.System<Robust.Shared.GameObjects.SharedTransformSystem>();
         var at = await w.Read(() => xform.GetWorldPosition(borg));
 
@@ -233,20 +236,21 @@ public sealed class BorgSquadTests
 
         Assert.That(handle, Is.Not.Null, $"мишень не попала в обзор: {seen.EffectJson()}");
 
-        // Отодвигаем РОБОТА, а не мишень.
+        // We move the ROBOT away, not the target.
         //
-        // Двигать мишень пробовали — не работает: перенесённый моб к следующему вызову
-        // инструмента переставал разрешаться по хендлу («объекта больше нет»), и тест снова
-        // проверял не то. Робот же в стенде живёт гарантированно: его держит сессия агента.
-        // Для проверки это равнозначно — вопрос в расстоянии между двумя точками.
+        // Moving the target instead was tried — it doesn't work: a relocated mob would stop
+        // resolving by handle by the next tool call ("object no longer exists"), and the test would
+        // again be checking the wrong thing. The robot, on the other hand, is guaranteed to persist
+        // on the bench: the agent session keeps it alive. For the check it's equivalent either way —
+        // the question is the distance between two points.
         await w.Post(() => xform.SetWorldPosition(borg, at + new Vector2(8f, 0f)));
         await w.Pair.Server.WaitRunTicks(5);
 
         var before = await w.Read(() => damage.GetTotalDamage(victim));
 
-        // Одного вызова достаточно, и это часть проверки. Отказ по дальности стоит ПЕРЕД замахом,
-        // то есть перед перезарядкой: если бы он стоял после, первый ответ был бы «рука ещё не
-        // отведена» и настоящую причину модель узнала бы только со второй попытки.
+        // One call is enough, and that's part of the check. The range refusal happens BEFORE the
+        // swing, i.e. before the cooldown: if it happened after, the first response would be "arm not
+        // yet drawn back," and the model would only learn the real reason on the second attempt.
         var hit = await w.InvokeOn(borg, "hit", $"{{\"target\":\"{handle}\"}}");
 
         await w.Pair.Server.WaitRunTicks(5);
@@ -270,14 +274,16 @@ public sealed class BorgSquadTests
     }
 
     /// <summary>
-    /// Первый хендл заданного вида из выдачи <c>look</c> — именно ХЕНДЛ, а не строка целиком.
+    /// The first handle of a given kind from <c>look</c>'s output — specifically the HANDLE, not the
+    /// whole line.
     /// </summary>
     /// <remarks>
-    /// Обрезка по первому пробелу обязательна, и на ней тест уже спотыкался. Строка обзора
-    /// выглядит как <c>crew-1 | Далёкий | Alive | Δ(0,0) (-2,-17)</c>, инструменты принимают из
-    /// неё только первое слово, а на всю строку отвечают <c>stale_handle</c> — «объекта больше
-    /// нет». Отличить это от настоящего исчезновения цели по тексту ответа невозможно, поэтому
-    /// сообщение и увело в сторону: искали, кто удаляет моба, а никто его не удалял.
+    /// Trimming at the first space is mandatory, and the test has already tripped over it once. A
+    /// look line looks like <c>crew-1 | Далёкий | Alive | Δ(0,0) (-2,-17)</c>; the tools accept only
+    /// the first word from it, and given the whole line they respond with <c>stale_handle</c> —
+    /// "object no longer exists." There's no way to tell that apart from a genuine target
+    /// disappearance from the response text alone, which is what sent the investigation down the
+    /// wrong path: people looked for what was deleting the mob, when nothing was deleting it.
     /// </remarks>
     private static string? HandleOf(string lookJson, string kind)
     {

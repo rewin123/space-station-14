@@ -17,19 +17,19 @@ using Robust.Shared.Prototypes;
 namespace Content.AiBench;
 
 /// <summary>
-/// Режим «злой ИИ»: доступ, должности, законы, личность.
+/// Rogue AI mode: access, jobs, laws, personality.
 ///
 /// <para>
-/// Стенд — настоящая станция (<see cref="AiStation"/>, карта Box), и это здесь не роскошь, а
-/// условие: главная проверка файла — что раздача доступа НЕ уехала за пределы станции, а чтобы
-/// «за пределами станции» вообще существовало, в мире должен быть второй грид. На тестовой
-/// площадке из тринадцати тайлов проверять было бы нечего.
+/// The bench is a real station (<see cref="AiStation"/>, the Box map), and that's not a luxury
+/// here but a requirement: the file's central check is that access grants do NOT leak beyond
+/// the station, and for "beyond the station" to even exist, the world needs a second grid. On a
+/// thirteen-tile test rig there would be nothing to check.
 /// </para>
 /// <para>
-/// Правило поднимается настоящим <c>GameTicker.StartGameRule</c> по настоящему прототипу, а не
-/// сконструированным в тесте компонентом. Так проверяется в том числе YAML: опечатка в id
-/// лоусета или в имени файла личности — самый тихий вид поломки этого режима, потому что раунд
-/// при ней стартует нормально, просто ИИ оказывается обычным.
+/// The rule is started via the real <c>GameTicker.StartGameRule</c> on the real prototype, not a
+/// component constructed in the test. This also exercises the YAML: a typo in the lawset id or
+/// the personality file name is the quietest way this mode can break, because the round starts
+/// fine with it — the AI just turns out to be an ordinary one.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -40,16 +40,18 @@ public sealed class RogueAiTests
     private static readonly EntProtoId HiddenRule = "RogueAiHiddenRule";
 
     /// <summary>
-    /// Доступ раздан на станции и НИГДЕ больше.
+    /// Access is granted on the station and NOWHERE else.
     /// </summary>
     /// <remarks>
-    /// Самая вероятная и самая незаметная поломка этого режима — тихое расползание доступа на
-    /// чужие гриды: Центком, эвакуационный шаттл, аванпосты. В игре это выглядит как «ИИ почему-то
-    /// открывает двери на Центкоме», то есть никак, пока туда кто-нибудь не долетит.
+    /// The most likely and most inconspicuous way this mode can break is access quietly spreading
+    /// to other grids: CentCom, the evac shuttle, outposts. In game it looks like "the AI can
+    /// somehow open doors on CentCom" — meaning it looks like nothing at all, until someone flies
+    /// there.
     ///
-    /// Утверждений поэтому два, и второе важнее первого: мало проверить, что новых компонентов вне
-    /// станции нет, — надо убедиться, что снаружи вообще БЫЛО что захватывать. Иначе тест зелен на
-    /// пустом мире и ничего не сторожит.
+    /// That's why there are two assertions, and the second matters more than the first: it's not
+    /// enough to check that no new components appeared off-station — we need to confirm there was
+    /// something off-station TO grab in the first place. Otherwise the test is green on an empty
+    /// world and guards nothing.
     /// </remarks>
     [Test]
     public async Task GrantsAccess_OnStationOnly()
@@ -79,7 +81,8 @@ public sealed class RogueAiTests
             Assert.That(grant.Doors, Is.GreaterThan(0), "ни одна дверь не получила доступ — обход не сработал");
             Assert.That(added, Is.Not.Empty, "доступ не роздан вообще никому");
 
-            // Контроль стенда. Без него первое утверждение зелено и на мире из одного грида.
+            // Bench sanity check. Without it, the first assertion would be green even on a
+            // single-grid world.
             Assert.That(offStationDoorsBefore, Is.GreaterThan(0),
                 "в мире нет ни одной двери вне станции — проверять фильтр не на чем, стенд сломан");
 
@@ -89,14 +92,14 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Уже размеченное не трогается, в том числе выключенное экипажем.
+    /// Already-marked entities are left alone, including ones the crew disabled.
     /// </summary>
     /// <remarks>
-    /// У <c>StationAiWhitelist</c> есть поле <c>Enabled</c>, которое гаснет, когда экипаж
-    /// перерезает провод управления ИИ. Переналожить компонент значило бы починить перерезанный
-    /// провод — то есть отобрать у экипажа единственную контригру, работающую точечно и молча.
-    /// Поймать это глазами нельзя никак: в игре разница видна только тем, что дверь, которую
-    /// «отключили», продолжает слушаться.
+    /// <c>StationAiWhitelist</c> has an <c>Enabled</c> field that goes false when the crew cuts
+    /// the AI control wire. Re-applying the component would amount to repairing that cut wire —
+    /// taking away the crew's one counterplay, which works precisely and silently. There is no
+    /// way to catch this by eye: in game, the only visible difference is that a door that was
+    /// "disabled" keeps obeying anyway.
     /// </remarks>
     [Test]
     public async Task GrantsAccess_DoesNotRepairCutWires()
@@ -139,13 +142,14 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Открытый режим закрывает все должности, кроме overflow — то есть кроме ассистента.
+    /// Open mode closes every job except overflow — meaning every job except assistant.
     /// </summary>
     /// <remarks>
-    /// Проверяется само решение системы, а не результат спавна. Поднять
-    /// <c>RulePlayerSpawningEvent</c> руками нельзя по той же причине, по которой нельзя поднимать
-    /// <c>RulePlayerJobsAssignedEvent</c> (см. <c>BackupPowerTests</c>): на эти события
-    /// подписан <c>AntagSelectionSystem</c>, и вне последовательности старта раунда он падает сам.
+    /// This checks the system's decision itself, not the outcome of a spawn. Raising
+    /// <c>RulePlayerSpawningEvent</c> by hand isn't possible, for the same reason
+    /// <c>RulePlayerJobsAssignedEvent</c> can't be raised either (see <c>BackupPowerTests</c>):
+    /// <c>AntagSelectionSystem</c> is subscribed to these events, and outside the round-start
+    /// sequence it crashes on its own.
     /// </remarks>
     [Test]
     public async Task OpenMode_ClosesEveryJobButOverflow()
@@ -181,13 +185,13 @@ public sealed class RogueAiTests
             Assert.That(openAfter, Is.Empty,
                 $"остались открытые должности помимо ассистента: {string.Join(", ", openAfter)}");
 
-            // Закрыть заодно и ассистента значило бы не пустить на станцию вообще никого.
+            // Closing the assistant job too would mean letting no one onto the station at all.
             Assert.That(overflowLeft, Is.EqualTo(overflow.Count), "overflow-должность тоже закрылась");
         });
     }
 
     /// <summary>
-    /// Захват ядра в режиме ставит законы режима, а не штатный Crewsimov.
+    /// Claiming the core in this mode applies the mode's lawset, not the stock Crewsimov one.
     /// </summary>
     [Test]
     public async Task Claim_AppliesTheRogueLawset()
@@ -204,8 +208,8 @@ public sealed class RogueAiTests
         {
             StartRule(server, HiddenRule);
 
-            // Захват заново тем же путём, которым идёт `aiagent claim` на живом сервере: мозг в
-            // ядре переиспользуется, законы ставятся на него.
+            // Reclaimed the same way `aiagent claim` does on a live server: the brain already in
+            // the core is reused, and the laws are applied to it.
             w.System.ReleaseAll("тест режима злого ИИ");
             return w.System.TryClaimAnyCore(out _);
         });
@@ -232,12 +236,12 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Системный промпт собирается из файла личности РЕЖИМА, а не из обычного SOUL.md.
+    /// The system prompt is assembled from the MODE's personality file, not the ordinary SOUL.md.
     /// </summary>
     /// <remarks>
-    /// Промпт — замороженный префикс: собери его не из того файла, и весь раунд агент будет играть
-    /// не ту роль, ничем этого не показав. Ошибок при этом не бывает — обычный SOUL.md существует
-    /// и прекрасно читается.
+    /// The prompt is a frozen prefix: assemble it from the wrong file, and the agent plays the
+    /// wrong role for the whole round without showing any sign of it. No errors occur either —
+    /// the ordinary SOUL.md exists and reads just fine.
     /// </remarks>
     [Test]
     public async Task Prompt_UsesTheRogueSoul()
@@ -264,12 +268,12 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Пресеты и правила режима согласованы между собой и с прототипами апстрима.
+    /// The mode's presets and rules are consistent with each other and with upstream prototypes.
     /// </summary>
     /// <remarks>
-    /// Здесь ловятся опечатки, которые на живом сервере ничего не роняют, а просто выключают
-    /// режим: несуществующий лоусет, правило, которого нет, пресет без правила режима. Каждая из
-    /// них выглядит как «раунд шёл, а ИИ был обычный».
+    /// This catches typos that don't crash anything on a live server but simply switch the mode
+    /// off: a nonexistent lawset, a rule that doesn't exist, a preset missing the mode's rule.
+    /// Each one looks like "the round ran fine, but the AI was ordinary".
     /// </remarks>
     [Test]
     public async Task Prototypes_AreWiredUp()
@@ -318,7 +322,7 @@ public sealed class RogueAiTests
             return 0;
         });
 
-        // Открытый режим — единственный, который трогает должности и объявляет о себе.
+        // Open mode is the only one that touches jobs and announces itself.
         var open = await w.Read(() =>
         {
             protoMan.TryIndex(OpenRule, out var proto);
@@ -344,20 +348,20 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Открытый режим поднимает трёх киборгов, и у каждого свой идентификатор.
+    /// Open mode raises three borgs, and each one gets its own identifier.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Проверяется не «спавн не упал», а состав и разделение. Состав — потому что набор задан
-    /// списком в YAML и опечатка в имени прототипа не роняет раунд, а молча даёт двух роботов
-    /// вместо трёх. Разделение — потому что общий идентификатор означает общий каталог памяти и
-    /// общий файл диалога, и проявляется это через раунд, когда связать причину со следствием
-    /// уже нечем.
+    /// This checks not "the spawn didn't crash" but composition and separation. Composition,
+    /// because the roster is a list in YAML, and a typo in a prototype name doesn't crash the
+    /// round — it quietly gives you two robots instead of three. Separation, because a shared
+    /// identifier means a shared memory folder and a shared dialogue file, and it only shows up a
+    /// whole round later, once there's no way left to connect cause and effect.
     /// </para>
     /// <para>
-    /// Спавн живёт на раздаче должностей, поэтому здесь поднимается настоящее событие тикера,
-    /// а не вызывается метод: порядок относительно готовности навигационной карты — часть того,
-    /// что проверяется.
+    /// The spawn lives on job assignment, so this raises the real ticker event rather than
+    /// calling a method directly: the ordering relative to nav-map readiness is part of what's
+    /// being checked.
     /// </para>
     /// </remarks>
     [Test]
@@ -370,14 +374,15 @@ public sealed class RogueAiTests
         {
             var (rogue, rule) = StartRule(server, OpenRule);
 
-            // Метод зовётся напрямую, а не событием: на RulePlayerJobsAssignedEvent подписан
-            // AntagSelectionSystem, и вне последовательности старта раунда он падает сам. Тем же
-            // приёмом проверяется раздача доступа выше.
+            // The method is called directly rather than through an event: AntagSelectionSystem is
+            // subscribed to RulePlayerJobsAssignedEvent and crashes on its own outside the
+            // round-start sequence. Access granting above is checked with the same trick.
             rogue.SpawnSupportBorgs(rule);
 
-            // Захват отдельным шагом, потому что идентификатор выдаётся именно на нём, а не на
-            // спавне. В раунде это делает автозахват на переходе в InRound; здесь — руками, чтобы
-            // тест не зависел от того, чем ещё занят тикер.
+            // Claiming is a separate step because the identifier is assigned right there, not at
+            // spawn time. In a real round, auto-claim does this on the transition into InRound;
+            // here it's done by hand, so the test doesn't depend on whatever else the ticker is
+            // busy with.
             var borgs = server.System<Content.Server.AiAgent.Borg.AiBorgSystem>();
             var found = new List<string>();
 
@@ -396,9 +401,9 @@ public sealed class RogueAiTests
 
         Assert.Multiple(() =>
         {
-            // Сверяется со СПИСКОМ правила, а не с печатным числом. Состав отряда — решение
-            // YAML: 31.08 их было трое, 01.09 стало семеро, и тест, знающий число наизусть,
-            // краснеет от каждого такого решения, ничего при этом не проверяя.
+            // Checked against the rule's LIST, not a hardcoded number. Squad composition is a
+            // YAML decision: on 31.08 there were three, on 01.09 it became seven, and a test that
+            // hardcodes the number turns red on every such decision without checking anything.
             Assert.That(wanted, Is.GreaterThan(0), "открытому режиму не прописано ни одного киборга");
 
             Assert.That(ids, Has.Count.EqualTo(wanted),
@@ -411,12 +416,13 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Скрытый режим не поднимает ни одного киборга.
+    /// Hidden mode does not raise a single borg.
     /// </summary>
     /// <remarks>
-    /// Три робота под командой ИИ — заявление громче любого поступка, и в скрытом режиме это
-    /// сорвало бы весь замысел на первой минуте. Проверяется отдельно, потому что список пуст
-    /// в YAML, а пустой список легко «починить» копипастой из соседнего правила.
+    /// Three robots under AI command is a statement louder than any action, and in hidden mode
+    /// that would blow the whole plan in the first minute. Checked separately because the list is
+    /// empty in YAML, and an empty list is easy to "fix" by copy-pasting from the neighboring
+    /// rule.
     /// </remarks>
     [Test]
     public async Task HiddenMode_RaisesAtMostOneNonCombatBorg()
@@ -428,11 +434,12 @@ public sealed class RogueAiTests
         {
             var (rogue, rule) = StartRule(server, HiddenRule);
 
-            // 01.09.2026 решение изменилось: у скрытого режима стало РОВНО ОДНО тело, и проверять
-            // теперь надо не «ноль», а то, ради чего ноль стоял, — что маскировка цела. Пустой
-            // список этого больше не гарантирует, зато гарантирует отсутствие боевых корпусов:
-            // инженерный борг у робототехники — штатная картина любой смены, а шесть «Клинов» без
-            // обозначений производителя это не «почти нормально», это объявление.
+            // On 01.09.2026 the decision changed: hidden mode now has EXACTLY ONE body, and what
+            // needs checking now isn't "zero" but the thing zero used to stand for — that the
+            // disguise holds. An empty list no longer guarantees that, but it does guarantee the
+            // absence of combat chassis: an engineering borg at robotics is a normal sight on any
+            // shift, but six "Klin"s with no manufacturer markings isn't "almost normal" — it's
+            // an announcement.
             Assert.That(rule.SupportBorgs, Has.Count.LessThanOrEqualTo(1),
                 "скрытому режиму прописали отряд, а не одиночное тело");
 
@@ -454,12 +461,12 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Прототипы киборгов поддержки существуют и собраны так, как ожидает код.
+    /// Support borg prototypes exist and are assembled the way the code expects.
     /// </summary>
     /// <remarks>
-    /// Самый тихий вид поломки этого набора — опечатка в YAML: файл целиком не загружается, а
-    /// раунд стартует как ни в чём не бывало, просто без роботов. Ловилось это ровно один раз и
-    /// стоило прогона тестов; отсюда проверка прототипов отдельно от проверки поведения.
+    /// The quietest way this set can break is a YAML typo: the whole file fails to load, and the
+    /// round starts as if nothing happened, just without any robots. This was caught exactly once
+    /// and cost a test run; hence checking the prototypes separately from checking behavior.
     /// </remarks>
     [Test]
     public async Task SupportBorgPrototypes_AreWiredUp()
@@ -502,18 +509,19 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Ядро занимается, когда на станции уже работают три робота.
+    /// The core gets claimed even when three robots are already running on the station.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Прямая регрессия на найденную поломку. Потолок <c>ai.max_agents</c> стоял на захвате ядра
-    /// и считал ВСЕ сессии, включая борговские, а роботов режим ставит на раздаче должностей —
-    /// то есть раньше, чем мозг садится в ядро на <c>InRound</c>. При умолчании в единицу это
-    /// давало режим злого ИИ без ИИ: в логе честная строка про лимит, в игре — тишина.
+    /// A direct regression test for a bug that was actually found. The <c>ai.max_agents</c> cap
+    /// sat on core claiming and counted ALL sessions, including borg ones, while the mode places
+    /// robots during job assignment — that is, earlier than the brain sits down in the core on
+    /// <c>InRound</c>. With the default of one, this produced a rogue AI mode with no AI: an
+    /// honest line about the limit in the log, and silence in the game.
     /// </para>
     /// <para>
-    /// Порядок в тесте тот же, что в раунде: сначала роботы, потом ядро. Обратный порядок
-    /// проходил бы и на сломанной версии.
+    /// The order in the test matches the round: robots first, then the core. The reverse order
+    /// would pass even on the broken version.
     /// </para>
     /// </remarks>
     [Test]
@@ -526,8 +534,9 @@ public sealed class RogueAiTests
         {
             var host = server.System<StationAiAgentSystem>();
 
-            // Стенд занимает ядро на старте, а в раунде оно занимается ПОСЛЕДНИМ. Освобождаем,
-            // чтобы порядок совпал с боевым: иначе тест проходил бы и на сломанной версии.
+            // The bench claims the core at startup, but in a real round it's claimed LAST. We
+            // release it so the order matches the real one: otherwise the test would pass even on
+            // the broken version.
             host.ReleaseAll("порядок раунда: сначала роботы");
 
             var (rogue, rule) = StartRule(server, OpenRule);
@@ -543,10 +552,10 @@ public sealed class RogueAiTests
                     live++;
             }
 
-            // Столько, сколько прописано правилу, а не печатное число: состав отряда — решение
-            // YAML, и тест не должен ломаться от того, что владелец добавил седьмой корпус.
-            // Если сюда пришло меньше, значит потолок ai.max_agents не вмещает ни отряд, ни ядро,
-            // и это поломка умолчания, а не теста.
+            // As many as the rule specifies, not a hardcoded number: squad composition is a YAML
+            // decision, and the test shouldn't break just because the owner added a seventh
+            // chassis. If fewer than that show up here, the ai.max_agents cap doesn't fit both
+            // the squad and the core, and that's a bug in the default, not in the test.
             Assert.That(live, Is.EqualTo(rule.SupportBorgs.Count),
                 "роботы не поднялись — проверять нечего");
 
@@ -557,18 +566,20 @@ public sealed class RogueAiTests
     }
 
     /// <summary>
-    /// Личность робота ищется в общем каталоге, если в его собственном её нет.
+    /// A robot's personality falls back to the shared folder when its own folder has none.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Каталог агента выбирается его идентификатором, а идентификаторы киборгов поддержки
-    /// выдаёт аллокатор — <c>combat-1</c>, <c>combat-2</c>, … Каталог, стало быть, заранее
-    /// неизвестен, и держать личность внутри него значило бы копировать один и тот же файл под
-    /// каждый возможный номер. Личность привязана к РОЛИ: два боевых робота читают одно и то же.
+    /// The agent's folder is chosen by its identifier, and support borg identifiers are handed
+    /// out by an allocator — <c>combat-1</c>, <c>combat-2</c>, … The folder is therefore unknown
+    /// in advance, and keeping the personality inside it would mean copying the same file under
+    /// every possible number. The personality is tied to the ROLE instead: two combat robots read
+    /// the same file.
     /// </para>
     /// <para>
-    /// Порядок проверяется тоже: свой каталог обязан перебивать общий, иначе исчезает
-    /// единственный способ отличить конкретного робота от собратьев.
+    /// The precedence is checked too: a robot's own folder must win over the shared one,
+    /// otherwise the only remaining way to tell one specific robot apart from its siblings
+    /// disappears.
     /// </para>
     /// </remarks>
     [Test]
@@ -599,9 +610,9 @@ public sealed class RogueAiTests
             "общий каталог перебил свой — отличить конкретного робота от собратьев стало нечем");
     }
 
-    // ------------------------------------------------------------------ помощники
+    // ------------------------------------------------------------------ helpers
 
-    /// <summary>Поднять правило режима настоящим тикером и вернуть его вместе с системой.</summary>
+    /// <summary>Start the mode's rule via the real ticker and return it together with the system.</summary>
     private static (RogueAiRuleSystem System, RogueAiRuleComponent Rule) StartRule(
         Robust.UnitTesting.RobustIntegrationTest.ServerIntegrationInstance server,
         EntProtoId ruleId)
@@ -633,8 +644,9 @@ public sealed class RogueAiTests
         if (!ent.TryGetComponent<StationDataComponent>(w.Station, out var data))
             return false;
 
-        // Копия в локальную переменную обязательна: RA0002 считает вызов метода на чужом поле
-        // «Execute»-доступом, а у тестовой сборки к StationDataComponent только чтение.
+        // Copying into a local variable is mandatory: RA0002 treats a method call on someone
+        // else's field as an "Execute" access, and this test assembly only has read access to
+        // StationDataComponent.
         var grids = data.Grids;
         return grids.Contains(grid);
     }

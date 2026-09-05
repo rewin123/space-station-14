@@ -50,19 +50,20 @@ public sealed partial class StationAiAgentSystem
     // ----------------------------------------------------------------------- noop
 
     /// <summary>
-    /// Явное «ничего не делаю». Закрывает ход — см. <see cref="AiTool.EndsTurn"/>.
+    /// An explicit "doing nothing". Ends the turn — see <see cref="AiTool.EndsTurn"/>.
     ///
-    /// Единственный инструмент без единой причины отказать, и это намеренно: он не трогает мир,
-    /// не маршалится на главный поток и работает во всех режимах, включая разбор и интелликарту.
-    /// Отказ здесь означал бы «ты обязан что-то сделать», а сказать «нечего» агент должен уметь
-    /// всегда.
+    /// The only tool with not a single reason to refuse, and that's deliberate: it doesn't touch the
+    /// world, doesn't marshal onto the main thread, and works in every mode, including review and an
+    /// intellicard. Refusing here would mean "you're obligated to do something", and the agent must
+    /// always be able to say "nothing to add".
     ///
-    /// До него закрыть ход можно было только перестав звать инструменты, то есть ответив прозой.
-    /// А проза при любом радиотрафике поднимает owed — <c>Addressed</c> истинно от ЛЮБОЙ строки
-    /// рации, не только обращённой к ИИ, — и тянет за собой напоминание «этого никто не услышал»
-    /// и лишний запрос к модели. То есть агента подталкивали высказаться ровно там, где правильный
-    /// ответ молчание, и он высказывался: наблюдённая привычка ставить «Экипаж, Аксиома на связи»
-    /// в общий канал растёт отсюда же.
+    /// Before this tool existed, closing a turn was only possible by simply not calling any more
+    /// tools — i.e. answering in prose. And prose, on any radio traffic, raises owed —
+    /// <c>Addressed</c> is true for ANY radio line, not just one addressed to the AI — which drags
+    /// along a "nobody heard that" reminder and an extra call to the model. In other words, the agent
+    /// was being nudged to speak up exactly where the right answer was silence, and it did speak up:
+    /// the observed habit of putting "Crew, this is Axiom" on the common channel grows out of exactly
+    /// this.
     /// </summary>
     private Task<ToolResult> NoopAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
@@ -71,8 +72,8 @@ public sealed partial class StationAiAgentSystem
 
         TryGetString(args, "reason", out var reason);
 
-        // Debug, а не Info: на спокойной станции это самый частый вызов, и в Info он затопил бы
-        // журнал сервера ровно тем, что означает «ничего не произошло».
+        // Debug, not Info: on a quiet station this is the most frequent call, and at Info it would
+        // flood the server log with exactly the thing that means "nothing happened".
         _sawmill.Debug($"[LLM] noop{(string.IsNullOrWhiteSpace(reason) ? "" : ": " + reason)}");
 
         return Task.FromResult(ToolResult.Effected("self", new Dictionary<string, object?>
@@ -120,18 +121,19 @@ public sealed partial class StationAiAgentSystem
 
         var allowed = s.Body.ChannelsFor(s.Mode);
 
-        // Канал не назван — говорим в тот, на который настроен тумблер. Разовое обращение в другой
-        // канал тумблер НЕ двигает: это ровно та же механика, что префикс у живого игрока.
+        // No channel named — speak on whatever the toggle is currently set to. A one-off message to
+        // a different channel does NOT move the toggle: this is exactly the same mechanic as a
+        // prefix for a live player.
         var explicitChannel = TryGetString(args, "channel", out var channel) && !string.IsNullOrWhiteSpace(channel);
 
         if (!explicitChannel)
         {
             channel = s.State.OutputChannel;
 
-            // Тумблер может указывать на канал, недоступный в текущем режиме: карденье случается
-            // между ходами, а состояние живёт дольше хода. Отказывать здесь нельзя — модель
-            // получила бы отказ про канал, которого она не называла, и пошла бы искать в нём
-            // опечатку. Молча съезжаем на доступный и говорим об этом в ответе.
+            // The toggle can point at a channel unavailable in the current mode: carding happens
+            // between turns, and state outlives a turn. Refusing here would be wrong — the model
+            // would get a refusal about a channel it never named, and would go looking for a typo in
+            // it. Silently fall back to an available one and say so in the response.
             if (!allowed.Contains(channel, StringComparer.OrdinalIgnoreCase))
             {
                 s.State.ChannelBeforeCarding ??= channel;
@@ -143,8 +145,8 @@ public sealed partial class StationAiAgentSystem
         var match = allowed.FirstOrDefault(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase));
         if (match == null)
         {
-            // Канал существует, но не в этом режиме — это другой отказ, и говорить о нём надо
-            // иначе, иначе модель будет искать опечатку там, где её нет.
+            // The channel exists, just not in this mode — that's a different kind of refusal, and it
+            // needs to be phrased differently, or the model will go looking for a typo that isn't there.
             if (s.Body.ChannelsFor(AgentMode.Core).Any(c => string.Equals(c, channel, StringComparison.OrdinalIgnoreCase)))
             {
                 return Task.FromResult(ToolResult.Fail(ToolError.Carded,
@@ -173,13 +175,14 @@ public sealed partial class StationAiAgentSystem
         }, ct);
     }
 
-    // ------------------------------------------------------------ переключатель
+    // ------------------------------------------------------------ toggle
 
     /// <summary>
-    /// Выбрать канал, в который уходит речь по умолчанию.
+    /// Choose the channel speech goes to by default.
     ///
-    /// Не трогает мир и потому не маршалится: это внутренняя настройка агента, как положение
-    /// тумблера на пульте. Ход, назвавший канал прямо в <c>radio</c>, тумблер не двигает.
+    /// Doesn't touch the world and so doesn't marshal: this is an internal agent setting, like the
+    /// position of a toggle on a console. A turn that named a channel directly in <c>radio</c>
+    /// doesn't move the toggle.
     /// </summary>
     public Task<ToolResult> SetChannelAsync(AgentSession s, JsonElement args, CancellationToken ct)
     {
@@ -375,11 +378,12 @@ public sealed partial class StationAiAgentSystem
 
                 // Name the place, not just the numbers. "at": "точка (112,-40)" told the model
                 // nothing it could repeat to the crew, and every other tool answers with a landmark.
-                var place = PlaceNear(_xform.ToMapCoordinates(destination));
-                at = string.Create(CultureInfo.InvariantCulture, $"точка ({px:F0},{py:F0})");
+                var place = PlaceNear(_xform.ToMapCoordinates(destination), s.Locale);
+                var coords = string.Create(CultureInfo.InvariantCulture, $"{px:F0},{py:F0}");
+                at = s.Locale.T($"точка ({coords})", $"point ({coords})");
 
-                if (place != "неизвестно")
-                    at += $", у {place}";
+                if (place != s.Locale.UnknownPlace)
+                    at += s.Locale.T($", у {place}", $", at {place}");
             }
 
             if (_cfg.GetCVar(AiCVars.DryRun))
@@ -636,15 +640,16 @@ public sealed partial class StationAiAgentSystem
     /// The description never enters the frozen prefix: the tool schema is four fields, and the
     /// hundred consoles behind it cost nothing until one is opened.
     /// </summary>
-    /// <param name="param">Имя аргумента с хендлом: у ядра «handle», у борга «target».</param>
+    /// <param name="param">The name of the argument carrying the handle: "handle" for the core, "target" for the borg.</param>
     /// <param name="gate">
-    /// Чем проверяется право трогать консоль. <c>null</c> — станционные ворота (вайтлист ИИ,
-    /// питание, видимость через камеры). Тело с руками передаёт своё: «я рядом и могу дотянуться».
+    /// What checks the right to touch the console. <c>null</c> means the station gate (AI
+    /// whitelist, power, camera visibility). A body with hands passes its own: "I'm close enough to
+    /// reach it".
     ///
     /// <para>
-    /// Параметр, а не копия метода, потому что различие ровно здесь: сам драйвер консолей —
-    /// отражение по типам BUI-сообщений — про тело не знает ничего и работает одинаково для
-    /// любого, кто имеет право нажать.
+    /// A parameter rather than a copy of the method, because this is exactly where the difference
+    /// lies: the console driver itself — reflection over BUI message types — knows nothing about the
+    /// body and works identically for anyone with the right to press a button.
     /// </para>
     /// </param>
     public Task<ToolResult> DeviceUiAsync(AgentSession s, JsonElement args, CancellationToken ct,

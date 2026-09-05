@@ -39,6 +39,7 @@ public sealed class TurnRunner
     private readonly Journal _journal;
     private readonly Func<string, string?, Task<bool>> _speak;
     private readonly ISawmill _sawmill;
+    private readonly Locale.AgentLocale _locale;
 
     public TurnRunner(
         ILlmClient llm,
@@ -49,7 +50,8 @@ public sealed class TurnRunner
         CacheMetrics cache,
         Journal journal,
         Func<string, string?, Task<bool>> speak,
-        ISawmill sawmill)
+        ISawmill sawmill,
+        Locale.AgentLocale? locale = null)
     {
         _llm = llm;
         _registry = registry;
@@ -60,6 +62,7 @@ public sealed class TurnRunner
         _journal = journal;
         _speak = speak;
         _sawmill = sawmill;
+        _locale = locale ?? Locale.AgentLocale.Ru;
     }
 
     private ConversationState Conv => _state.Conv;
@@ -378,7 +381,7 @@ public sealed class TurnRunner
         // шагов и его начальная отметка к середине уже врёт на минуты.
         var when = items.Count > 0 ? items.Max(i => i.RoundTime) : TimeSpan.Zero;
 
-        var text = Perception.ObservationFormatter.FormatSteering(items, dropped, when);
+        var text = Perception.ObservationFormatter.FormatSteering(items, dropped, when, _locale);
         if (text == null)
             return;
 
